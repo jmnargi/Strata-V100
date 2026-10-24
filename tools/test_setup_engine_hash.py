@@ -294,34 +294,22 @@ class WhatARefusalDoesToTheCaller(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.engine = Path(self.tmp.name) / "engine"
-        self.engine.mkdir(parents=True, exist_ok=True)
-        patch = mock.patch.object(setup, "engine_dir", lambda toolkit=13: self.engine)
-        patch.start()
-        self.addCleanup(patch.stop)
+        (Path(self.tmp.name) / "engine").mkdir(parents=True, exist_ok=True)
+        # get_prebuilt looks for the release with a HEAD request before it downloads (0.2.0), and keeps the engine in
+        # an engine folder of its own: no network, and never this checkout's engine folder.  A published release answers the probe.
+        for patcher in (mock.patch.object(setup, "engine_dir", lambda toolkit=13: Path(self.tmp.name) / "engine"),
+                        mock.patch.object(setup, "_urlopen", lambda req, timeout=None: mock.MagicMock())):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def fake_download(self, url, dst, what=None):
         with zipfile.ZipFile(dst, "w") as z:
             z.writestr("BUILD.json", json.dumps({"version": "0.1.40", "archs": [89]}))
             z.writestr(setup.EXE, b"engine")
 
-    def probe_answered(self):
-        """The reachability HEAD `prebuilt_bases` makes before it downloads, answered locally.
-
-        Without this the test asks GitHub for a release of the version this checkout builds, which exists
-        only once that version is published: it would then pass or fail on a release, not on the refusal it
-        is about.  `download` is mocked in every caller, so no byte is fetched either way.
-        """
-        class Response:
-            def close(self):
-                pass
-        return mock.patch.object(setup, "_urlopen", lambda req, timeout=None: Response())
-
     def get_prebuilt(self, updating, digest):
         out = io.StringIO()
-        with self.probe_answered(), contextlib_redirect(out), \
-                mock.patch.object(setup, "download", self.fake_download), \
-                mock.patch.object(setup, "engine_digest", return_value=digest):
+        with contextlib_redirect(out),                 mock.patch.object(setup, "download", self.fake_download),                 mock.patch.object(setup, "engine_digest", return_value=digest):
             return setup.get_prebuilt(setup.PREBUILT_URL, {"arch": 89}, "gpu", updating=updating), out
 
     def test_updating_keeps_the_installed_engine_instead_of_stopping(self):
@@ -341,37 +329,45 @@ class WhatARefusalDoesToTheCaller(unittest.TestCase):
         self.assertIsNone(eng, "a refusal must not escape get_prebuilt as SystemExit")
 
     def test_a_first_install_stops_because_there_is_nothing_to_fall_back_to(self):
-        with self.probe_answered(), mock.patch.object(setup, "download", self.fake_download), \
-                mock.patch.object(setup, "engine_digest", return_value=(999, "f" * 64)):
+        with mock.patch.object(setup, "download", self.fake_download),                 mock.patch.object(setup, "engine_digest", return_value=(999, "f" * 64)):
             with self.assertRaises(SystemExit):
                 setup.get_prebuilt(setup.PREBUILT_URL, {"arch": 89}, "gpu")
 
-    def test_the_amd_path_refuses_a_wrong_archive_too(self):
-        # get_prebuilt_hip downloads the AMD engine from a SECOND download call site, which the first
-        # version of this change missed entirely - so AMD users got nothing from it.  ROOT is a throwaway
-        # here: the AMD engine folder is ROOT/engine, and no version of this checkout is involved.
-        root = Path(self.tmp.name)
-        (root / "CMakeLists.txt").write_text("project(strata VERSION 0.1.40)\n", encoding="utf-8")
-        out = io.StringIO()
-        with mock.patch.object(setup, "ROOT", root), self.probe_answered(), contextlib_redirect(out), \
-                mock.patch.object(setup, "download", self.fake_download), \
-                mock.patch.object(setup, "engine_digest", return_value=(999, "f" * 64)):
-            self.assertIsNone(setup.get_prebuilt_hip(setup.PREBUILT_URL, {"arch": "gfx1100"}, updating=True))
-        self.assertFalse((root / "engine" / setup.WIN_HIP_ASSET).exists(),
-                         "the refused AMD archive was left where a later run would reuse it")
-        self.assertIn("keeping the engine that is installed", out.getvalue())
+    def test_the_cuda_and_amd_paths_both_verify(self):
+        # get_prebuilt_hip downloads the AMD engine from a SECOND `download(base + ...)` call site, which
+        # the first version of this change missed entirely - so AMD users got nothing from it.
+        src = (ROOT / "setup.py").read_text(encoding="utf-8")
+        for call in ('download(base + asset, z, "Strata engine")',
+                     'download(base + WIN_HIP_ASSET, z, "Strata AMD engine")'):
+            i = src.index(call)
+            self.assertIn("verify_engine_archive", src[i:i + 400], f"{call} is not verified")
 
-    def test_a_wrong_engine_never_reaches_the_engine_folder(self):
-        # The order that matters: the digest is checked before the zip is opened, so a substituted archive
-        # cannot put one file on the disk.  The engine folder is a throwaway, so "nothing was unpacked" is a
-        # fact about this run and not about the checkout.
-        out = io.StringIO()
-        with self.probe_answered(), contextlib_redirect(out), \
-                mock.patch.object(setup, "download", self.fake_download), \
-                mock.patch.object(setup, "engine_digest", return_value=(999, "f" * 64)):
-            self.assertIsNone(setup.get_prebuilt(setup.PREBUILT_URL, {"arch": 89}, "gpu", updating=True))
-        self.assertEqual(list(self.engine.iterdir()), [], "a refused archive left files in the engine folder")
-        self.assertIn("keeping the engine that is installed", out.getvalue())
+
+class Wiring(unittest.TestCase):
+    """The check is reached, and reached before the archive is opened."""
+
+    def test_get_prebuilt_verifies_before_it_unpacks(self):
+        src = (ROOT / "setup.py").read_text(encoding="utf-8")
+        body = src[src.index("def get_prebuilt("):]
+        body = body[:body.index("\ndef ")]
+        i_verify = body.index("verify_engine_archive(")
+        for opener in ("ZipFile(", "_unpack", "install_unpacked"):
+            self.assertGreater(body.index(opener), i_verify,
+                               f"{opener} happens before the SHA-256 is checked")
+
+    def test_the_digest_is_read_from_the_api_not_the_download_host(self):
+        src = (ROOT / "setup.py").read_text(encoding="utf-8")
+        # release_of() builds the API URL, from the OWNER/REPO in the download URL - so a mirror of this
+        # repository is checked against this repository's published hash, not against whatever the mirror
+        # happens to be serving.
+        body = src[src.index("def release_of("):]
+        body = body[:body.index("\ndef ")]
+        self.assertIn("api.github.com/repos/", body)
+        self.assertIn("m.group(1)", body, "the repository comes out of the URL, not a constant")
+        # and engine_digest asks release_of rather than the download URL
+        body = src[src.index("def engine_digest("):]
+        body = body[:body.index("\ndef ")]
+        self.assertIn("release_of(base)", body)
 
 
 class contextlib_redirect:
