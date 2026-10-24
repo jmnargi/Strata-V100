@@ -80,6 +80,9 @@ void gu_ggml_one(const uint8_t* blob, size_t gu_row, size_t up_off, int n, const
 
 template <int TY, int NT, bool EX = false> STRATA_ROWS_FN
 inline void row_dot(const uint8_t* row, int nblocks, const block_q8_K* const* y, float* res) {
+    // EX (the DeepSeek CPU lane's rows) uses ggml's float order; so do the formats whose ggml reference scales the
+    // reduced sum by K (ggml_hsum<TY>: IQ3_XXS, IQ3_S, IQ2_S and their gathered twins) - those must match it literally.
+    constexpr bool k_after_sum = EX || ggml_hsum<TY>();
     const int pf = prefetch_distance();
     __m256 accf[NT];
     for (int t = 0; t < NT; ++t) accf[t] = _mm256_setzero_ps();
@@ -107,14 +110,11 @@ inline void row_dot(const uint8_t* row, int nblocks, const block_q8_K* const* y,
 
         for (int t = 0; t < NT; ++t)
             for (int a = 1; a < A; ++a) acci[t][0] = _mm256_add_epi32(acci[t][0], acci[t][a]);
-        // EX (the DeepSeek CPU lane's rows): ggml's float order, so a token's dot is the same bits as ggml-cpu's whatever
-        // number of tokens share the pass - block scale f16(d) * y.d, the format's constant K after the sum, ggml's hsum.
-        // Without EX the order of the main engine's rows (unchanged).
-        const float dx = EX ? h2f(u16(blk)) : h2f(u16(blk)) * Fmt32<TY>::K;
+        const float dx = k_after_sum ? h2f(u16(blk)) : h2f(u16(blk)) * Fmt32<TY>::K;
         for (int t = 0; t < NT; ++t)
             accf[t] = _mm256_fmadd_ps(_mm256_set1_ps(dx * y[t][i].d), _mm256_cvtepi32_ps(acci[t][0]), accf[t]);
     }
-    for (int t = 0; t < NT; ++t) res[t] = EX ? Fmt32<TY>::K * ggml_hsum8(accf[t]) : hsum8(accf[t]);
+    for (int t = 0; t < NT; ++t) res[t] = k_after_sum ? Fmt32<TY>::K * ggml_hsum8(accf[t]) : hsum8(accf[t]);
 }
 
 // ---- IQ2_XS (17) with ggml's vectorized sign decode (arch/x86/quants.c, ggml_vec_dot_iq2_xs_q8_K):

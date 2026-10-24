@@ -5538,6 +5538,10 @@ int main(int argc, char** argv) {
     // Load the draft before batch slots and before the host arena is registered with both CUDA contexts.
     // Slot admission must leave room for the draft on the last stage; WDDM also requires the early upload.
     strata::core::MtpDrafter mtp;
+#if defined(STRATA_HAVE_DFLASH2)
+    strata::core::Dflash2Drafter df2;   // --draft dflash2 (CLI spec loop only)
+    bool use_df2 = false;
+#endif
     // the draft layer's geometry (the canonical model's MTP head), `static` because MtpDrafter keeps a reference; the batch
     // slots' draft-KV copies use this one too
     static const strata::core::ModelGeometry draft_geometry{};
@@ -5825,36 +5829,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Secure MTP's CUDA0 allocations before the large host arena is registered with both CUDA contexts.
-    // In particular WDDM can refuse the draft weights after mapping tens of GiB of host pages.
-    strata::core::MtpDrafter mtp;
-#if defined(STRATA_HAVE_DFLASH2)
-    strata::core::Dflash2Drafter df2;   // --draft dflash2 (CLI spec loop only)
-    bool use_df2 = false;
-#endif
-    // the draft layer's geometry (the canonical model's MTP head), `static` because MtpDrafter keeps a reference; the batch
-    // slots' draft-KV copies use this one too
-    static const strata::core::ModelGeometry draft_geometry{};
-    std::vector<std::unique_ptr<strata::core::MtpDrafter>> slot_mtp;
+    // The batch drafters and the DFlash2 drafter (--draft dflash2) follow the solo draft loaded above: the slot
+    // sessions exist now, and the solo drafter is the shared-weight parent.
     if (!o.mtp.empty()) {
-        if (o.spec < 2) {
-            std::fprintf(stderr, "strata generate: --mtp is ignored without --spec T (T >= 2)\n");
-            o.mtp.clear();
-        }
-        if (!o.mtp.empty()) mtp.set_prompt_len((int64_t) o.tokens.size());
-        mtp.set_hnorm_per_stream(o.mtp_hnorm_stream);   // --mtp-hnorm stream (opt-in), before any capture
-        mtp.set_q4(o.mtp_q4 == "all" || o.mtp_q4 == "proj", o.mtp_q4 == "all" || o.mtp_q4 == "head");   // before load
-        if (!o.mtp_draft_vocab.empty()) mtp.set_draft_vocab(o.mtp_draft_vocab);
-        // the draft layer is the canonical model's MTP head (512 experts) even when the target is pruned,
-        // so it always sees the canonical geometry; `static` because MtpDrafter keeps a reference
-        // with a layer split across GPUs the drafter reads the last stage's residual: it lives on that device
-        const strata::core::OnDevice on_mtp(last_st && !mtp_first ? last_st->dev : -1);
-        // --pipeline-windows 2: 8 rows (the chain runs on past the window in flight: its drafts, its bonus token and
-        // the next window's drafts), and the round/step graphs carry the forcing kernel
-        const int mtp_t = o.pipeline_windows >= 2 ? strata::kernels::kVerifyMaxT : o.spec;
-        if (o.pipeline_windows >= 2) mtp.set_force_capture(true);
-        if (!o.mtp.empty() && !mtp.load(o.mtp, draft_geometry, last_st && !mtp_first ? last_st->ss : ss, mtp_t, err, o.mtp_window)) { std::fprintf(stderr, "strata generate: %s%s\n", err.c_str(), vram_free_note().c_str()); return 1; }
-        mtp.set_ple_session(&ss);
 #if defined(STRATA_HAVE_DFLASH2)
         if (o.draft == "dflash2") {
             const char* why = o.mtp.empty() ? "it needs --mtp (the fallback) and --spec 2 or more"
@@ -5929,6 +5906,7 @@ int main(int argc, char** argv) {
                              (double) fb / 1073741824.0);
             }
         }
+    }
 
     std::vector<float> logits((size_t) n_vocab);
     mem_mark("the native head");
@@ -6459,19 +6437,6 @@ int main(int argc, char** argv) {
             }
         }
     }
-    // The MiB the prompt path's OWN buffers (no loan) take, which the cache sizing leaves out.  0.1.39's rule is
-    // 160 + chunk * 680 / 1024 (~16 GiB at 24576 against ~2.4 GiB really allocated); STRATA_OWNED_PRICE=exact prices the
-    // real allocation instead (Prefill::bytes_needed_owned: 2 MiB pages, the ring in one piece, as PR #796 measured)
-    // and gives that cache the difference.  A recommendation to try, so it is not the default.
-    auto owned_prefill_mib = [&]() -> int64_t {
-        if (!(o.prefill_chunk > 0 && !pf_borrow)) return 0;
-        static const bool exact = [] { const char* v = std::getenv("STRATA_OWNED_PRICE"); return v != nullptr && std::string(v) == "exact"; }();
-        if (!exact) return 160 + (o.prefill_chunk * 680) / 1024;
-        const int64_t mib = ((int64_t) strata::prefill::Prefill::bytes_needed_owned(g, ss, o.prefill_chunk, srcp != nullptr) + (1 << 20) - 1) >> 20;
-        std::fprintf(stderr, "strata generate: STRATA_OWNED_PRICE=exact: the prompt path's own buffers for a %lld-token chunk: %lld MiB (the 0.1.39 rule: %lld MiB)\n",
-                     (long long) o.prefill_chunk, (long long) mib, (long long) (160 + (o.prefill_chunk * 680) / 1024));
-        return mib + 64;   // a margin for the allocator
-    };
     if (o.expert_cache < 0) {
         size_t free_b = 0, total_b = 0;
         free_b = strata::core::device_free_bytes(); (void) total_b;
@@ -6529,6 +6494,7 @@ int main(int argc, char** argv) {
                                      "--vram-reserve-mib N sets it\n", kWddmAutoReserveMib, o.vram_reserve_mib);
                 o.vram_reserve_mib = kWddmAutoReserveMib;
             }
+#endif
         }
     }
     int64_t auto_ceiling = std::max<int64_t>(8192, std::min<int64_t>(o.prefill_auto_max, o.max_context));

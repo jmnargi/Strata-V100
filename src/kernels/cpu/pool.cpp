@@ -141,7 +141,7 @@ static CpuTopology detect_cpu_topology_impl(bool skip_first, PoolAffinity affini
 #if !defined(_WIN32)
 // A sysfs cpulist ("0-7,16").  `thread_siblings_list` (below) and the hybrid PMU's CPU sets both use this
 // format, so the topology detection and the overflow placement share one reader.
-static bool read_cpulist(const char* path, std::vector<int>& out) {
+static bool cpulist_read(const char* path, std::vector<int>& out) {
     std::FILE* f = std::fopen(path, "r");
     if (!f) return false;
     char text[1024] = {0};
@@ -185,7 +185,7 @@ static void detect_overflow_cores(CpuTopology& topo) {
         char path[96];
         std::snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list", cpu);
         std::vector<int> siblings;
-        if (!read_cpulist(path, siblings)) return;
+        if (!cpulist_read(path, siblings)) return;
         for (int s : siblings) {
             if (s == cpu || s == topo.host_core) continue;
             if (!std::binary_search(allowed.begin(), allowed.end(), s)) continue;

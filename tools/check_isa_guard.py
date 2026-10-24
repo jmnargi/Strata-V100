@@ -41,6 +41,8 @@ WIDE_PUBLIC = {
     "tq_rows_avx512", "tq_rows_avx2",        # the trellis expert rows (tq_avx512.cpp / tq_avx2.cpp): tq_cpu.cpp's
                                              # rows_on() is reached only after tq_isa_ok() checked cpu_avx512_ok() /
                                              # cpu_avx2_ok(), and tq_rows/tq_gu_rows abort when it did not
+    "iq512x_rows",                           # the DeepSeek-V4.1 CPU lane's exact rows (ds4_gg_cpu.cpp): reached only
+                                             # after cpu_avx512_ok()
 }
 WIDE_OBJECTS = ("expert.cpp", "iq_avx512.cpp", "iq_avx2.cpp", "q2_avx2.cpp", "kq_avx2.cpp", "nvfp4_avx512.cpp",
                 "tq_avx512.cpp", "tq_avx2.cpp")
