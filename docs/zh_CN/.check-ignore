@@ -1,0 +1,3 @@
+# Lines where a translation keeps English on purpose (verbatim program output or UI text).
+# One entry per line: <page>.md:<line number>.  See docs/zh_CN/GLOSSARY.md.
+BATCHING.md:171

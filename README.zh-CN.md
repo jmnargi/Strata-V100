@@ -27,8 +27,8 @@ Strata 是 [Qwen3.8-Flash-Next](https://huggingface.co/Qwen/Qwen3.8-Flash-Next) 
 
 本次更新整合了 [Strata v0.1.39](https://github.com/Niko1221/Strata/releases/tag/v0.1.39)（含其间的各版本），保留本分支的 V100 tensor-core 专家、注意力改动、非对称 GPU 切分和磁盘会话缓存。
 
-- **并行请求：** 在模型配置中设置 `"parallel": 2`，或使用 `./setup.sh --parallel 2`。Setup 会为新的 Volta 配置写入该默认值，并保留已有设置。引擎可以同时解码多个独立会话。多余的请求等待空闲槽位。槽位会占用额外显存，并可能降低单请求速度；如果两个槽位会话放不下，引擎会明确说明，并退回一次只服务一个请求，配置保持不变。精确性设置、显存开销和限制见[批处理槽位](docs/BATCHING.md)。
-- **API 与界面：** 本次更新新增 OpenAI Responses API、模型设置、会话缓存监控和按槽位的指标。见 [API 详情](docs/DETAILS.md#using-it)。
+- **并行请求：** 在模型配置中设置 `"parallel": 2`，或使用 `./setup.sh --parallel 2`。Setup 会为新的 Volta 配置写入该默认值，并保留已有设置。引擎可以同时解码多个独立会话。多余的请求等待空闲槽位。槽位会占用额外显存，并可能降低单请求速度；如果两个槽位会话放不下，引擎会明确说明，并退回一次只服务一个请求，配置保持不变。精确性设置、显存开销和限制见[批处理槽位](docs/zh_CN/BATCHING.md)。
+- **API 与界面：** 本次更新新增 OpenAI Responses API、模型设置、会话缓存监控和按槽位的指标。见 [API 详情](docs/zh_CN/DETAILS.md#using-it)。
 - **性能与内存：** 本次更新包含 verify-pass 启动次数削减、字节粒度提示环、Linux 大页、RAM 预算修正和多 GPU 选项。显式 `--layer-split` 现在会自动只加载各阶段自己那些层的 dense 权重（上游的 `--trim-stage-weights` 标志和 `STRATA_STAGE_TRIM` 已移除）；腾出的显存归专家缓存。对新显卡的优化不意味着 V100 提速。会改变舍入的可选路径使用前必须实测。
 - **其他平台：** 上游的 Intel Arc、较老 CPU 和更多 AMD 路径仍然可用。本机不为这些平台提供硬件验证。
 
@@ -44,7 +44,7 @@ V100 需要 CUDA 12.x 和包含 `sm_70` 的构建。不要在 V100 上安装 CUD
 
 每个数值是两个全新请求（`reused=0`）的中位数。增益很小；每个长度两次重复不构成统计结论。六次配对请求的首 token 全部与基线一致。不声称完整回复完全相同：自适应专家层在整合后的构建上把不同的专家组合留在 GPU 和 CPU 上，两条路径的舍入不同。不声称 decode 或质量有任何变化。这些是最终构建的实测值（引擎 SHA-256 `e9ad337a…`），完整数据见[完整报告](benchmarks/v100-q2_0-upstream-v0139-2026-10-04.md)。
 
-524,288 token 上下文下的并行槽位取决于切分方式和最后一级剩余的显存；实测的回退行为（请求 2 个槽位、实际一次服务一个请求、配置不动）见 [docs/BATCHING.md](docs/BATCHING.md)。
+524,288 token 上下文下的并行槽位取决于切分方式和最后一级剩余的显存；实测的回退行为（请求 2 个槽位、实际一次服务一个请求、配置不动）见 [docs/BATCHING.md](docs/zh_CN/BATCHING.md)。
 
 ## 双 V100 流水线性能 — 2026 年 10 月 15 日
 
@@ -82,7 +82,7 @@ V100 需要 CUDA 12.x 和包含 `sm_70` 的构建。不要在 V100 上安装 CUD
 
 另一组固定设置的对照在 2K、8K、32K 提示长度上，三个完整的 16 token 输出序列全部一致。这不证明每个生产请求的输出都相同。
 
-精确计时、构建来源、被否决的试验和复现命令见[评估报告](benchmarks/v100-upstream-pr-evaluation-2026-10-15.md)。在别的安装上启用该选项之前，先看[服务配置指南](docs/NVIDIA_V100.md#dual-pcie-pipeline-service-profile)。
+精确计时、构建来源、被否决的试验和复现命令见[评估报告](benchmarks/v100-upstream-pr-evaluation-2026-10-15.md)。在别的安装上启用该选项之前，先看[服务配置指南](docs/zh_CN/NVIDIA_V100.md#dual-pcie-pipeline-service-profile)。
 
 ## V100 基准
 
@@ -100,16 +100,16 @@ V100 需要 CUDA 12.x 和包含 `sm_70` 的构建。不要在 V100 上安装 CUD
 | 256K | 256,080 | 617.8 † | 36.8 | 84 °C |
 
 **测试设置：** Qwen3.8-Flash-Next Q2_0；仅一张 V100（GPU1，PCIe Gen3 x16）；Ryzen 5 3600；48 GB DDR4-3200；CUDA 12.8；262,144 token 上下文；int8 KV 缓存；自动 prefill；MTP `--spec 8`、draft floor 0.70；配对专家变体；700 MiB 视觉预留。每个数值是三个全新、无缓存请求（`reused=0`）恰好输出 256 token 的中位数。计时取自引擎的 `/metrics` 端点。
-- **较老的显卡**（Tesla P40 / V100、GTX 10、Radeon VII / MI50、RX 6700 XT、RX 5500 XT）：[较老的 GPU](docs/OLDER_GPUS.md)。
-- **Intel Arc**，在 Linux 上从源码构建：[Intel Arc](docs/INTEL_ARC.md)。
-- **AMD Ryzen AI Max（Strix Halo）**，在 Linux 上从源码构建：[Strix Halo](docs/STRIX_HALO.md)。
-- **不支持 AVX2 的老处理器**：能用，但很慢。[较老的 CPU](docs/INSTALL.md#older-cpus-experimental)。
+- **较老的显卡**（Tesla P40 / V100、GTX 10、Radeon VII / MI50、RX 6700 XT、RX 5500 XT）：[较老的 GPU](docs/zh_CN/OLDER_GPUS.md)。
+- **Intel Arc**，在 Linux 上从源码构建：[Intel Arc](docs/zh_CN/INTEL_ARC.md)。
+- **AMD Ryzen AI Max（Strix Halo）**，在 Linux 上从源码构建：[Strix Halo](docs/zh_CN/STRIX_HALO.md)。
+- **不支持 AVX2 的老处理器**：能用，但很慢。[较老的 CPU](docs/zh_CN/INSTALL.md#older-cpus-experimental)。
 
 每次请求前，被动散热的显卡空闲至少 120 秒，并在没有软件热降频的情况下 15 秒内降到 55 °C 以下。起始温度为 51–55 °C。所有请求都计入。128K 和 256K 提示在提示处理期间达到 84 °C 并出现软件热降频，尽管起始温度已冷却；长时间运行可能降频。† 表示提示期间出现降频。
 
 测量于 2026-10-02。引擎：本分支版本 0.1.31，构建提交 `78417ea`（SHA-256 `512b1f25d60479a2ddb66fcf1ddca5407963e45378a3c8a463413ad159edae17`）。该基准记录于后来的上游 v0.1.36 整合和 V100 注意力 PR 之前，不是对当前 `main` 构建的测量。历史表格按其原始出处保留，不要把它当作与更早表格或当前构建的受控对比。
 
-原始数据：[`summary.json`](bench/results/2026-10-02-v100-single-cooled/summary.json)、[`protocol.json`](bench/results/2026-10-02-v100-single-cooled/protocol.json)、[`matrix.json`](bench/results/2026-10-02-v100-single-cooled/matrix.json)、[`completed-requests.json`](bench/results/2026-10-02-v100-single-cooled/completed-requests.json) 和 [GPU 遥测](bench/results/2026-10-02-v100-single-cooled/gpu.csv)。完整方法与历史见 [docs/DETAILS.md#tesla-v100-fork-benchmark](docs/DETAILS.md#tesla-v100-fork-benchmark)，基准说明见 [benchmarks/README.md](benchmarks/README.md)，V100 性能报告见 [benchmarks/](benchmarks/)。
+原始数据：[`summary.json`](bench/results/2026-10-02-v100-single-cooled/summary.json)、[`protocol.json`](bench/results/2026-10-02-v100-single-cooled/protocol.json)、[`matrix.json`](bench/results/2026-10-02-v100-single-cooled/matrix.json)、[`completed-requests.json`](bench/results/2026-10-02-v100-single-cooled/completed-requests.json) 和 [GPU 遥测](bench/results/2026-10-02-v100-single-cooled/gpu.csv)。完整方法与历史见 [docs/DETAILS.md#tesla-v100-fork-benchmark](docs/zh_CN/DETAILS.md#tesla-v100-fork-benchmark)，基准说明见 [benchmarks/README.md](benchmarks/README.md)，V100 性能报告见 [benchmarks/](benchmarks/)。
 
 近期的 V100 pull request 包含实测的内核级改动，并在端到端增益未确立时明确说明。例如，从上游 PR #600 移植的提示注意力在其测量形状上报告 int8 注意力内核时间减少 27.9%，而模型 prefill 变化在所报各次运行中为 +1.3% 到 +3.0%；它没有确立可靠的 decode 增益。对比结果前先读[完整报告](benchmarks/v100-q2_0-pr600-2026-10-03.md)。
 
@@ -147,14 +147,14 @@ V100 的工作覆盖提示路径、decode 路径、内存使用、存储读取�
 
 ## 开始使用
 
-本分支跟随上游的安装体验。完整且最新的平台要求、模型选择和选项见[安装指南](docs/INSTALL.md)、[模型指南](docs/MODELS.md)和[上游 AI 安装指南](docs/AI_SETUP.md)。
+本分支跟随上游的安装体验。完整且最新的平台要求、模型选择和选项见[安装指南](docs/zh_CN/INSTALL.md)、[模型指南](docs/zh_CN/MODELS.md)和[上游 AI 安装指南](docs/zh_CN/AI_SETUP.md)。
 
 - **Windows：** 下载或克隆本仓库，运行 `START-HERE.bat`。
 - **Linux：** 克隆本仓库，运行 `./setup.sh`。
 - 按提示选择模型和上下文大小。Setup 会下载模型数据并启动本地服务。
 - 打开 setup 打印的地址（通常是 `http://127.0.0.1:8080`）。
 
-Tesla V100 请使用带 `sm_70` 支持的 CUDA 12 引擎。Setup 会为 Volta 选择较老 GPU 引擎；Linux 上会本地构建它。上游的 Windows CUDA 12 压缩包包含 Volta 代码，但没有在这台 Linux 机器上测试过。工具包和驱动要求见[较老 GPU 指南](docs/OLDER_GPUS.md)。Docker 请按照 [Docker 说明](docs/INSTALL.md)操作，并为目标 GPU 架构构建。
+Tesla V100 请使用带 `sm_70` 支持的 CUDA 12 引擎。Setup 会为 Volta 选择较老 GPU 引擎；Linux 上会本地构建它。上游的 Windows CUDA 12 压缩包包含 Volta 代码，但没有在这台 Linux 机器上测试过。工具包和驱动要求见[较老 GPU 指南](docs/zh_CN/OLDER_GPUS.md)。Docker 请按照 [Docker 说明](docs/zh_CN/INSTALL.md)操作，并为目标 GPU 架构构建。
 
 ## 使用 Strata
 
@@ -162,7 +162,7 @@ Tesla V100 请使用带 `sm_70` 支持的 CUDA 12 引擎。Setup 会为 Volta �
 - **OpenAI 兼容 API：** 把应用的 base URL 设为 `http://127.0.0.1:8080/v1`。
 - **Anthropic 兼容 API：** 使用 `http://127.0.0.1:8080/v1/messages`。
 - **OpenAI Responses API：** 使用 `http://127.0.0.1:8080/v1/responses`。这个无状态端点支持 Codex 风格的工具调用；它不存储 `previous_response_id`。
-- **图片、MCP、多 GPU 与配置：** 见[详细说明](docs/DETAILS.md)、[MCP 服务器](docs/MCP_SERVER.md)和[多 GPU 指南](docs/MULTI_GPU.md)。
+- **图片、MCP、多 GPU 与配置：** 见[详细说明](docs/zh_CN/DETAILS.md)、[MCP 服务器](docs/zh_CN/MCP_SERVER.md)和[多 GPU 指南](docs/zh_CN/MULTI_GPU.md)。
 
 服务器默认只监听 localhost。如果你把它暴露给其他机器，请配置 API key 并使用可信网络。不要在 issue、基准结果或 pull request 中发布密钥或私有配置。
 
@@ -190,7 +190,7 @@ L2 归档在恢复后仍然可用。当字节预算和物理内存下限允许�
 
 启用根保留时，引擎会把共享的系统提示根一次性捕获进 L2。L3 在 L2 逐出或 L2 准入失败时接收根。禁用 L2 时，启用的 L3 可以直接接收根。`--conversation-cache-keep-root` 和 `--conversation-cache-disk-keep-root` 分别控制各层的根保留，其 `--no-` 变体禁用之。根的逐出优先级低于普通镜像；显式的请求检查点钉选仍受保护。
 
-磁盘层不增加并发执行。并发请求的显存开销见[批处理槽位](docs/BATCHING.md)。捕获必须在请求覆盖所需会话字节之前完成。恢复是同步的。L2 逐出写出使用主机快照，可能增加磁盘 I/O 延迟。按你需要的会话和检查点历史来设定两层缓存预算。检查点保留的验证见 [V100 指南](docs/NVIDIA_V100.md)，较早的测量见[磁盘基准报告](benchmarks/v100-l3-conversation-cache-2026-10-03.md)。
+磁盘层不增加并发执行。并发请求的显存开销见[批处理槽位](docs/zh_CN/BATCHING.md)。捕获必须在请求覆盖所需会话字节之前完成。恢复是同步的。L2 逐出写出使用主机快照，可能增加磁盘 I/O 延迟。按你需要的会话和检查点历史来设定两层缓存预算。检查点保留的验证见 [V100 指南](docs/zh_CN/NVIDIA_V100.md)，较早的测量见[磁盘基准报告](benchmarks/v100-l3-conversation-cache-2026-10-03.md)。
 
 #### V100 实测结果
 
@@ -211,7 +211,7 @@ L2 归档在恢复后仍然可用。当字节预算和物理内存下限允许�
 
 - 文本请求永远不会启动编码器。图片请求先让引擎归还各 GPU 的显存——每张 GPU 一个预留，层切分时为 `[1700, 600]`，单卡为 `[1800]`，可用 `"vram_mib"` 覆盖——然后在引擎空闲时启动编码器并编码图片。
 - `idle_s` 秒没有图片请求后编码器停止，专家缓存长回完整大小。已编码的图片缓存在磁盘上，再发同一张图不会重新编码。
-- 在本分支的双 V100 层切分上实测：编码器空闲时缓存常驻 **14,005** 个专家（编码器常驻时为 12,688），冷图片请求 **5.9 秒**完成，编码器卸载后两个缓存都回到 14,005。见[详细说明](docs/DETAILS.md)。
+- 在本分支的双 V100 层切分上实测：编码器空闲时缓存常驻 **14,005** 个专家（编码器常驻时为 12,688），冷图片请求 **5.9 秒**完成，编码器卸载后两个缓存都回到 14,005。见[详细说明](docs/zh_CN/DETAILS.md)。
 
 ## 贡献
 
@@ -223,7 +223,7 @@ L2 归档在恢复后仍然可用。当字节预算和物理内存下限允许�
 4. 对性能声明，报告基线和候选、完整运行时设置、工作负载、重复次数和限制。尽可能附上原始数据或可复现命令。把内核计时与全模型吞吐分开，不要声明测量没有显示的增益。
 5. 向本仓库的 `main` 分支开 pull request。说明改动是 V100 专属、上游整合，还是通用 Strata 改进。不要把凭据、个人配置和无关的本地文件带进改动。
 
-当前测量方法见 [`benchmarks/README.md`](benchmarks/README.md) 和 [`docs/DETAILS.md`](docs/DETAILS.md)。贡献仍受项目许可证以及所含组件和模型文件的许可证约束。
+当前测量方法见 [`benchmarks/README.md`](benchmarks/README.md) 和 [`docs/DETAILS.md`](docs/zh_CN/DETAILS.md)。贡献仍受项目许可证以及所含组件和模型文件的许可证约束。
 
 ## 项目历史
 
@@ -240,4 +240,4 @@ L2 归档在恢复后仍然可用。当字节预算和物理内存下限允许�
 
 本仓库是 [Niko1221 的 Strata](https://github.com/Niko1221/Strata) 的 fork。**我们深深感谢 Niko 和所有上游贡献者。** 他们的原始工作正是本分支、其 V100 支持和本地模型运行时得以存在的原因。我们在定期引入上游改动的同时，力求为上游工作署名并遵循其走向。
 
-Strata 使用了 [llama.cpp / ggml](https://github.com/ggml-org/llama.cpp) 和其他开源组件。项目以 [MIT 许可证](LICENSE)授权；组件和模型文件可能有各自条款。见[致谢与许可证说明](docs/HOW_IT_WORKS.md#credits)。
+Strata 使用了 [llama.cpp / ggml](https://github.com/ggml-org/llama.cpp) 和其他开源组件。项目以 [MIT 许可证](LICENSE)授权；组件和模型文件可能有各自条款。见[致谢与许可证说明](docs/zh_CN/HOW_IT_WORKS.md#credits)。
