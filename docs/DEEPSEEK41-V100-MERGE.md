@@ -72,3 +72,17 @@ The DeepSeek engine is compiled and unit-tested only. A run needs the smallest p
 121 GB of model, 111 GB of Engram table and 8 GB of drafter (239 GB of disk). This PC has 46 GB
 free on the model NVMe. Upstream also lists RTX 30 and A100 as the supported cards, so a V100 run is
 not validated and no speed number exists for it.
+
+## Performance experiment: the Volta prompt path
+
+`STRATA_PF_WMMA=1` runs the prompt path's routed-expert GEMMs on the V100 tensor cores (FP16 WMMA)
+instead of MMQ's dp4a. The merged engine ran the same 2464-token prompt twice with the setting and
+twice without it:
+
+| Prefill, 2464 tokens | Run 1 | Run 2 |
+| --- | ---: | ---: |
+| Default (MMQ) | 648.2 tok/s | 648.5 tok/s |
+| `STRATA_PF_WMMA=1` | 658.5 tok/s | 658.6 tok/s |
+
+The gain is +1.6% and it repeats. Decode does not change (73 tok/s either way). The setting stays
+opt-in: its outputs differ from MMQ's in the last bits, and the gain on this card is small.
