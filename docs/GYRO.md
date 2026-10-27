@@ -22,8 +22,12 @@ divergence (0.159 against 0.312 on 128 chunks) and is level with IQ3_XXS (0.157)
 card (RTX 3060) and an R9700, and its reasoning set scored lower than Q2_0's (49/60 against 57/60). Gyro-S is 13% worse
 in KL than IQ2_XS (0.268 against 0.236) with 24% fewer bytes. So: pick Gyro-S where nothing bigger fits, Gyro-M when
 the 20% memory saving over IQ3_XXS matters. Setup and the MCP server mention them only where the other sizes do not
-fit the PC; they warn, never refuse. Gyro-L (agentionai's 50 GiB file, 2026-10-12) is not supported: it uses another
-trellis family (types 147-149) that the engine does not have.
+fit the PC; they warn, never refuse.
+
+Gyro-L (agentionai's 50 GiB file) uses another trellis family, the pair trellis (types 147 to 149, TQP5 to TQP7). The
+engine reads it with the same pack step and expert kernels as the other Gyro files, on the CPU and on CUDA cards. The
+prompt path uses the trellis MMQ build where the build has it; Metal and SYCL have no kernels for it, so they use the CPU
+rows and the FP16 prompt path. It needs an engine built from this source after 2026-10-27 (the pair-trellis kernels).
 
 ## Install
 
