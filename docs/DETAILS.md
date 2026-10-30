@@ -1459,6 +1459,21 @@ print(r.choices[0].message.content)
   end-of-turn token with no `</think>`: the content is empty and an agent stops. `"reasoning_close_retry": true` in
   `strata-<model>.json` closes the thinking once (as the thinking budget does) and continues, once per request, only for
   a reply that ended that way with no answer and no tool call. Off by default.
+  This is separate from `tool_call_recovery`: a sentence such as "Let me look at the file" is not a tool call.
+  The continuation lets the model produce an answer or a call; it does not guess a tool name or arguments from
+  that sentence. It does not retry a normal answer that merely promises more work.
+- **An action preamble with no tool call (opt-in).** `"tool_call_continuation": true` handles a narrower kind of
+  early stop in the visible answer: an immediate action preamble ending in a colon, such as "Writing minimal
+  and validating immediately:". With tools available, no call already started, and room for at least 64 more
+  tokens after the opening, the server opens the native tool envelope and continues once within the same request.
+  The model supplies the tool and arguments (the normal required-tool opening names it when only one is available).
+  This is a heuristic, not proof of intent: it can mistake prose for an action. Leave it off when that trade-off
+  is not wanted. Known code fences, quoted examples, negative or conditional phrases, ordinary final answers,
+  requests with stop strings, token-limited turns and cancellations do not trigger it. The extra call is buffered
+  until complete, so an interrupted attempt is not announced as an executable call.
+  `/api-monitor` shows **Action-preamble continuations**; `/metrics` counts attempts in
+  `totals.tool_call_continuations`, not successful tool executions. Counts reset on server restart.
+  This does not validate generated source code, finish the agent's task, or restart an already completed client turn.
 - **A reply stuck on one token is ended (0.1.39, #606).** When a reply repeats the same token 256 times in a row, the
   server ends it there with `finish_reason` `"length"` and says so in its window: a model in a loop, or a broken
   state that answers one token forever (#606 saw 36,689 tokens of `!`). `"repeat_stop_tokens": N` in

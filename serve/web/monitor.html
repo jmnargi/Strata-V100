@@ -39,6 +39,7 @@ header{height:70px;padding:0 32px;display:flex;align-items:center;justify-conten
 <div class="fact"><span>Reasoning loop stops</span><b id="loop-stops">—</b></div>
 <div class="fact"><span>Repeated-token stops</span><b id="token-stops">—</b></div>
 <div class="fact"><span>Reasoning retries</span><b id="reasoning-retries">—</b></div>
+<div class="fact"><span>Action-preamble continuations</span><b id="tool-continuations">—</b></div>
 </div><p class="small">Quoted or interrupted calls stay text. Passage-loop stopping is opt-in: set reasoning_loop_recovery to "stop" in the server config.</p></section>
 <section class="panel"><div class="panel-bar"><h2>Requests</h2><div class="filters"><input id="search" aria-label="Filter requests" placeholder="Search ID or endpoint"><select id="filter" aria-label="Request status"><option value="all">All statuses</option><option value="active">Active</option><option value="completed">Completed</option><option value="error">Errors</option></select></div></div>
 <div class="workspace"><div id="requests" class="requests" aria-label="Request list"></div><div class="detail">
