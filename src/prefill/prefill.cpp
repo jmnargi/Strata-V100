@@ -2133,6 +2133,10 @@ bool Prefill::set_stage_helper(Prefill* helper, std::string& err) {
     if (helper == nullptr || helper == this || !split_help_env()) return true;
     const Impl& h = *helper->impl_;
     if (m.device < 0 || h.device < 0 || h.device == m.device || !mmq_plan().any) return true;
+    if (strata::kernels::cpu::hadamard_spec().any()) {   // APR: the helper's share gets the unrotated input (see the
+        std::fprintf(stderr, "strata: prefill helper: not used for a Hadamard-folded (APR) pack\n");   // peer's copy
+        return true;
+    }
     auto pp = std::make_unique<PeerPrefill>();
     pp->peer = nullptr;   // stream-only: it holds no experts, it streams a share of this stage's
     pp->compact = true;

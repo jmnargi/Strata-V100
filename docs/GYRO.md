@@ -29,6 +29,18 @@ engine reads it with the same pack step and expert kernels as the other Gyro fil
 prompt path uses the trellis MMQ build where the build has it; Metal and SYCL have no kernels for it, so they use the CPU
 rows and the FP16 prompt path. It needs an engine built from this source after 2026-10-27 (the pair-trellis kernels).
 
+**Serving a folded pack (engine 0.1.45.5).** A Hadamard-folded pack is only right if every path that hands an activation to a
+folded weight rotates it first. The decode window did rotate it, and then overwrote the rotated copy with the unrotated one
+before the experts read it, so on such a pack the gate/up experts of every decode window got the wrong input while the down
+experts got the right one. One-shot answers therefore started plausibly and then looped, and served answers were wrong from
+the first token; the CPU-only arm showed it too, because both arms shared the overwritten image. The window now marks each
+layer's image as written, so the rotated rows survive. Measured here on 2xV100-16GB (layer split 16, `--spec 4`, int8 KV,
+262144 context, Gyro-L pack): served answers are correct on the 64-token capital prompt ("Paris"), on a follow-up turn, on
+a code prompt and on a tool call, and a 442-token passage question answers "1887; 14 coils; 22 coils" from the passage.
+Every other expert type takes the same code, and the default path is unchanged: on the IQ3_S pack the same two greedy
+prompts produced byte-identical text before and after the fix. The layer split's prompt helper declines a folded pack
+instead of running it, as the prompt peer already did.
+
 ## Install
 
 ```sh
@@ -272,8 +284,9 @@ Single RTX 4090 smoke run (Gyro-S, MTP draft, greedy): code 107.5, prose 84.3, J
 ## Known limits
 
 - **Not in this port** (rc2 has them; see the list at the end of this page): the prompt helper on a second GPU for a Gyro
-  pack. Setup of two cards still runs the layer split and the decode peer; the prompt peer says it is not used for a
-  Hadamard-folded pack and the prompt stays on the first card. Gyro-L, Intel Arc (SYCL) and Apple Metal are not supported.
+  pack. Setup of two cards still runs the layer split and the decode peer; the prompt peer and the layer split's prompt
+  helper both say they are not used for a Hadamard-folded pack, and the prompt stays on the first card. Intel Arc (SYCL)
+  and Apple Metal are not supported; Gyro-L is, and it serves (see the note above).
 - **Source builds:** the SYCL tree builds with these sources (P1006, 0 errors) but has no trellis GPU kernels; the Metal
   engine builds and refuses the file at load (`native_expert_supported`).
 
