@@ -181,6 +181,28 @@ ANSWER_RESERVE_MIN = 512      # #984: the tokens kept for the answer when a thin
 # and no call, is continued once with the thinking closed (the same way the budget's wrap-up closes it)
 REASONING_CLOSE = "\n</think>\n\n"
 REASONING_WRAP_UP = "\n\nI have thought about this long enough; time to give my answer.\n</think>\n\n"
+
+_TOOL_PREAMBLE = re.compile(
+    r"(?:^|[.!?]\s+|\n)\s*(?:"
+    r"(?:I will|I'll|Let me)\s+(?:write|read|run|check|inspect|edit|update|apply|validate)\b|"
+    r"(?:Writing|Reading|Running|Checking|Inspecting|Editing|Updating|Applying|Validating)\b"
+    r")[^.!?\n]{0,240}:\s*$", re.I)
+
+
+def _ends_in_tool_preamble(text: str) -> bool:
+    """A narrow action preamble, not a final answer or a quoted example. Only used by the opt-in continuation."""
+    if "```" in text or "~~~" in text:
+        return False
+    tail = text[-512:].replace("**", "")
+    if re.search(r"\b(?:example|quoted|format)\b", tail, re.I):
+        return False
+    match = _TOOL_PREAMBLE.search(tail)
+    if not match:
+        return False
+    phrase = match.group()
+    return not re.search(r"[`\">]|\b(?:example|quoted|format|if|not|never|could|would|should|cannot)\b|"
+                         r"\b(?:don't|won't|can't)\b", phrase, re.I)
+
 # #728: opt-in handling of reasoning that repeats whole passages (which the single-token guard above cannot see).
 # "reasoning_loop_recovery": "stop" ends the reply there; "recover" (or true) goes on from the same output with the
 # low-effort instruction in place of the xhigh one.  Both off by default.
@@ -3631,6 +3653,7 @@ class Service:
         self.aliases: list[str] = []                  # #297: other names of the model (the config's `aliases`)
         self.answer_room = True                       # 0.1.45: see ANSWER_ROOM_MIN_CAP (the config's "answer_room": false turns it off)
         self.reasoning_close_retry = False            # #1053 (opt-in): close the thinking once when a reply ends inside it
+        self.tool_call_continuation = False           # opt-in: one tool opening after an abandoned action preamble
         self.codex_compaction_cache = False           # #924 (opt-in): a Codex compaction is rendered with its conversation's tools
         self.codex_thread_titles = False              # #923 (opt-in): answer Codex's thread-title turns without the engine
         self.sampling_defaults = dict(sampling_defaults or {})   # the run config's `sampling` block
@@ -5227,6 +5250,7 @@ class Service:
             opening, force = parser.feed(force), None
         tail = ""                                       # the last characters written (the newlines before a call)
         answered, close_retried = False, False          # #1053: content or a call came out; the thinking was closed
+        tool_continued = False                        # never more than one action-preamble continuation per request
         nf_retried = False                              # #879: the request was sent again after non-finite logits
         timings, before = None, None                    # this request's timings; the engine's `last` before it
         recovery_count, reasoning_text, repeat_coverage = 0, "", 0.0
@@ -5529,6 +5553,34 @@ class Service:
                                     raw_ids.append(t)
                                     thinking_n += parser.state in ("reasoning", "rcall")
                                     evs = cut(parser.feed(detok.push(t)))
+                                    self._note(n, evs, st, rate)
+                                    for ev in evs:
+                                        yield "event", ev
+                                prompt = prompt + seg + extra
+                                finish = "length"
+                                continue
+                        if (self.tool_call_continuation and not tool_continued and tools and finish == "stop"
+                                and not calls and not announced and parser.state == "content"
+                                and not parser.buf and not parser.pending
+                                and not detok.pending() and stops is None and not cancel.is_set()
+                                and _ends_in_tool_preamble("".join(answer))):
+                            # The model ended after announcing an immediate action. Open the native tool envelope
+                            # once; the model still writes the tool and its arguments. Nothing is inferred from prose.
+                            extra = self.tok.encode("\n\n" + forced_call("required", tools), parse_special=True)
+                            if max_new - n - len(extra) >= 64:
+                                # Recovery must not announce an incomplete call to the client. Ordinary model calls
+                                # still stream their arguments; this extra attempt is delivered only when complete.
+                                parser.stream_tools = False
+                                tool_continued = True
+                                with self.status_lock:
+                                    self.totals["tool_call_continuations"] = self.totals.get("tool_call_continuations", 0) + 1
+                                print("[strata] reply ended on an action preamble without a call: opening a tool "
+                                      "call once and continuing (tool_call_continuation)", flush=True)
+                                for t in extra:
+                                    n += 1
+                                    raw_ids.append(t)
+                                    evs = cut(parser.feed(detok.push(t)))
+                                    collect_reply(evs, answer, calls, announced)
                                     self._note(n, evs, st, rate)
                                     for ev in evs:
                                         yield "event", ev
@@ -8557,6 +8609,7 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         svc.requested_slots = per_replica * len(groups) if groups else per_replica
     svc.answer_room = cfg.get("answer_room") is not False
     svc.reasoning_close_retry = cfg.get("reasoning_close_retry") is True    # #1053: opt-in, off by default
+    svc.tool_call_continuation = cfg.get("tool_call_continuation") is True
     if cfg.get("images"):                               # image generation (serve/images.py), set up by setup --images
         icfg = {k: (os.path.abspath(os.path.join(cfg.get("cwd") or ".", v))
                     if k in ("exe", "diffusion_model", "vae", "llm", "out_dir") and isinstance(v, str)

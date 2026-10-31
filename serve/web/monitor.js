@@ -132,7 +132,7 @@ async function refresh() {
       "rescued-calls": "tool_calls_from_reasoning", "repaired-openers": "tool_call_openers_repaired",
       "refused-calls": "tool_calls_kept_as_reasoning",
       "loop-stops": "reasoning_loop_stops", "token-stops": "repeated_token_stops",
-      "reasoning-retries": "reasoning_recoveries"
+      "reasoning-retries": "reasoning_recoveries", "tool-continuations": "tool_call_continuations"
     })) text(id, totals[key] ?? 0);
     state = status; records = history.requests;
     status.loaded = history.loaded; status.auto_load = history.auto_load;
