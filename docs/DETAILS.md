@@ -2806,6 +2806,11 @@ In a paired agentic A/B on two V100s (same 448de7bb binary and prompt, only this
 the capped arm finished 12 of 20 turns as truncated reasoning with no tool call and no text, against 0 of 20
 uncapped; the capped arm also accepted more drafts (62.3% against 56.7%).
 
+The cost is graded by the per-draft-row budget, not by `--spec` alone. The same loop at `--spec 4` (`spec` 6 after the
+suffix adjustment) finished 7 of 20 turns truncated with `N=16` (1.20 per row) and 4 of 20 with `N=20` (2.00 per row),
+against 0 of 20 with the option off. `N=20` at `--spec 4` is the width the measurements above used, so even the
+documented setting changes an agentic turn's course; this rig's daily service keeps the option off.
+
 The option applies to decode windows only (a window no wider than `kVerifyMaxT`). A prompt read through wider windows
 commits every row, so a cap there would drop real experts with no draft to save. `N <= K` and a one-token window are
 no-ops, and the default path is unchanged.
