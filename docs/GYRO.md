@@ -38,18 +38,25 @@ layer's image as written, so the rotated rows survive. Measured here on 2xV100-1
 262144 context, Gyro-L pack): served answers are correct on the 64-token capital prompt ("Paris"), on a follow-up turn, on
 a code prompt and on a tool call, and a 442-token passage question answers "1887; 14 coils; 22 coils" from the passage.
 Every other expert type takes the same code, and the default path is unchanged: on the IQ3_S pack the same two greedy
-prompts produced byte-identical text before and after the fix. The layer split's prompt helper declines a folded pack
-instead of running it, as the prompt peer already did.
+prompts produced byte-identical text before and after the fix. The layer split's prompt helper works on a folded pack
+since 0.1.45.6 (it rotates its own input; see the note below), and the P2P prompt peer still declines one.
 
-**Speed on two V100-16GB (2026-10-31).** Gyro-L, layer split 16 (the x4 card runs layers 0-15, the x16 card 16-47),
-`--spec 4`, int8 KV, 262144 context: a prompt reads at **591 tokens/s at 2.3K tokens, 1,015 at 8.2K, 1,374 at 16.3K and
-1,659 at 32.7K**; replies decode at **68-73 tokens/s** (2K to 32K context, median of repeated 520-token replies).
+**Speed on two V100-16GB (2026-10-31).** Gyro-L, layer split **14** (the x4 card runs layers 0-13, the x16 card 14-47),
+`--spec 4`, int8 KV, 262144 context: a prompt reads at **632 tokens/s at 2.3K tokens, 1,036-1,084 at 8.2K, 1,344-1,411
+at 16.3K and 1,597-1,642 at 32.7K**; replies decode at **68-75 tokens/s** (2K to 32K context, median of repeated
+520-token replies). The split point is worth measuring on your own pair: 16 was the fork's previous value and 14 reads
+**7.9% faster at 2.3K tokens and 6% at 8.2K** (632 against 586, 1,060 against 1,000), the same at 16K and 1.5% slower at
+32K; 15 and 13 sit between, and 20 is 13% slower at 2.3K.
 A read is limited by the experts that are not in VRAM: the x16 card streams 15.01 GiB over PCIe for a 2.3K-token read,
 and the two stages run one after the other, so the x4 card sits idle about 700 ms of every read. Decode's window takes
 35.5 ms and carries 2.2 tokens, against 23.4 ms and 1.65 tokens for an IQ3_S pack on the same cards. Ignore the first
 decode after a long read: it is cold. `--spec 4` and `STRATA_ROUTE_TAIL_SKIP=7` are worth keeping (decode is 35 and 48
 tokens/s without them); `--spec 6`/`8`, `--spec-min-p 0.50`/`0.85`, a fixed `STRATA_PREFILL_CPU_SHARE`, `--prefill-pipe`,
-`--max-context 131072`, `layer_split 20`, `STRATA_HC_Q8=1` and a larger `--vram-reserve-mib` all measured worse or equal.
+`--max-context 131072`, `STRATA_HC_Q8=1` and a larger `--vram-reserve-mib` all measured worse or equal.
+The layer split's prompt helper (`STRATA_PREFILL_HELP=1`) now also works on a folded pack, and it is **slower here**
+(484 against 583 tokens/s at 2.3K, 3,827 against 3,319 ms for a 1,877-token read, answers identical): it can only take
+the first stage's experts, and on this pair that stage is the x4 card, which streams 1.77 GiB of the 16.8 GiB a read
+moves. It stays off. Its floor needs `STRATA_PREFILL_HELP_MIN` below the share rule's ~3,300-token cutoff.
 
 ## Install
 
