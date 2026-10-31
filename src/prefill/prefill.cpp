@@ -801,6 +801,11 @@ struct PeerPrefill {
     size_t p_issued = 0, pk = 0;
     int64_t ps_experts = 0;
     float *mixed = nullptr, *GU = nullptr, *H = nullptr, *Dm = nullptr;
+    // A layer split's helper rotates its own input and writes its own H: the stage's H is laid out for its WMMA
+    // tiles ((D+pad)/2 floats a token) and cannot hold a group's rows (up to T x 640), and the gate/up input
+    // arrives unrotated (the primary sends `mixed`; it rotates only its own expert rows, in m.Xr).
+    float *Xr = nullptr, *H_own = nullptr;
+    size_t xr_cap = 0, h_cap = 0;
     void *Xq = nullptr, *Hq = nullptr;
     int32_t *src = nullptr, *bounds = nullptr, *ident = nullptr;
     uint8_t *grp_gu = nullptr, *grp_d = nullptr;
@@ -842,9 +847,10 @@ struct PeerPrefill {
     int32_t* host_pair = nullptr;
     std::vector<int32_t> bounds_host;
     core::PinnedRing up_ring;             // #1996: this device's pageable uploads (bounds, routed rows) go up from pinned slots
-    // APR (prism.hadamard): per layer, this device's copy of the down projection's sign vector (nullptr: identity or
-    // not folded).  The gate/up input arrives already rotated (the primary sends its rotated copy, m.Xr).
-    std::vector<const float*> had_sh;
+    // APR (prism.hadamard): per layer, this device's copies of the folded layers' sign vectors (nullptr: identity or
+    // not folded).  had_sh is the down projection's (the swiglu output is rotated before the down product);
+    // had_sx is the gate/up input's, which a layer split's helper applies itself (see `Xr`).
+    std::vector<const float*> had_sh, had_sx;
     std::vector<void*> owned;
     int64_t layers = 0, experts = 0, rows = 0, over_cap = 0;   // stats
     ~PeerPrefill() {
@@ -2114,16 +2120,20 @@ int64_t split_help_min() {
 }  // namespace
 
 namespace {
-// APR: the down projections' sign vectors on the current device (the peer's or the helper's), one per layer,
-// resolved once at setup (hadamard_device_signs: a mutex and, the first time on that device, a cudaMalloc) into
-// P.had_sh, which a prompt chunk reads directly.  The gate/up signs are not needed there: the primary sends its
-// already rotated input (m.Xr).
+// APR: the folded layers' sign vectors on the current device (the peer's or the helper's), one per layer, resolved
+// once at setup (hadamard_device_signs: a mutex and, the first time on that device, a cudaMalloc) into P.had_sh
+// (down) and P.had_sx (gate/up), which a prompt chunk reads directly.  A layer split's helper needs both: it
+// applies the gate/up rotation to the input the primary sends it, and the down one after its own swiglu.
 void peer_had_signs(PeerPrefill& P) {
     const auto& lay = strata::kernels::cpu::expert_layout();
     P.had_sh.assign(lay.native ? lay.fmt.size() : 0, nullptr);
-    for (size_t l = 0; l < P.had_sh.size(); ++l)
+    P.had_sx.assign(P.had_sh.size(), nullptr);
+    for (size_t l = 0; l < P.had_sh.size(); ++l) {
         if (lay.fmt[l].had_d)
             P.had_sh[l] = strata::kernels::hadamard_device_signs(lay.fmt[l].d_signs, (int) lay.fmt[l].n_ff);
+        if (lay.fmt[l].had_gu)
+            P.had_sx[l] = strata::kernels::hadamard_device_signs(lay.fmt[l].gu_signs, (int) lay.fmt[l].n_embd);
+    }
 }
 }  // namespace
 
@@ -2133,10 +2143,8 @@ bool Prefill::set_stage_helper(Prefill* helper, std::string& err) {
     if (helper == nullptr || helper == this || !split_help_env()) return true;
     const Impl& h = *helper->impl_;
     if (m.device < 0 || h.device < 0 || h.device == m.device || !mmq_plan().any) return true;
-    if (strata::kernels::cpu::hadamard_spec().any()) {   // APR: the helper's share gets the unrotated input (see the
-        std::fprintf(stderr, "strata: prefill helper: not used for a Hadamard-folded (APR) pack\n");   // peer's copy
-        return true;
-    }
+    // APR: a Hadamard-folded pack is fine here - the helper rotates the input it receives itself (P.Xr, bound
+    // below) and rotates its swiglu output before the down product (P.had_sh).  The P2P peer path still declines it.
     auto pp = std::make_unique<PeerPrefill>();
     pp->peer = nullptr;   // stream-only: it holds no experts, it streams a share of this stage's
     pp->compact = true;
@@ -2233,18 +2241,29 @@ bool Prefill::bind_stage_helper(int64_t T) {
             return no("the helper's GU has no room for the peer's quantized inputs");
         P.Xq_g = reinterpret_cast<uint8_t*>(h.GU + (size_t) T * 1280);
         P.Hq_g = static_cast<uint8_t*>(P.Xq_g) + xq_bytes;
-        // ...and H.  With no H buffer of its own this stage hands the peer `xn16`, which holds T*(D+pad)
-        // uint16 = (D+pad)/2 floats a token, while the peer writes up to cap_rows*640 floats there (its
-        // swiglu and quantize run per MMQ group, over the group's rows).  A pack whose K*640 exceeds
-        // (D+pad)/2 would write past the buffer, so refuse it here: V100 + IQ3_S needs 6,400 floats a token
-        // against 1,312, which is what made STRATA_PREFILL_HELP=1 die with an illegal memory access.
-        const size_t h_floats = (size_t) T * (D + (hc_pad() ? XN_PAD : 0)) / 2;
-        if ((size_t) P.cap_rows * 640 > h_floats)
-            return no("the helper's H holds " + std::to_string(h_floats) + " floats, the peer writes " +
-                      std::to_string((size_t) P.cap_rows * 640) + " (K*640 a token)");
+    }
+    // APR: H and, for a folded pack, the rotated input are the helper's own buffers.  A group's rows are at most
+    // P.G = T tokens x 640 floats (its swiglu and quantize run per MMQ group, over the group's rows), and the
+    // rotation covers the chunk's T x N; the stage's own H holds neither - it is laid out for its WMMA tiles,
+    // (D+pad)/2 floats a token, which is what made STRATA_PREFILL_HELP=1 die with an illegal memory access on a
+    // pack whose K*640 exceeds that.  Grown here to the helper's token capacity, kept for the life of the helper.
+    {
+        const core::OnDevice on(h.device);
+        auto grow = [&](float*& buf, size_t& cap, size_t n) {
+            if (cap >= n) return true;
+            float* p = nullptr;
+            if (cudaMalloc((void**) &p, n * sizeof(float)) != cudaSuccess) { cudaGetLastError(); return false; }
+            P.owned.push_back(p);            // freed with the helper; a replaced buffer stays alive until then
+            buf = p; cap = n;
+            return true;
+        };
+        if (!grow(P.H_own, P.h_cap, (size_t) h.T * 640))
+            return no("the helper's own H does not fit on its card (cudaMalloc failed)");
+        if (strata::kernels::cpu::hadamard_spec().any() && !grow(P.Xr, P.xr_cap, (size_t) h.T * (size_t) N))
+            return no("the helper's rotated input does not fit on its card (cudaMalloc failed)");
     }
     P.GU_g = h.GU;
-    P.H_g = h.H;
+    P.H_g = P.H_own;
     P.Dm_b[0] = h.Dm;
     P.Dm_b[1] = h.Dm + (size_t) T * N;
     P.src = h.src_dev;
@@ -4627,6 +4646,15 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
                                 }
                                 pe.mark(kPeMoeGemm, ps);
                                 const auto& f = lay.fmt[(size_t) l];
+                                // APR: a folded layer's gate/up weights take H (s * x) and the primary sends `mixed`
+                                // unrotated (it rotates only its own expert rows), so the rotation happens here, once
+                                // for the layer, into this card's own buffer; the rows are read through P.src, so a
+                                // whole-chunk rotation is what a per-row one would give.
+                                const float* xr = P.mixed;
+                                if (f.had_gu && P.Xr != nullptr) {
+                                    strata::kernels::hadamard_rows(P.mixed, P.Xr, T, N, f.had_block, P.had_sx[(size_t) l], ps);
+                                    xr = P.Xr;
+                                }
                                 for (size_t g2 = 0; g2 < ng; ++g2) {
                                     const size_t j0 = P.groups[g2].first, j1 = P.groups[g2].second;
                                     const int ngx = (int) (j1 - j0);
@@ -4667,7 +4695,7 @@ bool Prefill::run_impl(const int64_t* tokens, int64_t n, int64_t pos0, std::stri
                                     const int32_t* rel = P.bounds + n + 1 + g2 * (MMQ_GROUP + 1);
                                     cudaMemsetAsync(P.grp_gu + (size_t) ngx * mmq_gub, 0, MMQ_TAIL, ps);
                                     cudaMemsetAsync(P.grp_d + (size_t) ngx * mmq_db, 0, MMQ_TAIL, ps);
-                                    mmq::quantize(P.mixed, P.src + r0, P.Xq_g, mmq_gt, N, N, nr, ps);
+                                    mmq::quantize(xr, P.src + r0, P.Xq_g, mmq_gt, N, N, nr, ps);
                                     mmq::Product gu;
                                     gu.w = P.grp_gu; gu.type = mmq_gt; gu.w_rows = 1280; gu.w_cols = N; gu.expert_bytes = mmq_gub;
                                     gu.n = ngx; gu.xq = P.Xq_g; gu.bounds = rel; gu.ids = P.ident;
