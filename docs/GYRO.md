@@ -46,7 +46,7 @@ since 0.1.45.6 (it rotates its own input; see the note below), and the P2P promp
 at 16.3K and 1,597-1,642 at 32.7K**; replies decode at **68-75 tokens/s** (2K to 32K context, median of repeated
 520-token replies). The split point is worth measuring on your own pair: 16 was the fork's previous value and 14 reads
 **7.9% faster at 2.3K tokens and 6% at 8.2K** (632 against 586, 1,060 against 1,000), the same at 16K and 1.5% slower at
-32K; 15 and 13 sit between, and 20 is 13% slower at 2.3K.
+32K; 15 and 13 sit between, and 20 is 23% slower at 2.3K and 13% at 8.2K.
 A read is limited by the experts that are not in VRAM: the x16 card streams 15.01 GiB over PCIe for a 2.3K-token read,
 and the two stages run one after the other, so the x4 card sits idle about 700 ms of every read. Decode's window takes
 35.5 ms and carries 2.2 tokens, against 23.4 ms and 1.65 tokens for an IQ3_S pack on the same cards. Ignore the first
