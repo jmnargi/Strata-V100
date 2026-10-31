@@ -41,6 +41,16 @@ Every other expert type takes the same code, and the default path is unchanged: 
 prompts produced byte-identical text before and after the fix. The layer split's prompt helper declines a folded pack
 instead of running it, as the prompt peer already did.
 
+**Speed on two V100-16GB (2026-10-31).** Gyro-L, layer split 16 (the x4 card runs layers 0-15, the x16 card 16-47),
+`--spec 4`, int8 KV, 262144 context: a prompt reads at **591 tokens/s at 2.3K tokens, 1,015 at 8.2K, 1,374 at 16.3K and
+1,659 at 32.7K**; replies decode at **68-73 tokens/s** (2K to 32K context, median of repeated 520-token replies).
+A read is limited by the experts that are not in VRAM: the x16 card streams 15.01 GiB over PCIe for a 2.3K-token read,
+and the two stages run one after the other, so the x4 card sits idle about 700 ms of every read. Decode's window takes
+35.5 ms and carries 2.2 tokens, against 23.4 ms and 1.65 tokens for an IQ3_S pack on the same cards. Ignore the first
+decode after a long read: it is cold. `--spec 4` and `STRATA_ROUTE_TAIL_SKIP=7` are worth keeping (decode is 35 and 48
+tokens/s without them); `--spec 6`/`8`, `--spec-min-p 0.50`/`0.85`, a fixed `STRATA_PREFILL_CPU_SHARE`, `--prefill-pipe`,
+`--max-context 131072`, `layer_split 20`, `STRATA_HC_Q8=1` and a larger `--vram-reserve-mib` all measured worse or equal.
+
 ## Install
 
 ```sh
