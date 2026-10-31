@@ -2796,14 +2796,15 @@ experts only and the fold skips an expert that is full; if no expert has room, t
 weight becomes 0. The limit matters: the CPU expert pool keeps `MAXT` rows per expert (`cpu/expert.hpp`,
 `ExpertJobMulti::act/out/nact`), and the engine already refuses a window wider than `MAXT` at start-up.
 
-The cap has a width floor too, checked at start-up against the window ceiling (`--spec`, `max_t`): `N` keeps `N-K`
-tail entries for `max_t-1` draft rows, so a configuration under one entry per draft row (`N < K + max_t - 1`) is
-refused, and one under two per row prints a warning naming both numbers. Below that floor a draft row's picks are
-all folded to weight 0, so the row is computed from a fraction of its experts and the window's output changes far
-beyond the low-weight flip above. `--spec 8` with `N=16` is such a configuration: 6 tail entries for 7 draft rows
-(70 picks). In a paired agentic A/B on two V100s (same 448de7bb binary and prompt, only this option changed, 5 seeds
-x 4 turns), the capped arm finished 12 of 20 turns as truncated reasoning with no tool call and no text, against 0
-of 20 uncapped; the capped arm also accepted more drafts (62.3% against 56.7%).
+The cap has a width floor too, checked at start-up against the draft window (`--spec` after the suffix/lookup
+adjustment - the widest window the drafter can offer, not the pipeline buffer's capacity): `N` keeps `N-K` tail
+entries for `spec-1` draft rows, so a configuration under one entry per draft row (`N < K + spec - 1`) is refused,
+and one under two per row prints a warning naming both numbers. Below that floor a draft row's picks are all folded
+to weight 0, so the row is computed from a fraction of its experts and the window's output changes far beyond the
+low-weight flip above. `--spec 8` with `N=16` is such a configuration: 6 tail entries for 7 draft rows (70 picks).
+In a paired agentic A/B on two V100s (same 448de7bb binary and prompt, only this option changed, 5 seeds x 4 turns),
+the capped arm finished 12 of 20 turns as truncated reasoning with no tool call and no text, against 0 of 20
+uncapped; the capped arm also accepted more drafts (62.3% against 56.7%).
 
 The option applies to decode windows only (a window no wider than `kVerifyMaxT`). A prompt read through wider windows
 commits every row, so a cap there would drop real experts with no draft to save. `N <= K` and a one-token window are

@@ -684,31 +684,6 @@ bool Verifier::init(const WeightTable& wt, const ModelGeometry& g, SessionState&
         err = "verify: the window must hold 2.." + std::to_string(strata::kernels::kVerifyMaxT) + " tokens";
         return false;
     }
-    // STRATA_VERIFY_ECAP (opt-in) against the window's width: the cap keeps token 0's K picks and (N-K) of the
-    // tail's (max_t-1)*K.  Below one kept entry per draft row the budget cannot cover the rows, and a row whose
-    // picks are all folded to weight 0 is computed from a fraction of its experts - the output changes far beyond
-    // the option's "a dropped low-weight pick can flip a draft row" promise.  Refuse that configuration at
-    // start-up, and warn while the budget is under two entries per draft row.
-    if (const char* ecap_env = std::getenv("STRATA_VERIFY_ECAP")) {
-        const int ecap_cfg = std::atoi(ecap_env), k_cfg = (int) ss.k, rows = max_t - 1;
-        if (ecap_cfg > k_cfg) {
-            const int kept = ecap_cfg - k_cfg;
-            if (kept < rows) {
-                err = "verify: STRATA_VERIFY_ECAP=" + std::to_string(ecap_cfg) + " cannot serve a " +
-                      std::to_string(max_t) + "-token window: it keeps " + std::to_string(kept) + " of the tail's " +
-                      std::to_string(rows * k_cfg) + " picks, under one expert for each of the " + std::to_string(rows) +
-                      " draft rows, and a draft row computed from a fraction of its experts changes the output far "
-                      "beyond a low-weight flip. Raise the cap to at least " + std::to_string(k_cfg + rows) +
-                      " (one expert per draft row), or lower --spec.";
-                return false;
-            }
-            if (kept < 2 * rows)
-                std::fprintf(stderr, "strata verify: STRATA_VERIFY_ECAP=%d over a %d-token window keeps %d of the "
-                                     "tail's %d picks (%.2f per draft row, under 2); choose N from the workload's "
-                                     "measured avg T - the option changes the output where those rows matter\n",
-                             ecap_cfg, max_t, kept, rows * k_cfg, double(kept) / double(rows));
-        }
-    }
     if (hits.d_res == nullptr || hits.cache_base == nullptr || hits.blob <= 0) {
         err = "verify: needs the profile-filled VRAM expert tier (--expert-profile and --expert-cache); with "
               "--expert-cache auto, no VRAM was left for it - the 'no VRAM is left for the expert cache' line above "

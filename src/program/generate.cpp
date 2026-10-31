@@ -5390,6 +5390,32 @@ int main(int argc, char** argv) {
         // --pipeline-windows 2: 8 rows (the chain runs on past the window in flight: its drafts, its bonus token and
         // the next window's drafts), and the round/step graphs carry the forcing kernel
         const int mtp_t = o.pipeline_windows >= 2 ? strata::kernels::kVerifyMaxT : o.spec;
+        // STRATA_VERIFY_ECAP (opt-in) against the draft window: the cap keeps token 0's K picks and (N-K) of the
+        // tail's (spec-1)*K, where spec is the window's real ceiling (after the suffix/lookup adjustment), not the
+        // pipeline buffer's mtp_t above.  Below one kept entry per draft row the budget cannot cover the rows, and a
+        // draft row whose picks are all folded to weight 0 is computed from a fraction of its experts - the output
+        // changes far beyond the option's "a dropped low-weight pick can flip a draft row" promise.  Refuse that
+        // configuration, and warn while the budget is under two entries per draft row.
+        if (const char* ecap_env = std::getenv("STRATA_VERIFY_ECAP")) {
+            const int ecap_cfg = std::atoi(ecap_env), k_cfg = (int) ss.k, rows = o.spec - 1;
+            if (ecap_cfg > k_cfg) {
+                const int kept = ecap_cfg - k_cfg;
+                if (kept < rows) {
+                    std::fprintf(stderr, "strata generate: STRATA_VERIFY_ECAP=%d cannot serve a %d-token window: it "
+                                         "keeps %d of the tail's %d picks, under one expert for each of the %d draft "
+                                         "rows, and a draft row computed from a fraction of its experts changes the "
+                                         "output far beyond a low-weight flip. Raise the cap to at least %d (one "
+                                         "expert per draft row), or lower --spec.\n",
+                                 ecap_cfg, o.spec, kept, rows * k_cfg, rows, k_cfg + rows);
+                    return 1;
+                }
+                if (kept < 2 * rows)
+                    std::fprintf(stderr, "strata generate: STRATA_VERIFY_ECAP=%d over a %d-token window keeps %d of "
+                                         "the tail's %d picks (%.2f per draft row, under 2); choose N from the "
+                                         "workload's measured avg T - the option changes the output where those rows "
+                                         "matter\n", ecap_cfg, o.spec, kept, rows * k_cfg, double(kept) / double(rows));
+            }
+        }
         if (o.pipeline_windows >= 2) mtp.set_force_capture(true);
         if (!o.mtp.empty() && !mtp.load(o.mtp, draft_geometry, last_st && !mtp_first ? last_st->ss : ss, mtp_t, err, o.mtp_window)) { std::fprintf(stderr, "strata generate: %s%s\n", err.c_str(), vram_free_note().c_str()); return 1; }
         mtp.set_ple_session(&ss);

@@ -33,8 +33,18 @@
   "note": "an empty turn finished at max_tokens with reasoning only: no text, no tool call. The capped arm also diverged from the control at the first content token of a 228-token prompt."
  },
  "acceptance": {
-  "off": {"accepted": 5431, "offered": 9575, "ratio": 0.567, "suffix_windows": 92},
-  "ecap16": {"accepted": 7474, "offered": 11992, "ratio": 0.623, "suffix_windows": 301}
+  "off": {
+   "accepted": 5431,
+   "offered": 9575,
+   "ratio": 0.567,
+   "suffix_windows": 92
+  },
+  "ecap16": {
+   "accepted": 7474,
+   "offered": 11992,
+   "ratio": 0.623,
+   "suffix_windows": 301
+  }
  },
  "short_probes": {
   "json20": "both arms truncated at max_tokens=1024, no malformed markers",
@@ -58,5 +68,35 @@
   "tail_kept": 6,
   "dropped": 64,
   "per_draft_row": 0.86
+ },
+ "spec4_arms": {
+  "method": "the same 5-seed x 4-turn tool-calling loop, --spec 4 --spec-min-p 0.7 (the drafter's window ceiling after the suffix adjustment is 6), one serve per arm, the same binary",
+  "off": {
+   "turns": 20,
+   "tool_calls": 32,
+   "length_truncated_turns": 0,
+   "empty_turns": 0,
+   "accepted": 3532,
+   "offered": 4565
+  },
+  "ecap16": {
+   "turns": 20,
+   "tool_calls": 16,
+   "length_truncated_turns": 7,
+   "empty_turns": 4,
+   "accepted": 4593,
+   "offered": 5809,
+   "per_draft_row": 1.2
+  },
+  "ecap20": {
+   "turns": 20,
+   "tool_calls": 21,
+   "length_truncated_turns": 4,
+   "empty_turns": 2,
+   "accepted": 4093,
+   "offered": 5138,
+   "per_draft_row": 2.0
+  },
+  "note": "the cost scales with the per-draft-row budget, not with --spec alone: 0.86 (spec 8, N=16), 1.20 (spec 4, N=16), 2.00 (spec 4, N=20)"
  }
 }

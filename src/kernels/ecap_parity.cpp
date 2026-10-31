@@ -118,7 +118,7 @@ int main() {
         }
         cudaFree(d_ids); cudaFree(d_w);
     }
-    // the width guard (verify.cpp init) refuses a cap under one tail pick per draft row.  The mechanism it
+    // the width guard (generate.cpp, where the draft window is known) refuses a cap under one tail pick per draft row.  The mechanism it
     // protects is here: with cap = K+1 exactly one tail entry is kept, so every other draft row is computed from
     // picks folded to weight 0 alone.  The guard's floor (N >= K + max_t - 1) is one above this case.
     for (int T : {2, 5, 8}) {
