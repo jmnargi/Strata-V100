@@ -118,6 +118,40 @@ int main() {
         }
         cudaFree(d_ids); cudaFree(d_w);
     }
+    // the width guard (verify.cpp init) refuses a cap under one tail pick per draft row.  The mechanism it
+    // protects is here: with cap = K+1 exactly one tail entry is kept, so every other draft row is computed from
+    // picks folded to weight 0 alone.  The guard's floor (N >= K + max_t - 1) is one above this case.
+    for (int T : {2, 5, 8}) {
+        const int n = T * K;
+        std::vector<int32_t> ids(n);
+        std::vector<float> w(n);
+        for (int t = 0; t < T; ++t) {
+            std::vector<int> pool(E);
+            for (int i = 0; i < E; ++i) pool[i] = i;
+            std::shuffle(pool.begin(), pool.end(), rng);
+            std::sort(pool.begin(), pool.begin() + K);
+            for (int j = 0; j < K; ++j) ids[t * K + j] = pool[j];
+        }
+        for (auto& v : w) v = w_dist(rng);
+        int32_t* d_ids; float* d_w;
+        ck(cudaMalloc(&d_ids, n * 4), "ids guard"); ck(cudaMalloc(&d_w, n * 4), "w guard");
+        ck(cudaMemcpy(d_ids, ids.data(), n * 4, cudaMemcpyHostToDevice), "up ids guard");
+        ck(cudaMemcpy(d_w, w.data(), n * 4, cudaMemcpyHostToDevice), "up w guard");
+        strata::kernels::verify_ecap(d_ids, d_w, n, K, K + 1, nullptr);
+        ck(cudaDeviceSynchronize(), "sync guard");
+        ck(cudaMemcpy(w.data(), d_w, n * 4, cudaMemcpyDeviceToHost), "down w guard");
+        int bare_rows = 0;
+        for (int t = 1; t < T; ++t) {
+            bool kept = false;
+            for (int j = t * K; j < (t + 1) * K; ++j) kept = kept || w[j] != 0.0f;
+            if (!kept) ++bare_rows;
+        }
+        const bool ok = bare_rows >= T - 2;   // one kept tail entry belongs to one row at most
+        std::printf("  guard %2d     T %d  draft rows with no kept expert: %d %s\n", K + 1, T, bare_rows,
+                    ok ? "ok" : "*** VIOLATION ***");
+        if (!ok) ++bad;
+        cudaFree(d_ids); cudaFree(d_w);
+    }
     if (bad) { std::printf("ecap_parity FAILED\n"); return 1; }
     std::printf("ecap_parity OK\n");
     return 0;
