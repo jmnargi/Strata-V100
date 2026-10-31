@@ -2799,7 +2799,8 @@ weight becomes 0. The limit matters: the CPU expert pool keeps `MAXT` rows per e
 The cap has a width floor too, checked at start-up against the draft window (`--spec` after the suffix/lookup
 adjustment - the widest window the drafter can offer, not the pipeline buffer's capacity): `N` keeps `N-K` tail
 entries for `spec-1` draft rows, so a configuration under one entry per draft row (`N < K + spec - 1`) is refused,
-and one under two per row prints a warning naming both numbers. Below that floor a draft row's picks are all folded
+and one under two per row prints a warning naming both numbers. This check also applies to suffix and oracle drafts
+without an MTP head. Below that floor a draft row's picks are all folded
 to weight 0, so the row is computed from a fraction of its experts and the window's output changes far beyond the
 low-weight flip above. `--spec 8` with `N=16` is such a configuration: 6 tail entries for 7 draft rows (70 picks).
 In a paired agentic A/B on two V100s (same 448de7bb binary and prompt, only this option changed, 5 seeds x 4 turns),
