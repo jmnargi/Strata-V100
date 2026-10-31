@@ -1145,9 +1145,11 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
         }
     }
 
-    // Set by pre() on every call: the window's q8_1 image already exists (QDEDUP made it in pre, or QFUSE's
-    // fused GR read made it), so post(l, 0)'s whole-window quantize must not run again (upstream's guards).
-    bool q8_image_ready = false;
+    // Per layer: pre() has already written that layer's q8_1 image of the window's activation rows - QDEDUP made
+    // it, or QFUSE's fused GR read did, or (a Hadamard-folded layer, APR) pre() rewrote it from the rotated rows -
+    // so post(l, 0)'s whole-window quantize must not run and overwrite it with the unrotated `mixed` (upstream's
+    // guards, one flag per layer because the folded layers are the ones that rewrite it).
+    std::vector<uint8_t> q8_ready((size_t) g.n_layers, 0);
 
     // ---------------------------------------------------------------- pre(l, group): up to the ring
     auto pre = [&](int64_t l, int grp) -> bool {
@@ -1983,7 +1985,7 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
             }
             if (sh_fork) cudaEventRecord(ev_join_, sh_cs_);
         }
-        q8_image_ready = strata::kernels::cpu::expert_layout().native && (qdedup || q8_ffn);
+        q8_ready[(size_t) l] = strata::kernels::cpu::expert_layout().native && (qdedup || q8_ffn);
         // The grouped hits' activation rows are quantized in post(l, 0) below, once per layer, because that
         // node is reached only after both groups' pre have written `mixed` (the loop order after pre()); the
         // image is already made when QDEDUP (above) or QFUSE made it, and post(l, 0) then skips the launch.
@@ -1991,11 +1993,13 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
             // APR: Hadamard-folded gate/up take H (s * x); xm itself stays as it is (the shared expert above and the
             // doorbell copy for the CPU pool, which rotates its own in native_quant_act). The q8_1 image of xm that
             // STRATA_QFUSE / STRATA_VERIFY_QDEDUP may already have written is of the unrotated input, so a folded layer
-            // always rewrites it from the rotated rows (same stream, after the shared expert has read it).
+            // always rewrites it from the rotated rows (same stream, after the shared expert has read it) and marks it
+            // written: post(l, 0) must then leave it alone, or the experts read the unrotated x.
             const auto& f = strata::kernels::cpu::expert_layout().fmt[(size_t) l];
             if (f.had_gu) {   // nat_xr_ exists: init carved it because this layer is folded (had_gu_any)
                 hadamard_rows(xm, nat_xr_ + (size_t) tb * N, n, N, f.had_block, had_sx_, cs);
                 quantize_q8_1_rows(nat_xr_ + (size_t) tb * N, n, N, nat_xq_ + (size_t) tb * (N / 32) * 36, cs);
+                q8_ready[(size_t) l] = 1;
             } else if (!qdedup && !q8_ffn) {
                 quantize_q8_1_rows(xm, n, N, nat_xq_ + (size_t) tb * (N / 32) * 36, cs);
             }
@@ -2017,7 +2021,7 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
         // The window's activation rows for the grouped hits: quantized once per layer in group 0's post,
         // reached only after both groups' pre wrote `mixed` (see pre()); the per-group calls it replaces
         // wrote disjoint rows, so the saving is one launch per layer, not work.
-        if (grp == 0 && !q8_image_ready) {
+        if (grp == 0 && !q8_ready[(size_t) l]) {
             if (strata::kernels::cpu::expert_layout().native)
                 quantize_q8_1_rows(mixed_, T, N, nat_xq_, cs);
             else

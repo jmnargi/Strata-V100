@@ -164,6 +164,56 @@ general quality result.
 See the [full report](benchmarks/v100-turboquant-2026-10-25.md) and
 [details](docs/DETAILS.md#tesla-v100-fork-benchmark).
 
+## Gyro-L pair trellis on two V100 — 31 October 2026
+
+This branch reads agentionai's `Qwen3.8-Flash-Next-Gyro-L-TQ3_0.gguf` (108,323,559,808 bytes, Hugging Face
+revision `05892758a67efff0895d23c6df10a6fdb6be8cf4`). Its routed experts are stored as the pair trellis types
+TQP5, TQP6 and TQP7 (ggml types 147 to 149) in a Hadamard-rotated basis. The pack step
+(`tools/iq_pack.py --compat-bf16`) and the kernels are described in [docs/GYRO.md](docs/GYRO.md). CPU and CUDA
+are supported; Metal and SYCL have no pair-trellis kernels. This needs engine 0.1.45.6 or newer.
+
+Two engine defects had to be repaired first. The expert kernels themselves were already bit-exact against the
+authors' ggml:
+
+- **The decode window lost the rotation.** For a folded pack the window rotated the expert input, then
+  overwrote that rotated copy with the unrotated one before the experts read it, so the gate/up projections
+  ran in the wrong basis on every decoded token. One-shot output looked plausible and then looped; the
+  server was wrong from the first token. The window now keeps one "image written" mark per layer.
+- **The layer split's prompt helper** (opt-in) rotated only its SwiGLU output and wrote a group's rows into a
+  buffer laid out for the stage's WMMA tiles. It now rotates the input it is given and owns its H.
+
+Measured on this fork's pair: two Tesla V100-PCIE-16GB (GPU 0 on PCIe Gen3 x4, GPU 1 on x16) at 175 W, a
+Ryzen 5 3600, layer split 14, `--spec 4 --spec-min-p 0.70`, int8 KV with KV grow, `--pipeline-windows 2`,
+262,144-token context, the service's own environment, interleaved repeats:
+
+| Prompt tokens | Prefill (tokens/s) |
+| ---: | ---: |
+| 2,328 | 632 |
+| 8,199 | 1,036-1,084 |
+| 16,371 | 1,344-1,411 |
+| 32,679 | 1,597-1,642 |
+
+Replies decode at 68 to 75 tokens/s from 2K to 32K context (medians of repeated 520-token replies); the split
+point does not move that beyond run-to-run noise. A read is limited by the experts that are not in VRAM: the
+x16 card streams 15.01 GiB over PCIe for a 2.3K-token read (profile at layer split 16) and the two stages run
+one after the other, so the x4 card idles about 700 ms of every read.
+
+The pack serves through the OpenAI-compatible API: "Paris" for the capital question, a follow-up turn that
+reuses 86 prompt tokens, a code request, a `get_weather` tool call and a correct answer from a tool result,
+and a 442-token passage question answered from the passage.
+
+**Layer split 14 instead of 16.** Fourteen layers on the x4 card and 34 on the x16 card read 7.9% faster at
+2.3K tokens (632 against 586 tokens/s) and 6% faster at 8.2K, the same at 16.3K, and 1.5% slower at 32.7K.
+15 and 13 sit between, and 20 is 23% slower at 2.3K and 13% at 8.2K. A read is what an agentic turn spends
+its time on, so this profile uses 14.
+
+**What was measured and did not pay on this pair:** `--spec 6` and `--spec 8`, `--spec-min-p 0.50` and
+`0.85`, a fixed `STRATA_PREFILL_CPU_SHARE`, `STRATA_PREFILL_CPU_SHARE_MAX` above 6,144, `--prefill-pipe`,
+`--max-context 131072`, `STRATA_HC_Q8=1`, and a larger `--vram-reserve-mib`. The prompt helper itself is
+slower here (484 against 583 tokens/s at 2.3K): it can only take the first stage's experts, and on this pair
+that stage is the x4 card, which streams 1.77 GiB of the 16.8 GiB a read moves. `--mtp` and the default
+`STRATA_ROUTE_TAIL_SKIP=7` are worth keeping: decode falls to 35.5 and 48 tokens/s without them.
+
 ## V100 benchmark
 
 The table below records a single-card run on one Tesla V100-PCIE-16GB using PCIe Gen3 x16. The test machine also has a second V100 on PCIe Gen3 x4; it was not used for this run. Results from a two-card setup or from a machine with two full-width links may differ and could be better. It is a reproducible measurement, not a promise of speed on other systems.
@@ -320,6 +370,7 @@ This fork develops V100 support and V100-specific work while retaining Strata's 
 - [#15 — Port measured V100 KV gather and GDN recurrence changes from upstream PR #627](https://github.com/jmnargi/Strata-V100/pull/15)
 - [#16 — Reduce V100 decode-attention shuffles and shared-memory traffic](https://github.com/jmnargi/Strata-V100/pull/16)
 - [#17 — Port upstream PR #600's Volta prompt-attention kernel](https://github.com/jmnargi/Strata-V100/pull/17)
+- [#88 — Read Gyro-L's pair-trellis experts (TQP5/6/7), fix the folded decode window and the layer split's prompt helper, and move the V100 profile to `layer_split 14`](https://github.com/jmnargi/Strata-V100/pull/88)
 
 These reports describe specific tested changes; they are not a blanket claim of faster performance across models or GPUs. For more detail, browse the [complete pull request history](https://github.com/jmnargi/Strata-V100/pulls?q=is%3Apr+is%3Amerged) and [commit history](https://github.com/jmnargi/Strata-V100/commits/main).
 
