@@ -3393,24 +3393,31 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "strata generate: --native %s: %s\n", o.native_preset.c_str(), e.what());
             return 2;
         }
-        if (o.no_ple || o.ple_gguf.empty()) {
+        // Only PLE needs a table.  --no-ple is the documented ablation, so it must not demand a shard it will not
+        // read: the words said "no shard holds per_layer_token_embd.weight" while the flag, not the model, was the
+        // reason (the check below keeps --ple-gguf and --no-ple mutually exclusive).
+        if (!o.no_ple && o.ple_gguf.empty()) {
             std::fprintf(stderr, "strata generate: --native requires --ple-gguf (the PLE key is native too), and no "
-                                 "shard of the model holds per_layer_token_embd.weight\n");
+                                 "shard of the model holds per_layer_token_embd.weight; --no-ple is the ablation\n");
             return 2;
         }
         o.stream_token = true;
         o.gr_native_mmvf = true;
         o.native_bf16 = o.native_bf16_extra = true;
-        o.native_ple_key = o.native_moe_combine = o.native_gdn = o.native_router = true;
-        o.native_qsa = o.native_qsa_indexer = o.native_rope = o.native_ple_postops = true;
+        o.native_moe_combine = o.native_gdn = o.native_router = true;
+        o.native_qsa = o.native_qsa_indexer = o.native_rope = true;
+        // The PLE key and its post-ops are part of the PLE layer, so --no-ple ablates them with the table; left on,
+        // they would be refused below ("--native-ple-postops requires PLE enabled") and the ablation could never run.
+        o.native_ple_key = o.native_ple_postops = !o.no_ple;
         if (o.native_head_gguf.empty()) o.native_head_gguf = o.native_preset;
         if (o.native_dense_gguf.empty()) {
             // every shard of the model (<name>-0000N-of-0000M.gguf beside --native), then the PLE shard: a split
             // may put any layer in any shard (Swift's GGUFs: layers 13-47 in shard 2, the PLE table in shard 1)
             o.native_dense_gguf = o.native_shards;
-            // a PLE-only table (tools/ple_fp8_pack.py: architecture strata-ple) holds no projections
-            bool ple_only = false;
-            try {
+            // a PLE-only table (tools/ple_fp8_pack.py: architecture strata-ple) holds no projections, and --no-ple
+            // leaves the path empty: neither belongs in the dense list (an empty entry fails to open by name)
+            bool ple_only = o.ple_gguf.empty();
+            if (!ple_only) try {
                 strata::GgufFile pg(o.ple_gguf);
                 if (const strata::MetaValue* v = pg.get("general.architecture")) ple_only = v->s == "strata-ple";
             } catch (const std::exception&) {}
@@ -3944,6 +3951,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "strata generate: %s\n", err.c_str());
             return 1;
         }
+        // --no-ple reads no PLE key at all, so its row is skipped as if it were served natively: a native pack holds
+        // that row as shape only (dst_bytes 0), and the loader refuses such a row it was not told to skip.  Placed
+        // after keep_unquantized_ple_key so a --compat-bf16 pack's arena copy does not undo it.
+        if (o.no_ple) skip.insert("blk.1.ple_key.weight");
         if (native_pack) skip.insert("token_embd.weight");
         // STRATA_HC_Q8=1 (single GPU): the layers' hyper-connection down / up projections live only as Q8_0 (NativeDense
         // quantizes them from the pack file), so their bf16 copy is not loaded
