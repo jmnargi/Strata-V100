@@ -5367,6 +5367,29 @@ int main(int argc, char** argv) {
                      last ? " and the head" : "", (double) fb / 1073741824.0);
     }
 
+    // Check every speculative draft source, including suffix/oracle drafts without an MTP head.
+    // Use the adjusted draft window, not the pipeline buffer's capacity.
+    if (const char* ecap_env = std::getenv("STRATA_VERIFY_ECAP"); ecap_env && o.spec >= 2) {
+        const int ecap_cfg = std::atoi(ecap_env), k_cfg = (int) ss.k, rows = o.spec - 1;
+        if (ecap_cfg > k_cfg) {
+            const int kept = ecap_cfg - k_cfg;
+            if (kept < rows) {
+                std::fprintf(stderr, "strata generate: STRATA_VERIFY_ECAP=%d cannot serve a %d-token window: it "
+                                     "keeps %d of the tail's %d picks, under one expert for each of the %d draft "
+                                     "rows, and a draft row computed from a fraction of its experts changes the "
+                                     "output far beyond a low-weight flip. Raise the cap to at least %d (one "
+                                     "expert per draft row), or lower --spec.\n",
+                             ecap_cfg, o.spec, kept, rows * k_cfg, rows, k_cfg + rows);
+                return 1;
+            }
+            if (kept < 2 * rows)
+                std::fprintf(stderr, "strata generate: STRATA_VERIFY_ECAP=%d over a %d-token window keeps %d of "
+                                     "the tail's %d picks (%.2f per draft row, under 2); choose N from the "
+                                     "workload's measured avg T - the option changes the output where those rows "
+                                     "matter\n", ecap_cfg, o.spec, kept, rows * k_cfg, double(kept) / double(rows));
+        }
+    }
+
     // Load the draft before batch slots and before the host arena is registered with both CUDA contexts.
     // Slot admission must leave room for the draft on the last stage; WDDM also requires the early upload.
     strata::core::MtpDrafter mtp;

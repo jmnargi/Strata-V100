@@ -1,0 +1,102 @@
+{
+ "hardware": {
+  "gpus": "2x Tesla V100-SXM2-32GB (NVLink), RTX 3080 not used",
+  "cpu": "Ryzen 9 7950X, 221 GiB commit limit",
+  "driver": "CUDA 12.8, engine 448de7bb sm_70"
+ },
+ "configuration": {
+  "model": "Qwen3.8-Flash-Next AD 4.27bpw (IQ3_S/IQ2_S experts, Q8_0 dense)",
+  "kv": "k8v4",
+  "context": 262144,
+  "layer_split": 25,
+  "spec": 8,
+  "spec_min_p": 0.5,
+  "env": "STRATA_PF_WMMA=1 STRATA_PF_WMMA_LEAN=1 STRATA_PF_SKIP_UNROUTED=1",
+  "difference_between_arms": "STRATA_VERIFY_ECAP=16 in the engine env, nothing else"
+ },
+ "agent_loop": {
+  "method": "5 seeds x 4 turns of a tool-calling loop (Bash/Read declared, temperature 0, max_tokens 700, identical requests in both arms, one serve/server.py per arm, same binary 448de7bb)",
+  "off": {
+   "runs": 5,
+   "turns": 20,
+   "tool_calls": 27,
+   "length_truncated_turns": 0,
+   "empty_turns": 0
+  },
+  "ecap16": {
+   "runs": 5,
+   "turns": 20,
+   "tool_calls": 7,
+   "length_truncated_turns": 12,
+   "empty_turns": 12
+  },
+  "note": "an empty turn finished at max_tokens with reasoning only: no text, no tool call. The capped arm also diverged from the control at the first content token of a 228-token prompt."
+ },
+ "acceptance": {
+  "off": {
+   "accepted": 5431,
+   "offered": 9575,
+   "ratio": 0.567,
+   "suffix_windows": 92
+  },
+  "ecap16": {
+   "accepted": 7474,
+   "offered": 11992,
+   "ratio": 0.623,
+   "suffix_windows": 301
+  }
+ },
+ "short_probes": {
+  "json20": "both arms truncated at max_tokens=1024, no malformed markers",
+  "table10": "both arms 10 rows x 5 columns",
+  "tool2": "both arms two well-formed calls",
+  "32k": "both arms finish=stop/length, output diverges at char 8-15, no malformed markers",
+  "32k_plus_tools": "both arms finish=stop, output diverges at char 0-8, no malformed markers"
+ },
+ "field_incident": {
+  "date": "2026-10-31",
+  "what": "the same engine and option serving an agent client (ZCode) on :8081: empty tool arguments, reasoning text in content, a bare <|im_start|> in the visible stream, replies cut mid-sentence",
+  "recovered_by": "rolling the engine back and removing the option",
+  "caveat": "the short probes above do not reproduce the marker corruption; the reproducible signal is the agent-loop collapse and the immediate output divergence"
+ },
+ "arithmetic": {
+  "K": 10,
+  "kept_entries": 16,
+  "window": "T = 8 (--spec 8, kVerifyMaxT)",
+  "picks": 80,
+  "tail_picks": 70,
+  "tail_kept": 6,
+  "dropped": 64,
+  "per_draft_row": 0.86
+ },
+ "spec4_arms": {
+  "method": "the same 5-seed x 4-turn tool-calling loop, --spec 4 --spec-min-p 0.7 (the drafter's window ceiling after the suffix adjustment is 6), one serve per arm, the same binary",
+  "off": {
+   "turns": 20,
+   "tool_calls": 32,
+   "length_truncated_turns": 0,
+   "empty_turns": 0,
+   "accepted": 3532,
+   "offered": 4565
+  },
+  "ecap16": {
+   "turns": 20,
+   "tool_calls": 16,
+   "length_truncated_turns": 7,
+   "empty_turns": 4,
+   "accepted": 4593,
+   "offered": 5809,
+   "per_draft_row": 1.2
+  },
+  "ecap20": {
+   "turns": 20,
+   "tool_calls": 21,
+   "length_truncated_turns": 4,
+   "empty_turns": 2,
+   "accepted": 4093,
+   "offered": 5138,
+   "per_draft_row": 2.0
+  },
+  "note": "the cost scales with the per-draft-row budget, not with --spec alone: 0.86 (spec 8, N=16), 1.20 (spec 4, N=16), 2.00 (spec 4, N=20)"
+ }
+}
