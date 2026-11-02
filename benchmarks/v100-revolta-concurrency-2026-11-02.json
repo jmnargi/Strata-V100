@@ -1,0 +1,3282 @@
+{
+ "schema": "strata-v100-revolta-concurrency/1",
+ "date": "2026-11-02",
+ "status": "completed installed baseline, nonce-prompt A/B, plain-prompt A/S, final plain-prompt A/B, two serial plain reference arms, a four-arm 39812-token KV-stream smoke, a semantic HTTP smoke, and an edge-final structural smoke",
+ "source_idea": {
+  "revolta": {
+   "title": "ReVolta PR #59: SM70 score multi-request decode batches by request segments",
+   "url": "https://github.com/Leonccaa/ReVolta/pull/59",
+   "repo": "https://github.com/Leonccaa/ReVolta",
+   "idea": "group query rows of one request into a segment so a paged QSA scorer loads each key tile once per segment; up to four rows, FP16 H4/D128, int32 metadata, device-built segment descriptors, CUDA-graph safe; single-row-per-request batches keep the paged scorer.",
+   "reported_measurement": "4 x V100 PCIe at 250 W; decode throughput on/off 1.01-1.24 across DFlash2/MTP4 shapes; C1 unchanged; run-to-run divergence at 4-8 requests."
+  },
+  "strata": {
+   "docs": [
+    "docs/BATCHING.md",
+    "docs/QSAROWS.md"
+   ],
+   "change": "STRATA_QSA_SEGMENTS groups contiguous rows of one slot in a --batch-mtp verify window; STRATA_BATCH_VERIFY_WIDTH widens a slot group to the row budget. Both are opt-in and change no default.",
+   "difference": "Strata reuses its existing int8/fp16 multi-row QSA calls in the batch-MTP verifier and requires bitwise equality; ReVolta changes a vLLM SM70 paged scorer for arbitrary request segments. The engines, models, KV formats and power caps differ, so throughput is not directly comparable."
+  }
+ },
+ "hardware": {
+  "gpus": "2 x Tesla V100-PCIE-16GB, 16384 MiB each; PCIe probe 13.1 GB/s",
+  "cpu": "AMD Ryzen 5 3600 6-Core Processor; 6 physical cores, 12 logical processors",
+  "host_ram_gib": 94.22,
+  "cuda": "CUDA 12.8, sm_70",
+  "engine_version": "0.1.45.6",
+  "power": {
+   "samples_w_total": [
+    84.396,
+    227.827
+   ],
+   "temperatures_c": [
+    48,
+    69
+   ],
+   "cap": "unknown",
+   "note": "The status endpoint reports one power value for the two-GPU machine; only the initial and final status snapshots were recorded. No enforced power limit or clock lock was measured, so the power cap is unknown."
+  }
+ },
+ "provenance": {
+  "installed_baseline": {
+   "binary": "engine/strata",
+   "sha256": "1b4c32cd77361ad834f436cc34abccdc97ac2336f04660252b7cc2ef5aa20163",
+   "size_bytes": 98154944,
+   "mtime": "2026-10-31T17:23:06-04:00",
+   "version": "0.1.45.6"
+  },
+  "baseline_checkout": {
+   "head": "a9e06cb3feff8df423b823862fa7222259a6f4b9",
+   "head_time": "2026-10-31T17:20:08-04:00",
+   "working_tree": "the benchmark ran the prebuilt engine/strata; no fresh baseline build was run"
+  },
+  "candidate": {
+   "base_commit": "a9e06cb3feff8df423b823862fa7222259a6f4b9",
+   "uncommitted_diff": "5 files, +443/-43 (src/core/verify.cpp, src/kernels/batch_rows_parity.cpp, src/program/generate.cpp, docs/BATCHING.md, docs/QSAROWS.md)",
+   "binary": "build/strata",
+   "sha256": "d615147e71192210154d892aff2c41caa1537be7f6739b9cc861beb4f9622904",
+   "size_bytes": 98159000,
+   "mtime": "2026-11-02T14:30:00-05:00",
+   "cuda_arch": "sm_70"
+  },
+  "sha_mapping_note": "Baseline source is a9e06cb3, the same base as the candidate. The installed binary is the prebuilt 1b4c32 file; its 17:23 mtime is after the 17:20 merge and is consistent with a build of that source, but no fresh baseline build was run. The candidate is that base plus the five-file opt-in diff, built as d615147e."
+ },
+ "build_and_test_boundaries": {
+  "cuda": {
+   "arch": "sm_70",
+   "compiler": "/usr/local/cuda-12.8/bin/nvcc",
+   "build_and_link": "succeeded",
+   "evidence": "build/strata, 163 objects, CMakeCache CMAKE_CUDA_ARCHITECTURES=70"
+  },
+  "hip": {
+   "configured": true,
+   "toolchain": "ROCm 7.2.4 clang++",
+   "objects_compiled": [
+    "CMakeFiles/strata_engine.dir/src/core/verify.cpp.o",
+    "CMakeFiles/strata.dir/src/program/generate.cpp.o",
+    "CMakeFiles/batch_rows_parity.dir/src/kernels/batch_rows_parity.cpp.o"
+   ],
+   "link": "not attempted",
+   "runtime": "no AMD GPU run",
+   "note": "partial host compile only; this is not an AMD/HIP validation"
+  },
+  "sycl": {
+   "configured": false,
+   "implementation": "separate sycl/ tree",
+   "changed": false,
+   "note": "STRATA_ENABLE_SYCL=OFF; the separate Intel implementation was not touched or tested"
+  },
+  "server_tests": {
+   "passed": 39,
+   "source": "change hand-off; not re-run for this report"
+  }
+ },
+ "parity": {
+  "batch_rows_parity": {
+   "binary": "build/batch_rows_parity",
+   "env_matrix": [
+    [
+     "STRATA_QSA_ROWS",
+     "0",
+     "STRATA_SCORES_MULTI",
+     "1",
+     "STRATA_ATTN_LANECELL",
+     "0"
+    ],
+    [
+     "STRATA_QSA_ROWS",
+     "1",
+     "STRATA_SCORES_MULTI",
+     "1",
+     "STRATA_ATTN_LANECELL",
+     "0"
+    ],
+    [
+     "STRATA_QSA_ROWS",
+     "1",
+     "STRATA_SCORES_MULTI",
+     "0",
+     "STRATA_ATTN_LANECELL",
+     "0"
+    ],
+    [
+     "STRATA_QSA_ROWS",
+     "1",
+     "STRATA_SCORES_MULTI",
+     "1",
+     "STRATA_ATTN_LANECELL",
+     "1"
+    ]
+   ],
+   "result": "all cases bitwise; batch_rows_parity: ok in all four environments",
+   "segments": {
+    "rows": [
+     1,
+     2,
+     4,
+     8
+    ],
+    "pools": [
+     "int8",
+     "fp16"
+    ],
+    "shape": "one slot's contiguous rows: one indexer key set, one K/V pool, cells at successive positions",
+    "capture": "one graph capture, one instantiate, three replays over two device step sets (A, B, A)",
+    "result": "scores, top-k, attention and native_qsa_indexer_append_steps bitwise equal to the per-row loop",
+    "append_partial_tail": true
+   },
+   "kernels": [
+    "qsa_block_scores_rows",
+    "qsa_block_topk",
+    "qsa_decode_attn_batch_rows",
+    "native_qsa_indexer_append",
+    "native_qsa_indexer_append_steps",
+    "gdn_step_norm_groups window",
+    "gdn_step_norm_groups commit"
+   ],
+   "note": "The kernel cases are bitwise against the per-row launches. This is not a claim that STRATA_BATCH_VERIFY_WIDTH leaves output unchanged; wider groups can change arithmetic."
+  },
+  "qsa_parity": {
+   "binary": "build/qsa_parity",
+   "args": [
+    "--selftest"
+   ],
+   "result": "qsa: 0 failures; PASS"
+  },
+  "gdn_parity": {
+   "binary": "build/gdn_parity",
+   "args": [
+    "--selftest"
+   ],
+   "result": "gdn: 0 failures; PASS"
+  },
+  "verify_batch_parity": {
+   "binary": "build/verify_batch_parity",
+   "result": "verify_batch_parity: PASS"
+  },
+  "note": "All parity binaries ran on one V100 (sm_70) with the daily service stopped. They cover kernels and captured graphs, not the full HTTP serving path."
+ },
+ "method": {
+  "transport": "HTTP OpenAI /v1/chat/completions, stream=true",
+  "sampling": "temperature=0, reasoning_effort=none, chat_template_kwargs.enable_thinking=false",
+  "max_tokens": 256,
+  "clients": [
+   1,
+   2,
+   4
+  ],
+  "rounds_per_arm_client": 2,
+  "run_id": "baseline20261102",
+  "prompts": {
+   "plain": {
+    "count": 8,
+    "construction": "PLAIN_PROMPTS[client % 8]; no nonce prefix",
+    "texts": [
+     "Write a complete, production-quality Python module that merges overlapping half-open intervals. Include the full implementation with type hints and docstrings, a comprehensive test suite covering empty input, touching intervals, nested intervals, invalid bounds and very large inputs, and a short design/complexity discussion. Target at least 1000 words; do not stop early.",
+     "Write a complete C++17 CSV line parser that handles quoted fields, escaped quotes and embedded newlines. Provide the full implementation, a comprehensive test suite with edge cases, the build command, and a short discussion of the state machine and complexity. Target at least 1000 words; do not stop early.",
+     "Write a complete Rust library that validates balanced brackets and reports the exact error position. Include the full implementation, a comprehensive test suite with malformed and valid inputs, property-style cases, and a design/complexity discussion. Target at least 1000 words; do not stop early.",
+     "Write a complete Go implementation of a bounded-concurrency URL worker pool with cancellation and backpressure. Include the full implementation, a comprehensive test suite with a fake fetcher, race-safe tests, and a detailed explanation of shutdown and error propagation. Target at least 1000 words; do not stop early.",
+     "Write a complete TypeScript debounce utility with cancel, flush and leading/trailing options. Include the full implementation, a comprehensive Jest or Vitest test suite with fake timers, and a detailed explanation of timer ownership and `this` typing. Target at least 1000 words; do not stop early.",
+     "Write a complete Python B-tree implementation with insert, search, delete and range scan. Include the full implementation, a comprehensive test suite comparing against a reference sorted list, and a detailed explanation of node splitting, rebalancing and complexity. Target at least 1000 words; do not stop early.",
+     "Write a complete C implementation of a bounds-checked string builder and a small ring buffer. Include the full implementation, a comprehensive test suite covering overflow, truncation, aliasing and allocation failure, and a discussion of the ownership contract. Target at least 1000 words; do not stop early.",
+     "Write a complete Python implementation of a transactional in-memory key-value store with snapshots and rollback. Include the full implementation, a comprehensive test suite with nested transactions and failure injection, and a detailed design/complexity discussion. Target at least 1000 words; do not stop early."
+    ]
+   },
+   "baseline_nonce": {
+    "template": "[run <run_id> client <client> round <round>] <code_task> Write at least 220 words.",
+    "suffix": "Write at least 220 words.",
+    "run_id": "baseline20261102",
+    "index": "CODE_PROMPTS[client % 8]",
+    "code_tasks": [
+     "Write a Python function `merge_intervals(intervals)` that merges overlapping half-open intervals. Then explain the algorithm, its time and space complexity, and two edge cases.",
+     "Write a C++17 function that parses one CSV line with quoted fields and escaped quotes. Then explain the state machine and why it is linear.",
+     "Write a Rust function that validates a balanced bracket string. Then explain the stack invariant, the error type you chose, and the complexity.",
+     "Write a Python asyncio worker pool that processes a list of URLs with at most N concurrent tasks. Then explain cancellation, backpressure and exception propagation.",
+     "Write a SQL query that finds the second-highest salary per department, then explain the window function, ties, and how an index changes the plan.",
+     "Write a Go function that detects a cycle in a directed graph. Then explain DFS colours, complexity, and why the recursion depth matters.",
+     "Write a JavaScript debounce with a cancel method. Then explain timers, `this`, and the difference from throttle.",
+     "Write a C function that copies a NUL-terminated string with explicit bounds checking. Then explain overlap, truncation, and the return convention."
+    ],
+    "note": "Seven answer files are exactly the 39-byte bracketed prefix; the model echoed the nonce and stopped at EOS."
+   },
+   "long": {
+    "template": "[run <run_id> long-context probe] Read the following material and then answer.\n\n<filler>\n\nIn two sentences, state what the committee reviewed and which checkpoints it set.",
+    "filler": "The review committee opened the meeting by reading the previous minutes, then walked through the budget line by line, noting the hardware refresh, the software licences, the support contract, the travel plan and the training schedule. Each owner reported status, risks and the date of the next checkpoint, and the chair asked for a short written summary before the next session. ",
+    "prompt_tokens": 12792,
+    "output_tokens": 32
+   }
+  },
+  "warmup": "one or two warm-up bursts per arm (up to four clients, 16 tokens each); excluded from medians",
+  "long_probe": {
+   "prompt_tokens": 12792,
+   "tokens": 32,
+   "count": 6,
+   "arms": [
+    "installed-serial-ctx262144",
+    "installed-batchmtp-g1-ctx262144",
+    "revolta-qsa-v1-full-A1",
+    "revolta-qsa-v1-full-A2",
+    "revolta-qsa-v1-full-B1",
+    "revolta-qsa-v1-full-B2"
+   ],
+   "note": "Only these six arms ran the long probe. The 32768, pipelined and short arms ran with --long-tokens 0."
+  },
+  "metrics": {
+   "ttft": "first content chunk; table values are medians of per-round means",
+   "latency": "full call; table values are medians of per-round means",
+   "aggregate_wall_tps": "total tokens / burst wall time",
+   "aggregate_decode_tps": "(tokens - clients) / (max_end - min_first)",
+   "per_client_decode_tps": "per-request (tokens - 1) / (end - first)",
+   "summary": "per-arm median over that arm's two rounds; A/B client summary medians use all four available rounds (two repeats); A/B paired ratios are B/A from the four same-round pairs A1r0/B1r0, A1r1/B1r1, A2r0/B2r0 and A2r1/B2r1; plain A/S ratios are S1/A1 and S2/A2; ranges and medians cover all four A/B pairs or the two A/S ratios"
+  },
+  "samples": {
+   "ab": "4 arms x 3 client counts x 2 rounds = 24 rounds / 56 requests per mode; 4 same-round paired ratios per client",
+   "plain_as": "4 arms x 3 client counts x 2 rounds = 24 rounds / 56 requests; 2 paired ratios per client",
+   "baseline": "7 installed arms; client counts and rounds as listed per arm; some arms omit C1 or C4 by runner design",
+   "plain_final": "8 arms (full and short, A/B/A/B) x 3 client counts x 2 rounds = 48 rounds / 112 requests; 4 same-round paired ratios per client/mode",
+   "plain_serial": "2 arms x 3 client counts x 2 rounds = 12 rounds / 28 requests; no paired A/B"
+  },
+  "request_body": {
+   "model": "strata",
+   "stream": true,
+   "max_tokens": 256,
+   "temperature": 0,
+   "reasoning_effort": "none",
+   "chat_template_kwargs": {
+    "enable_thinking": false
+   },
+   "messages": [
+    {
+     "role": "user",
+     "content": "<prompt>"
+    }
+   ]
+  },
+  "harness": {
+   "local": {
+    "scripts": [
+     "/tmp/strata-concurrency-bench/bench.py",
+     "/tmp/strata-concurrency-bench/run_ab.sh",
+     "/tmp/strata-concurrency-bench/run_baseline.sh",
+     "/tmp/strata-concurrency-bench/run_extra.sh"
+    ],
+    "committed": false,
+    "note": "These local scripts produced the rows in this report. They are temporary and are not repository code."
+   },
+   "tracked_equivalent": {
+    "path": "tools/serve_load.py",
+    "generated_current_data": false,
+    "note": "This is the committed load generator. It uses different fixed prompts and a different metric surface. It did not generate these rows and must not be cited as their source."
+   }
+  }
+ },
+ "configs": {
+  "shared_env": {
+   "STRATA_EXPERT_PAIR": "1",
+   "STRATA_SPLIT_RING": "192",
+   "STRATA_KV_GROW": "1"
+  },
+  "arm_env": {
+   "A": {},
+   "B": {
+    "STRATA_QSA_SEGMENTS": "1",
+    "STRATA_BATCH_VERIFY_WIDTH": "1"
+   }
+  },
+  "shared_args": [
+   "--pack",
+   "/mnt/strata-models/packs/gyro_l",
+   "--native",
+   "/mnt/strata-models/models/Gyro-L/Qwen3.8-Flash-Next-Gyro-L-TQ3_0.gguf",
+   "--expert-profile",
+   "/mnt/strata-models/data/expert-profile.bin",
+   "--expert-cache",
+   "auto",
+   "--prefill",
+   "auto",
+   "--spec",
+   "4",
+   "--mtp",
+   "/mnt/strata-models/mtp/rt",
+   "--spec-min-p",
+   "0.70",
+   "--vision",
+   "--vram-reserve-mib",
+   "750",
+   "--conversation-cache-mib",
+   "25600",
+   "--conversation-cache-slots",
+   "32",
+   "--pipeline-windows",
+   "2",
+   "--conversation-cache-park-gain",
+   "1024",
+   "--kv",
+   "int8"
+  ],
+  "note": "serve/server.py adds --serve --layer-split 14 and --batch N from the config; the derived configs do not store those two options. No API key is recorded. The benchmark wrapper sanitized the derived configs.",
+  "baseline_arms": {
+   "installed-serial-ctx262144": {
+    "parallel": 1,
+    "batch": 1,
+    "context": 262144,
+    "batch_mtp": false,
+    "batch_groups": null,
+    "kv_resident": null
+   },
+   "installed-serial-ctx32768": {
+    "parallel": 1,
+    "batch": 1,
+    "context": 32768,
+    "batch_mtp": false,
+    "batch_groups": null,
+    "kv_resident": null
+   },
+   "installed-batchmtp-g1-ctx262144": {
+    "parallel": 4,
+    "batch": 4,
+    "context": 262144,
+    "batch_mtp": true,
+    "batch_groups": 1,
+    "kv_resident": null
+   },
+   "installed-batchmtp-g1-ctx32768": {
+    "parallel": 4,
+    "batch": 4,
+    "context": 32768,
+    "batch_mtp": true,
+    "batch_groups": 1,
+    "kv_resident": null
+   },
+   "installed-batchmtp-g1-p2-ctx262144": {
+    "parallel": 2,
+    "batch": 2,
+    "context": 262144,
+    "batch_mtp": true,
+    "batch_groups": 1,
+    "kv_resident": null
+   },
+   "installed-pipelined-ctx262144": {
+    "parallel": 4,
+    "batch": 4,
+    "context": 262144,
+    "batch_mtp": false,
+    "batch_groups": "auto",
+    "kv_resident": null
+   },
+   "installed-pipelined-ctx32768": {
+    "parallel": 4,
+    "batch": 4,
+    "context": 32768,
+    "batch_mtp": false,
+    "batch_groups": "auto",
+    "kv_resident": null
+   }
+  },
+  "ab_arms": {
+   "full": {
+    "parallel": 2,
+    "batch": 2,
+    "context": 262144,
+    "batch_mtp": true,
+    "batch_groups": 1,
+    "kv_resident": 32768,
+    "clients": [
+     1,
+     2,
+     4
+    ],
+    "rounds": 2
+   },
+   "short": {
+    "parallel": 4,
+    "batch": 4,
+    "context": 32768,
+    "batch_mtp": true,
+    "batch_groups": 1,
+    "kv_resident": null,
+    "clients": [
+     1,
+     2,
+     4
+    ],
+    "rounds": 2
+   }
+  }
+ },
+ "memory": {
+  "installed_full_context_serial": {
+   "context": 262144,
+   "batch_slots": "1/1",
+   "batch_mtp": false,
+   "expert_cache_slots": [
+    7120,
+    4758
+   ],
+   "cuda1_gib": 8.82,
+   "cuda0_gib": 12.73,
+   "prompt_chunk": 8192,
+   "resident_experts_pct": 48
+  },
+  "installed_full_context_batch_mtp": {
+   "context": 262144,
+   "batch_slots": "2/4",
+   "batch_mtp": true,
+   "expert_cache_slots": [
+    5754,
+    658
+   ],
+   "cuda1_gib": 1.22,
+   "cuda0_gib": 10.29,
+   "prompt_chunk": 1024,
+   "resident_experts_pct": 26,
+   "warning": "prompt chunk 1024 tokens, not 8192: CUDA1 has 658 expert-cache slots"
+  },
+  "candidate_full_context_kv_stream": {
+   "context": 262144,
+   "batch_slots": "2/2",
+   "batch_mtp": true,
+   "expert_cache_slots": [
+    6877,
+    3932
+   ],
+   "cuda1_gib": 7.29,
+   "cuda0_gib": 12.3,
+   "prompt_chunk": 8192,
+   "resident_experts_pct": 44,
+   "kv": "KV streaming: 32768 of 262144 cells per QSA layer in VRAM; K/V in 0.77 GiB pinned RAM"
+  },
+  "comparison": "At 262144, two batch-MTP slots leave 658 CUDA1 slots versus 4758 for one serial slot. KV streaming at two slots recovers the CUDA1 cache to 3932 slots while retaining the 262144 context: 3274 slots above the unstreamed batch arm, 826 below the serial arm.",
+  "scope": "A and B use the same candidate build and the same memory configuration; 3932 is not an effect of the two opt-in flags."
+ },
+ "baseline_installed": [
+  {
+   "label": "installed-batchmtp-g1-ctx262144",
+   "parallel": 4,
+   "context": null,
+   "batch_slots": "2/4",
+   "expert_cache_slots": [
+    5754,
+    658
+   ],
+   "ready_s": 42.0,
+   "clients": {
+    "1": {
+     "wall_tps": 22.8,
+     "decode_tps": 26.3,
+     "ttft_p50_s": 1.5,
+     "latency_p50_s": 11.21,
+     "round_tokens": [
+      256,
+      256
+     ]
+    },
+    "2": {
+     "wall_tps": 27.3,
+     "decode_tps": 27.5,
+     "ttft_p50_s": 1.55,
+     "latency_p50_s": 16.58,
+     "round_tokens": [
+      415,
+      512
+     ]
+    },
+    "4": {
+     "wall_tps": 25.0,
+     "decode_tps": 25.0,
+     "ttft_p50_s": 8.57,
+     "latency_p50_s": 28.43,
+     "round_tokens": [
+      965,
+      949
+     ]
+    }
+   },
+   "long_probe": {
+    "prompt_tokens": 12792,
+    "tokens": 32,
+    "ttft_s": 26.51,
+    "decode_tps": 17.2
+   }
+  },
+  {
+   "label": "installed-batchmtp-g1-ctx32768",
+   "parallel": 4,
+   "context": 32768,
+   "batch_slots": "4/4",
+   "expert_cache_slots": [
+    6943,
+    3918
+   ],
+   "ready_s": 56.3,
+   "clients": {
+    "2": {
+     "wall_tps": 46.7,
+     "decode_tps": 52.2,
+     "ttft_p50_s": 1.85,
+     "latency_p50_s": 10.75,
+     "round_tokens": [
+      497,
+      512
+     ]
+    },
+    "4": {
+     "wall_tps": 61.6,
+     "decode_tps": 61.9,
+     "ttft_p50_s": 1.28,
+     "latency_p50_s": 13.67,
+     "round_tokens": [
+      1024,
+      720
+     ]
+    }
+   }
+  },
+  {
+   "label": "installed-batchmtp-g1-p2-ctx262144",
+   "parallel": 2,
+   "context": null,
+   "batch_slots": "2/2",
+   "expert_cache_slots": [
+    5754,
+    658
+   ],
+   "ready_s": 42.0,
+   "clients": {
+    "1": {
+     "wall_tps": 24.5,
+     "decode_tps": 28.7,
+     "ttft_p50_s": 1.5,
+     "latency_p50_s": 10.03,
+     "round_tokens": [
+      235,
+      256
+     ]
+    },
+    "2": {
+     "wall_tps": 30.3,
+     "decode_tps": 30.5,
+     "ttft_p50_s": 1.53,
+     "latency_p50_s": 16.83,
+     "round_tokens": [
+      512,
+      512
+     ]
+    }
+   }
+  },
+  {
+   "label": "installed-pipelined-ctx262144",
+   "parallel": 4,
+   "context": null,
+   "batch_slots": "2/4",
+   "expert_cache_slots": [
+    5754,
+    712
+   ],
+   "ready_s": 42.0,
+   "clients": {
+    "2": {
+     "wall_tps": 12.8,
+     "decode_tps": 13.3,
+     "ttft_p50_s": 2.62,
+     "latency_p50_s": 40.08,
+     "round_tokens": [
+      512,
+      512
+     ]
+    },
+    "4": {
+     "wall_tps": 13.3,
+     "decode_tps": 13.3,
+     "ttft_p50_s": 19.81,
+     "latency_p50_s": 59.29,
+     "round_tokens": [
+      1024,
+      1024
+     ]
+    }
+   }
+  },
+  {
+   "label": "installed-pipelined-ctx32768",
+   "parallel": 4,
+   "context": 32768,
+   "batch_slots": "4/4",
+   "expert_cache_slots": [
+    6943,
+    4037
+   ],
+   "ready_s": 40.0,
+   "clients": {
+    "2": {
+     "wall_tps": 18.4,
+     "decode_tps": 19.1,
+     "ttft_p50_s": 1.83,
+     "latency_p50_s": 26.6,
+     "round_tokens": [
+      488,
+      512
+     ]
+    },
+    "4": {
+     "wall_tps": 25.9,
+     "decode_tps": 25.9,
+     "ttft_p50_s": 1.04,
+     "latency_p50_s": 35.02,
+     "round_tokens": [
+      969,
+      1024
+     ]
+    }
+   }
+  },
+  {
+   "label": "installed-serial-ctx262144",
+   "parallel": 1,
+   "context": null,
+   "batch_slots": "1/1",
+   "expert_cache_slots": [
+    7120,
+    4758
+   ],
+   "ready_s": 52.0,
+   "clients": {
+    "1": {
+     "wall_tps": 48.2,
+     "decode_tps": 61.6,
+     "ttft_p50_s": 0.9,
+     "latency_p50_s": 4.51,
+     "round_tokens": [
+      256,
+      169
+     ]
+    },
+    "2": {
+     "wall_tps": 55.2,
+     "decode_tps": 59.5,
+     "ttft_p50_s": 2.96,
+     "latency_p50_s": 6.83,
+     "round_tokens": [
+      491,
+      512
+     ]
+    },
+    "4": {
+     "wall_tps": 51.0,
+     "decode_tps": 51.2,
+     "ttft_p50_s": 6.49,
+     "latency_p50_s": 8.91,
+     "round_tokens": [
+      765,
+      1024
+     ]
+    }
+   },
+   "long_probe": {
+    "prompt_tokens": 12792,
+    "tokens": 32,
+    "ttft_s": 10.82,
+    "decode_tps": 35.5
+   }
+  },
+  {
+   "label": "installed-serial-ctx32768",
+   "parallel": 1,
+   "context": 32768,
+   "batch_slots": "1/1",
+   "expert_cache_slots": [
+    7168,
+    4925
+   ],
+   "ready_s": 48.0,
+   "clients": {
+    "1": {
+     "wall_tps": 52.7,
+     "decode_tps": 64.5,
+     "ttft_p50_s": 0.9,
+     "latency_p50_s": 4.94,
+     "round_tokens": [
+      256,
+      256
+     ]
+    },
+    "2": {
+     "wall_tps": 49.8,
+     "decode_tps": 50.3,
+     "ttft_p50_s": 2.73,
+     "latency_p50_s": 5.16,
+     "round_tokens": [
+      275,
+      512
+     ]
+    },
+    "4": {
+     "wall_tps": 50.6,
+     "decode_tps": 50.9,
+     "ttft_p50_s": 5.06,
+     "latency_p50_s": 8.74,
+     "round_tokens": [
+      787,
+      936
+     ]
+    }
+   }
+  }
+ ],
+ "ab": {
+  "engine_sha256": "d615147e71192210154d892aff2c41caa1537be7f6739b9cc861beb4f9622904",
+  "settings": {
+   "max_tokens": 256,
+   "clients": [
+    1,
+    2,
+    4
+   ],
+   "rounds": 2,
+   "ticks": "all values are per-round aggregate unless named mean/median/p95",
+   "A": "off",
+   "B": "STRATA_QSA_SEGMENTS=1 + STRATA_BATCH_VERIFY_WIDTH=1"
+  },
+  "comparability": {
+   "one_engine_sha": true,
+   "one_run_id": true,
+   "run_ids": [
+    "baseline20261102"
+   ],
+   "labels": [
+    "full-A1",
+    "full-A2",
+    "full-B1",
+    "full-B2",
+    "short-A1",
+    "short-A2",
+    "short-B1",
+    "short-B2"
+   ],
+   "prompt_identity": "same run_id + same clients/rounds/max_tokens; prompt nonce is generated from (run_id, client, round)"
+  },
+  "modes": {
+   "full": {
+    "config": {
+     "context": 262144,
+     "kv_resident": 32768,
+     "parallel": 2,
+     "batch_mtp": true,
+     "batch_groups": "1",
+     "batch_slots_admitted": 2,
+     "expert_cache_slots": [
+      6877,
+      3932
+     ],
+     "expert_cache_gib": [
+      12.3
+     ],
+     "host_mem_after_ready_gib_range": [
+      31.64,
+      31.73
+     ],
+     "host_mem_after_stop_gib_range": [
+      91.39,
+      91.44
+     ],
+     "gpu_used_mib": [
+      [
+       [
+        0,
+        15726
+       ],
+       [
+        1,
+        15790
+       ]
+      ],
+      [
+       [
+        0,
+        15730
+       ],
+       [
+        1,
+        15798
+       ]
+      ],
+      [
+       [
+        0,
+        15730
+       ],
+       [
+        1,
+        15802
+       ]
+      ]
+     ],
+     "ready_s": {
+      "A1": 242.1,
+      "other_arms_range": [
+       50.039,
+       50.04
+      ]
+     }
+    },
+    "arms": {
+     "A": {
+      "clients": {
+       "1": {
+        "n_rounds": 4,
+        "tps_wall_mean": 41.262,
+        "tps_wall_median": 42.443,
+        "tps_decode_mean": 53.732,
+        "tps_decode_median": 52.693,
+        "ttft_mean_s": 1.162,
+        "ttft_median_s": 1.17,
+        "latency_mean_s": 5.231,
+        "latency_median_s": 5.355,
+        "per_client_decode_mean": 53.732,
+        "per_client_decode_median": 52.693,
+        "tokens_total_mean": 214.25,
+        "tokens_total_median": 216.0,
+        "tokens_per_round_by_arm": {
+         "full-A1": [
+          256,
+          256
+         ],
+         "full-A2": [
+          176,
+          169
+         ]
+        },
+        "short_requests": 2,
+        "requests_total": 4
+       },
+       "2": {
+        "n_rounds": 4,
+        "tps_wall_mean": 48.356,
+        "tps_wall_median": 49.515,
+        "tps_decode_mean": 48.882,
+        "tps_decode_median": 50.009,
+        "ttft_mean_s": 1.024,
+        "ttft_median_s": 1.021,
+        "latency_mean_s": 8.948,
+        "latency_median_s": 9.787,
+        "per_client_decode_mean": 29.026,
+        "per_client_decode_median": 29.19,
+        "tokens_total_mean": 462,
+        "tokens_total_median": 512.0,
+        "tokens_per_round_by_arm": {
+         "full-A1": [
+          312,
+          512
+         ],
+         "full-A2": [
+          512,
+          512
+         ]
+        },
+        "short_requests": 1,
+        "requests_total": 8
+       },
+       "4": {
+        "n_rounds": 4,
+        "tps_wall_mean": 47.247,
+        "tps_wall_median": 47.061,
+        "tps_decode_mean": 47.414,
+        "tps_decode_median": 47.22,
+        "ttft_mean_s": 6.093,
+        "ttft_median_s": 6.098,
+        "latency_mean_s": 15.386,
+        "latency_median_s": 15.213,
+        "per_client_decode_mean": 27.086,
+        "per_client_decode_median": 27.102,
+        "tokens_total_mean": 986.5,
+        "tokens_total_median": 1010.0,
+        "tokens_per_round_by_arm": {
+         "full-A1": [
+          902,
+          1024
+         ],
+         "full-A2": [
+          996,
+          1024
+         ]
+        },
+        "short_requests": 3,
+        "requests_total": 16
+       }
+      }
+     },
+     "B": {
+      "clients": {
+       "1": {
+        "n_rounds": 4,
+        "tps_wall_mean": 38.173,
+        "tps_wall_median": 37.551,
+        "tps_decode_mean": 46.308,
+        "tps_decode_median": 45.364,
+        "ttft_mean_s": 1.185,
+        "ttft_median_s": 1.188,
+        "latency_mean_s": 6.782,
+        "latency_median_s": 6.854,
+        "per_client_decode_mean": 46.308,
+        "per_client_decode_median": 45.364,
+        "tokens_total_mean": 256,
+        "tokens_total_median": 256.0,
+        "tokens_per_round_by_arm": {
+         "full-B1": [
+          256,
+          256
+         ],
+         "full-B2": [
+          256,
+          256
+         ]
+        },
+        "short_requests": 0,
+        "requests_total": 4
+       },
+       "2": {
+        "n_rounds": 4,
+        "tps_wall_mean": 52.095,
+        "tps_wall_median": 55.97,
+        "tps_decode_mean": 52.716,
+        "tps_decode_median": 56.603,
+        "ttft_mean_s": 1.012,
+        "ttft_median_s": 1.023,
+        "latency_mean_s": 7.88,
+        "latency_median_s": 8.567,
+        "per_client_decode_mean": 32.008,
+        "per_client_decode_median": 32.404,
+        "tokens_total_mean": 452.75,
+        "tokens_total_median": 512.0,
+        "tokens_per_round_by_arm": {
+         "full-B1": [
+          512,
+          512
+         ],
+         "full-B2": [
+          512,
+          275
+         ]
+        },
+        "short_requests": 1,
+        "requests_total": 8
+       },
+       "4": {
+        "n_rounds": 4,
+        "tps_wall_mean": 56.05,
+        "tps_wall_median": 55.834,
+        "tps_decode_mean": 56.318,
+        "tps_decode_median": 56.102,
+        "ttft_mean_s": 4.678,
+        "ttft_median_s": 4.52,
+        "latency_mean_s": 12.254,
+        "latency_median_s": 11.985,
+        "per_client_decode_mean": 31.784,
+        "per_client_decode_median": 31.801,
+        "tokens_total_mean": 972.75,
+        "tokens_total_median": 960.0,
+        "tokens_per_round_by_arm": {
+         "full-B1": [
+          965,
+          947
+         ],
+         "full-B2": [
+          955,
+          1024
+         ]
+        },
+        "short_requests": 3,
+        "requests_total": 16
+       }
+      }
+     }
+    },
+    "paired": {
+     "1": {
+      "n_pairs": 4,
+      "ratio_wall_median": 0.9217,
+      "ratio_wall_range": [
+       0.8585,
+       1.0105
+      ],
+      "ratio_decode_median": 0.8481,
+      "ratio_decode_range": [
+       0.8367,
+       0.9282
+      ],
+      "ratio_ttft_median": 1.0202,
+      "ratio_ttft_range": [
+       1.0048,
+       1.036
+      ],
+      "ratio_latency_median": 1.3022,
+      "ratio_latency_range": [
+       1.1344,
+       1.5746
+      ],
+      "tokens_A": [
+       256,
+       256,
+       176,
+       169
+      ],
+      "tokens_B": [
+       256,
+       256,
+       256,
+       256
+      ],
+      "pairs": [
+       {
+        "pair": "A1r0/B1r0",
+        "ratio_wall": 0.8585,
+        "ratio_decode": 0.8367,
+        "ratio_ttft": 1.0261,
+        "ratio_latency": 1.1648,
+        "tokens_A": 256,
+        "tokens_B": 256
+       },
+       {
+        "pair": "A1r1/B1r1",
+        "ratio_wall": 0.8815,
+        "ratio_decode": 0.8574,
+        "ratio_ttft": 1.0143,
+        "ratio_latency": 1.1344,
+        "tokens_A": 256,
+        "tokens_B": 256
+       },
+       {
+        "pair": "A2r0/B2r0",
+        "ratio_wall": 1.0105,
+        "ratio_decode": 0.9282,
+        "ratio_ttft": 1.0048,
+        "ratio_latency": 1.4395,
+        "tokens_A": 176,
+        "tokens_B": 256
+       },
+       {
+        "pair": "A2r1/B2r1",
+        "ratio_wall": 0.962,
+        "ratio_decode": 0.8388,
+        "ratio_ttft": 1.036,
+        "ratio_latency": 1.5746,
+        "tokens_A": 169,
+        "tokens_B": 256
+       }
+      ]
+     },
+     "2": {
+      "n_pairs": 4,
+      "ratio_wall_median": 1.1511,
+      "ratio_wall_range": [
+       0.6815,
+       1.3764
+      ],
+      "ratio_decode_median": 1.1534,
+      "ratio_decode_range": [
+       0.6812,
+       1.3759
+      ],
+      "ratio_ttft_median": 0.9846,
+      "ratio_ttft_range": [
+       0.8936,
+       1.1033
+      ],
+      "ratio_latency_median": 0.8612,
+      "ratio_latency_range": [
+       0.5296,
+       1.5505
+      ],
+      "tokens_A": [
+       312,
+       512,
+       512,
+       512
+      ],
+      "tokens_B": [
+       512,
+       512,
+       512,
+       275
+      ],
+      "pairs": [
+       {
+        "pair": "A1r0/B1r0",
+        "ratio_wall": 1.3764,
+        "ratio_decode": 1.3759,
+        "ratio_ttft": 1.0684,
+        "ratio_latency": 1.5505,
+        "tokens_A": 312,
+        "tokens_B": 512
+       },
+       {
+        "pair": "A1r1/B1r1",
+        "ratio_wall": 1.1665,
+        "ratio_decode": 1.1686,
+        "ratio_ttft": 0.8936,
+        "ratio_latency": 0.856,
+        "tokens_A": 512,
+        "tokens_B": 512
+       },
+       {
+        "pair": "A2r0/B2r0",
+        "ratio_wall": 1.1357,
+        "ratio_decode": 1.1382,
+        "ratio_ttft": 1.1033,
+        "ratio_latency": 0.8664,
+        "tokens_A": 512,
+        "tokens_B": 512
+       },
+       {
+        "pair": "A2r1/B2r1",
+        "ratio_wall": 0.6815,
+        "ratio_decode": 0.6812,
+        "ratio_ttft": 0.9007,
+        "ratio_latency": 0.5296,
+        "tokens_A": 512,
+        "tokens_B": 275
+       }
+      ]
+     },
+     "4": {
+      "n_pairs": 4,
+      "ratio_wall_median": 1.1758,
+      "ratio_wall_range": [
+       1.1158,
+       1.296
+      ],
+      "ratio_decode_median": 1.1773,
+      "ratio_decode_range": [
+       1.1177,
+       1.2971
+      ],
+      "ratio_ttft_median": 0.7353,
+      "ratio_ttft_range": [
+       0.6855,
+       0.9281
+      ],
+      "ratio_latency_median": 0.7651,
+      "ratio_latency_range": [
+       0.7532,
+       0.9048
+      ],
+      "tokens_A": [
+       902,
+       1024,
+       996,
+       1024
+      ],
+      "tokens_B": [
+       965,
+       947,
+       955,
+       1024
+      ],
+      "pairs": [
+       {
+        "pair": "A1r0/B1r0",
+        "ratio_wall": 1.296,
+        "ratio_decode": 1.2971,
+        "ratio_ttft": 0.6855,
+        "ratio_latency": 0.7647,
+        "tokens_A": 902,
+        "tokens_B": 965
+       },
+       {
+        "pair": "A1r1/B1r1",
+        "ratio_wall": 1.1321,
+        "ratio_decode": 1.1338,
+        "ratio_ttft": 0.7475,
+        "ratio_latency": 0.7654,
+        "tokens_A": 1024,
+        "tokens_B": 947
+       },
+       {
+        "pair": "A2r0/B2r0",
+        "ratio_wall": 1.2194,
+        "ratio_decode": 1.2208,
+        "ratio_ttft": 0.7231,
+        "ratio_latency": 0.7532,
+        "tokens_A": 996,
+        "tokens_B": 955
+       },
+       {
+        "pair": "A2r1/B2r1",
+        "ratio_wall": 1.1158,
+        "ratio_decode": 1.1177,
+        "ratio_ttft": 0.9281,
+        "ratio_latency": 0.9048,
+        "tokens_A": 1024,
+        "tokens_B": 1024
+       }
+      ]
+     }
+    }
+   },
+   "short": {
+    "config": {
+     "context": 32768,
+     "kv_resident": null,
+     "parallel": 4,
+     "batch_mtp": true,
+     "batch_groups": "1",
+     "batch_slots_admitted": 4,
+     "expert_cache_slots": [
+      6943,
+      3918
+     ],
+     "expert_cache_gib": [
+      12.42
+     ],
+     "host_mem_after_ready_gib_range": [
+      42.02,
+      42.04
+     ],
+     "host_mem_after_stop_gib_range": [
+      91.35,
+      91.46
+     ],
+     "gpu_used_mib": [
+      [
+       [
+        0,
+        15828
+       ],
+       [
+        1,
+        16034
+       ]
+      ],
+      [
+       [
+        0,
+        15838
+       ],
+       [
+        1,
+        16076
+       ]
+      ],
+      [
+       [
+        0,
+        15844
+       ],
+       [
+        1,
+        16062
+       ]
+      ],
+      [
+       [
+        0,
+        15870
+       ],
+       [
+        1,
+        16132
+       ]
+      ]
+     ],
+     "ready_s": {
+      "A1": 40.0,
+      "other_arms_range": [
+       40.036,
+       40.038
+      ]
+     }
+    },
+    "arms": {
+     "A": {
+      "clients": {
+       "1": {
+        "n_rounds": 4,
+        "tps_wall_mean": 41.214,
+        "tps_wall_median": 42.208,
+        "tps_decode_mean": 51.131,
+        "tps_decode_median": 52.272,
+        "ttft_mean_s": 1.029,
+        "ttft_median_s": 1.018,
+        "latency_mean_s": 5.733,
+        "latency_median_s": 5.81,
+        "per_client_decode_mean": 51.131,
+        "per_client_decode_median": 52.272,
+        "tokens_total_mean": 231.25,
+        "tokens_total_median": 246.5,
+        "tokens_per_round_by_arm": {
+         "short-A1": [
+          256,
+          176
+         ],
+         "short-A2": [
+          256,
+          237
+         ]
+        },
+        "short_requests": 2,
+        "requests_total": 4
+       },
+       "2": {
+        "n_rounds": 4,
+        "tps_wall_mean": 45.626,
+        "tps_wall_median": 45.857,
+        "tps_decode_mean": 46.188,
+        "tps_decode_median": 46.429,
+        "ttft_mean_s": 1.007,
+        "ttft_median_s": 1.005,
+        "latency_mean_s": 7.04,
+        "latency_median_s": 7.088,
+        "per_client_decode_mean": 29.068,
+        "per_client_decode_median": 29.392,
+        "tokens_total_mean": 381,
+        "tokens_total_median": 381.5,
+        "tokens_per_round_by_arm": {
+         "short-A1": [
+          251,
+          512
+         ],
+         "short-A2": [
+          512,
+          249
+         ]
+        },
+        "short_requests": 4,
+        "requests_total": 8
+       },
+       "4": {
+        "n_rounds": 4,
+        "tps_wall_mean": 55.541,
+        "tps_wall_median": 55.413,
+        "tps_decode_mean": 55.88,
+        "tps_decode_median": 55.746,
+        "ttft_mean_s": 1.684,
+        "ttft_median_s": 1.662,
+        "latency_mean_s": 11.143,
+        "latency_median_s": 10.466,
+        "per_client_decode_mean": 19.763,
+        "per_client_decode_median": 19.503,
+        "tokens_total_mean": 760.75,
+        "tokens_total_median": 726.5,
+        "tokens_per_round_by_arm": {
+         "short-A1": [
+          655,
+          935
+         ],
+         "short-A2": [
+          784,
+          669
+         ]
+        },
+        "short_requests": 7,
+        "requests_total": 16
+       }
+      }
+     },
+     "B": {
+      "clients": {
+       "1": {
+        "n_rounds": 4,
+        "tps_wall_mean": 41.732,
+        "tps_wall_median": 42.309,
+        "tps_decode_mean": 50.003,
+        "tps_decode_median": 50.877,
+        "ttft_mean_s": 1.019,
+        "ttft_median_s": 1.006,
+        "latency_mean_s": 6.204,
+        "latency_median_s": 6.063,
+        "per_client_decode_mean": 50.003,
+        "per_client_decode_median": 50.877,
+        "tokens_total_mean": 256,
+        "tokens_total_median": 256.0,
+        "tokens_per_round_by_arm": {
+         "short-B1": [
+          256,
+          256
+         ],
+         "short-B2": [
+          256,
+          256
+         ]
+        },
+        "short_requests": 0,
+        "requests_total": 4
+       },
+       "2": {
+        "n_rounds": 4,
+        "tps_wall_mean": 55.715,
+        "tps_wall_median": 53.429,
+        "tps_decode_mean": 56.432,
+        "tps_decode_median": 54.0,
+        "ttft_mean_s": 0.999,
+        "ttft_median_s": 1.008,
+        "latency_mean_s": 8.325,
+        "latency_median_s": 8.645,
+        "per_client_decode_mean": 34.969,
+        "per_client_decode_median": 33.452,
+        "tokens_total_mean": 501.25,
+        "tokens_total_median": 512.0,
+        "tokens_per_round_by_arm": {
+         "short-B1": [
+          512,
+          512
+         ],
+         "short-B2": [
+          512,
+          469
+         ]
+        },
+        "short_requests": 1,
+        "requests_total": 8
+       },
+       "4": {
+        "n_rounds": 4,
+        "tps_wall_mean": 70.762,
+        "tps_wall_median": 71.898,
+        "tps_decode_mean": 71.248,
+        "tps_decode_median": 72.375,
+        "ttft_mean_s": 1.486,
+        "ttft_median_s": 1.463,
+        "latency_mean_s": 12.861,
+        "latency_median_s": 13.114,
+        "per_client_decode_mean": 20.967,
+        "per_client_decode_median": 20.966,
+        "tokens_total_mean": 964,
+        "tokens_total_median": 993.0,
+        "tokens_per_round_by_arm": {
+         "short-B1": [
+          846,
+          994
+         ],
+         "short-B2": [
+          1024,
+          992
+         ]
+        },
+        "short_requests": 4,
+        "requests_total": 16
+       }
+      }
+     }
+    },
+    "paired": {
+     "1": {
+      "n_pairs": 4,
+      "ratio_wall_median": 1.0177,
+      "ratio_wall_range": [
+       0.9667,
+       1.0512
+      ],
+      "ratio_decode_median": 0.9868,
+      "ratio_decode_range": [
+       0.9369,
+       1.0233
+      ],
+      "ratio_ttft_median": 0.9872,
+      "ratio_ttft_range": [
+       0.9816,
+       1.0067
+      ],
+      "ratio_latency_median": 1.0507,
+      "ratio_latency_range": [
+       0.9812,
+       1.3838
+      ],
+      "tokens_A": [
+       256,
+       176,
+       256,
+       237
+      ],
+      "tokens_B": [
+       256,
+       256,
+       256,
+       256
+      ],
+      "pairs": [
+       {
+        "pair": "A1r0/B1r0",
+        "ratio_wall": 1.0163,
+        "ratio_decode": 1.0178,
+        "ratio_ttft": 0.992,
+        "ratio_latency": 0.984,
+        "tokens_A": 256,
+        "tokens_B": 256
+       },
+       {
+        "pair": "A1r1/B1r1",
+        "ratio_wall": 1.0512,
+        "ratio_decode": 0.9557,
+        "ratio_ttft": 0.9824,
+        "ratio_latency": 1.3838,
+        "tokens_A": 176,
+        "tokens_B": 256
+       },
+       {
+        "pair": "A2r0/B2r0",
+        "ratio_wall": 1.0191,
+        "ratio_decode": 1.0233,
+        "ratio_ttft": 1.0067,
+        "ratio_latency": 0.9812,
+        "tokens_A": 256,
+        "tokens_B": 256
+       },
+       {
+        "pair": "A2r1/B2r1",
+        "ratio_wall": 0.9667,
+        "ratio_decode": 0.9369,
+        "ratio_ttft": 0.9816,
+        "ratio_latency": 1.1174,
+        "tokens_A": 237,
+        "tokens_B": 256
+       }
+      ]
+     },
+     "2": {
+      "n_pairs": 4,
+      "ratio_wall_median": 1.1942,
+      "ratio_wall_range": [
+       0.9415,
+       1.7813
+      ],
+      "ratio_decode_median": 1.1918,
+      "ratio_decode_range": [
+       0.9407,
+       1.7906
+      ],
+      "ratio_ttft_median": 0.9856,
+      "ratio_ttft_range": [
+       0.9738,
+       1.0221
+      ],
+      "ratio_latency_median": 1.1885,
+      "ratio_latency_range": [
+       0.9053,
+       1.8944
+      ],
+      "tokens_A": [
+       251,
+       512,
+       512,
+       249
+      ],
+      "tokens_B": [
+       512,
+       512,
+       512,
+       469
+      ],
+      "pairs": [
+       {
+        "pair": "A1r0/B1r0",
+        "ratio_wall": 1.3607,
+        "ratio_decode": 1.3564,
+        "ratio_ttft": 1.0221,
+        "ratio_latency": 1.8944,
+        "tokens_A": 251,
+        "tokens_B": 512
+       },
+       {
+        "pair": "A1r1/B1r1",
+        "ratio_wall": 0.9415,
+        "ratio_decode": 0.9407,
+        "ratio_ttft": 0.9867,
+        "ratio_latency": 0.9986,
+        "tokens_A": 512,
+        "tokens_B": 512
+       },
+       {
+        "pair": "A2r0/B2r0",
+        "ratio_wall": 1.0277,
+        "ratio_decode": 1.0272,
+        "ratio_ttft": 0.9738,
+        "ratio_latency": 0.9053,
+        "tokens_A": 512,
+        "tokens_B": 512
+       },
+       {
+        "pair": "A2r1/B2r1",
+        "ratio_wall": 1.7813,
+        "ratio_decode": 1.7906,
+        "ratio_ttft": 0.9845,
+        "ratio_latency": 1.3784,
+        "tokens_A": 249,
+        "tokens_B": 469
+       }
+      ]
+     },
+     "4": {
+      "n_pairs": 4,
+      "ratio_wall_median": 1.2911,
+      "ratio_wall_range": [
+       1.1188,
+       1.4461
+      ],
+      "ratio_decode_median": 1.2923,
+      "ratio_decode_range": [
+       1.1193,
+       1.4475
+      ],
+      "ratio_ttft_median": 0.9159,
+      "ratio_ttft_range": [
+       0.7761,
+       0.9365
+      ],
+      "ratio_latency_median": 1.1824,
+      "ratio_latency_range": [
+       0.9784,
+       1.3347
+      ],
+      "tokens_A": [
+       655,
+       935,
+       784,
+       669
+      ],
+      "tokens_B": [
+       846,
+       994,
+       1024,
+       992
+      ],
+      "pairs": [
+       {
+        "pair": "A1r0/B1r0",
+        "ratio_wall": 1.3217,
+        "ratio_decode": 1.3238,
+        "ratio_ttft": 0.9365,
+        "ratio_latency": 1.1426,
+        "tokens_A": 655,
+        "tokens_B": 846
+       },
+       {
+        "pair": "A1r1/B1r1",
+        "ratio_wall": 1.1188,
+        "ratio_decode": 1.1193,
+        "ratio_ttft": 0.7761,
+        "ratio_latency": 0.9784,
+        "tokens_A": 935,
+        "tokens_B": 994
+       },
+       {
+        "pair": "A2r0/B2r0",
+        "ratio_wall": 1.2604,
+        "ratio_decode": 1.2607,
+        "ratio_ttft": 0.9109,
+        "ratio_latency": 1.2221,
+        "tokens_A": 784,
+        "tokens_B": 1024
+       },
+       {
+        "pair": "A2r1/B2r1",
+        "ratio_wall": 1.4461,
+        "ratio_decode": 1.4475,
+        "ratio_ttft": 0.9208,
+        "ratio_latency": 1.3347,
+        "tokens_A": 669,
+        "tokens_B": 992
+       }
+      ]
+     }
+    }
+   }
+  },
+  "transition_note": "staged transition rows exist in the raw arm JSON; they are budget-confounded and are not used for a throughput claim."
+ },
+ "findings": [
+  {
+   "id": "memory",
+   "status": "measured",
+   "claim": "At 262144, two unstreamed batch-MTP slots leave 658 CUDA1 expert-cache slots; one serial slot leaves 4758. KV streaming at two slots restores 3932 while retaining 262144."
+  },
+  {
+   "id": "c1_full",
+   "status": "exploratory, not final",
+   "claim": "Nonce-prompt C1 only: B decode is lower in all four same-round pairs, B/A 0.8367, 0.8574, 0.9282 and 0.8388 (range 0.837-0.928, median 0.848; 7.2-16.3% lower, median 15.2%). Wall range 0.859-1.011 is confounded by A2 output lengths 176/169 versus B 256. This is not the final verdict; the final plain full C1 is +7.4% median."
+  },
+  {
+   "id": "c2",
+   "status": "no claim",
+   "claim": "Nonce-prompt C2 only: full ratios span 0.681-1.376; tokens A 312/512/512/512 and B 512/512/512/275. Short C2 spans 0.941-1.791; two A rounds are 19-token nonce echoes. No throughput claim."
+  },
+  {
+   "id": "c4",
+   "status": "suggestive, not proven",
+   "claim": "Nonce-prompt C4 only: full favors B in all four same-round pairs (decode 1.118-1.297, median 1.177); short favors B in all four (decode 1.119-1.448, median 1.292) but B has more output in every round. Four pairs are not independent; not proven."
+  },
+  {
+   "id": "plain_as",
+   "status": "no consistent gain",
+   "claim": "Plain-prompt short-context A/S: C1 S/A wall 1.048 and 1.092, but C1 is not credited to segments; C2 S/A 0.912 and 1.167; C4 1.078 and 0.992 (S1 r0 = 799 tokens). Mixed signs; no consistent STRATA_QSA_SEGMENTS gain."
+  },
+  {
+   "id": "plain_final",
+   "status": "strongest positive signal, not proven",
+   "claim": "Final plain full C2 is the strongest positive signal: B is higher in all four same-round pairs, median +13.5%, but one pair is near-neutral and the sample is two repeats. Full C4 also favors B in all four, with one A round at 858 tokens. Full C1 is +7.4% median but not attributed to segments. Short C2 is neutral/slower; short C4 is small and EOS-confounded. Full mode streams KV, so full-mode changes are not segments-only effects. No general gain is proven."
+  },
+  {
+   "id": "plain_serial",
+   "status": "runtime reference, not interleaved",
+   "claim": "Serial 262144 (parallel 1, no KV stream) vs stream A/B on the same binary, all four rounds: C1 48.92/41.12/44.36; C2 50.97/55.38/62.79. C2 stream B is +13.4% over A and +23.2% over serial by wall; C1 stream B is -9.3% vs serial by wall. Serial ran after A/B, not interleaved. C4 serial 784 vs stream B 1024; do not ratio."
+  },
+  {
+   "id": "defaults",
+   "status": "code boundary",
+   "claim": "Both switches are opt-in environment variables; no runtime default changed."
+  }
+ ],
+ "answer_outputs": {
+  "hashes_equal_between_arms": false,
+  "first_diff_positions_sampled": [
+   0,
+   8,
+   10,
+   25,
+   48,
+   49,
+   53,
+   59,
+   325,
+   438
+  ],
+  "nonce_echo_files": 7,
+  "nonce_echo_byte_length": 39,
+  "nonce_echo_examples": [
+   "answers/revolta-qsa-v1-short-A1/c2/r0/1.txt",
+   "answers/revolta-qsa-v1-short-A2/c2/r1/1.txt",
+   "answers/revolta-qsa-v1-full-B2/c2/r1/1.txt"
+  ],
+  "note": "The 39-byte answers are exactly the bracketed run/client/round prefix; the model echoed the nonce and stopped at EOS (19 tokens). No semantic quality scoring was done, and no arm-to-arm output equality is claimed."
+ },
+ "limitations": [
+  "n=2 rounds per arm/client. A/B ranges are min/max of four same-round pairs; A/S ranges are min/max of two ratios. None is a confidence interval.",
+  "Natural outputs hit EOS before 256 tokens in several rounds; wall tok/s and latency are not comparable across unequal output lengths.",
+  "Seven answers are 39-byte nonce echoes; the 19-token outliers are not model answers.",
+  "Full mode streams KV; under the streamed cache STRATA_QSA_SEGMENTS groups the indexer append but scores/top-k/attention stay per-row, so the full B arm is not a pure test of the segmented scorer.",
+  "The A/B rows compare both switches together; they do not isolate STRATA_QSA_SEGMENTS from STRATA_BATCH_VERIFY_WIDTH.",
+  "Kernel parity is not a full serving-correctness claim for the combined flags; wider verify groups can change arithmetic by design.",
+  "The baseline is the installed 1b4c32 binary; the captured source baseline is a9e06cb3. No fresh baseline build was run for this report.",
+  "Power cap and clocks were not measured; the status power is one aggregate sample for both GPUs, not a controlled power sweep.",
+  "HIP was only partially compiled (three host objects); there was no AMD link or runtime. SYCL is a separate implementation and was not built or tested.",
+  "Parity covers kernels and captured graphs on sm_70, not full serving under load; no AMD or SYCL parity was exercised.",
+  "The nonce A/B HTTP runs used the same run_id and nonce scheme, but not byte-identical outputs; the final plain A/B uses no nonce. No quality or correctness comparison across arms was made.",
+  "ReVolta #59 used a different engine, model path and 250 W V100s; its throughput numbers are source claims and are not compared numerically here.",
+  "The plain A/S run is n=2 per arm; only one C4 round is short (S1 r0 799 tokens).",
+  "Plain-prompt TTFT is a cache-hit time (all but one prompt token cached); it is not a cold-prefill measurement.",
+  "Final plain C4 has three short rounds: full A1r0 858, short B1r1 790 and short B2r0 1003. Its C4 ratios are EOS-confounded.",
+  "The two serial plain arms ran after the A/B arms, not interleaved. The cross-config comparison has explicit thermal noise and four rounds per level.",
+  "C4 is not fixed across paths: serial is 784 in every round, stream A has one 858-token round, and stream B is 1024."
+ ],
+ "evidence": {
+  "raw_dir": "/tmp/strata-concurrency-bench",
+  "baseline_summary": "summary.json",
+  "baseline_arms": [
+   "installed-batchmtp-g1-ctx262144.json",
+   "installed-batchmtp-g1-ctx32768.json",
+   "installed-batchmtp-g1-p2-ctx262144.json",
+   "installed-pipelined-ctx262144.json",
+   "installed-pipelined-ctx32768.json",
+   "installed-serial-ctx262144.json",
+   "installed-serial-ctx32768.json"
+  ],
+  "ab_summary": "revolta-qsa-v1-summary.json",
+  "ab_compact_source": "revolta-qsa-v1-compact.json",
+  "parity_log": "run-revolta-qsa-v1.log",
+  "engine_logs": [
+   "engine-installed-batchmtp-g1-ctx262144.log",
+   "engine-installed-batchmtp-g1-ctx32768.log",
+   "engine-installed-batchmtp-g1-p2-ctx262144.log",
+   "engine-installed-pipelined-ctx262144.log",
+   "engine-installed-pipelined-ctx32768.log",
+   "engine-installed-serial-ctx262144.log",
+   "engine-installed-serial-ctx32768.log",
+   "engine-revolta-plain-final-full-A1.log",
+   "engine-revolta-plain-final-full-A2.log",
+   "engine-revolta-plain-final-full-B1.log",
+   "engine-revolta-plain-final-full-B2.log",
+   "engine-revolta-plain-final-short-A1.log",
+   "engine-revolta-plain-final-short-A2.log",
+   "engine-revolta-plain-final-short-B1.log",
+   "engine-revolta-plain-final-short-B2.log",
+   "engine-revolta-plain-segments-short-A1.log",
+   "engine-revolta-plain-segments-short-A2.log",
+   "engine-revolta-plain-segments-short-S1.log",
+   "engine-revolta-plain-segments-short-S2.log",
+   "engine-revolta-plain-serial-serial-A1.log",
+   "engine-revolta-plain-serial-serial-A2.log",
+   "engine-revolta-qsa-v1-full-A1.log",
+   "engine-revolta-qsa-v1-full-A2.log",
+   "engine-revolta-qsa-v1-full-B1.log",
+   "engine-revolta-qsa-v1-full-B2.log",
+   "engine-revolta-qsa-v1-short-A1.log",
+   "engine-revolta-qsa-v1-short-A2.log",
+   "engine-revolta-qsa-v1-short-B1.log",
+   "engine-revolta-qsa-v1-short-B2.log"
+  ],
+  "note": "Raw files are temporary, not committed. This JSON is the compact sanitized copy; it contains no API key.",
+  "plain_files": [
+   "revolta-plain-segments-short-A1.json",
+   "revolta-plain-segments-short-S1.json",
+   "revolta-plain-segments-short-A2.json",
+   "revolta-plain-segments-short-S2.json"
+  ],
+  "plain_log": "run-revolta-plain-segments.log",
+  "local_harness": {
+   "scripts": [
+    "/tmp/strata-concurrency-bench/bench.py",
+    "/tmp/strata-concurrency-bench/run_ab.sh",
+    "/tmp/strata-concurrency-bench/run_baseline.sh",
+    "/tmp/strata-concurrency-bench/run_extra.sh"
+   ],
+   "committed": false,
+   "note": "These local scripts produced the rows in this report. They are temporary and are not repository code."
+  },
+  "tracked_equivalent": {
+   "path": "tools/serve_load.py",
+   "generated_current_data": false,
+   "note": "This is the committed load generator. It uses different fixed prompts and a different metric surface. It did not generate these rows and must not be cited as their source."
+  },
+  "plain_final_files": [
+   "revolta-plain-final-full-A1.json",
+   "revolta-plain-final-full-A2.json",
+   "revolta-plain-final-full-B1.json",
+   "revolta-plain-final-full-B2.json",
+   "revolta-plain-final-short-A1.json",
+   "revolta-plain-final-short-A2.json",
+   "revolta-plain-final-short-B1.json",
+   "revolta-plain-final-short-B2.json"
+  ],
+  "plain_final_log": "run-revolta-plain-final.log",
+  "plain_serial_files": [
+   "revolta-plain-serial-serial-A1.json",
+   "revolta-plain-serial-serial-A2.json"
+  ],
+  "plain_serial_log": "run-revolta-plain-serial.log",
+  "semantic_smoke": "semantic-final/results.json",
+  "edge_final": "edge-final/edge-smoke.json"
+ },
+ "plain_isolation": {
+  "run_tag": "revolta-plain-segments",
+  "sources": [
+   "revolta-plain-segments-short-A1.json",
+   "revolta-plain-segments-short-S1.json",
+   "revolta-plain-segments-short-A2.json",
+   "revolta-plain-segments-short-S2.json"
+  ],
+  "config": {
+   "context": 32768,
+   "parallel": 4,
+   "batch": 4,
+   "batch_mtp": true,
+   "batch_groups": 1,
+   "kv_resident": null,
+   "max_tokens": 256,
+   "clients": [
+    1,
+    2,
+    4
+   ],
+   "rounds": 2,
+   "plain_prompts": true,
+   "fixed_length": false,
+   "engine_sha256": "d615147e71192210154d892aff2c41caa1537be7f6739b9cc861beb4f9622904",
+   "measurement_kind": "natural",
+   "expert_cache_slots": [
+    6943,
+    3918
+   ],
+   "batch_slots": "4/4"
+  },
+  "prompt_set": "eight fixed plain code prompts, no run/client/round prefix; each asks for a complete implementation and at least 1000 words",
+  "sequence": "A1 S1 A2 S2",
+  "arm_env": {
+   "A": {},
+   "S": {
+    "STRATA_QSA_SEGMENTS": "1"
+   }
+  },
+  "arms": {
+   "A1": {
+    "label": "revolta-plain-segments-short-A1",
+    "ready_s": 44.0,
+    "clients": {
+     "1": {
+      "wall_tps": 43.549,
+      "decode_tps": 43.875,
+      "ttft_p50_s": 0.063,
+      "latency_p50_s": 5.927,
+      "round_tokens": [
+       256,
+       256
+      ],
+      "errors": 0
+     },
+     "2": {
+      "wall_tps": 64.494,
+      "decode_tps": 64.833,
+      "ttft_p50_s": 0.246,
+      "latency_p50_s": 7.904,
+      "round_tokens": [
+       512,
+       512
+      ],
+      "errors": 0
+     },
+     "4": {
+      "wall_tps": 78.328,
+      "decode_tps": 78.671,
+      "ttft_p50_s": 0.589,
+      "latency_p50_s": 12.266,
+      "round_tokens": [
+       1024,
+       1024
+      ],
+      "errors": 0
+     }
+    }
+   },
+   "S1": {
+    "label": "revolta-plain-segments-short-S1",
+    "ready_s": 44.0,
+    "clients": {
+     "1": {
+      "wall_tps": 45.661,
+      "decode_tps": 45.916,
+      "ttft_p50_s": 0.053,
+      "latency_p50_s": 5.607,
+      "round_tokens": [
+       256,
+       256
+      ],
+      "errors": 0
+     },
+     "2": {
+      "wall_tps": 58.811,
+      "decode_tps": 59.065,
+      "ttft_p50_s": 0.257,
+      "latency_p50_s": 8.439,
+      "round_tokens": [
+       512,
+       512
+      ],
+      "errors": 0
+     },
+     "4": {
+      "wall_tps": 84.456,
+      "decode_tps": 84.658,
+      "ttft_p50_s": 0.547,
+      "latency_p50_s": 10.504,
+      "round_tokens": [
+       799,
+       1024
+      ],
+      "errors": 0
+     }
+    }
+   },
+   "A2": {
+    "label": "revolta-plain-segments-short-A2",
+    "ready_s": 46.0,
+    "clients": {
+     "1": {
+      "wall_tps": 47.828,
+      "decode_tps": 48.206,
+      "ttft_p50_s": 0.06,
+      "latency_p50_s": 5.395,
+      "round_tokens": [
+       256,
+       256
+      ],
+      "errors": 0
+     },
+     "2": {
+      "wall_tps": 56.471,
+      "decode_tps": 56.95,
+      "ttft_p50_s": 0.276,
+      "latency_p50_s": 9.073,
+      "round_tokens": [
+       512,
+       512
+      ],
+      "errors": 0
+     },
+     "4": {
+      "wall_tps": 79.549,
+      "decode_tps": 79.677,
+      "ttft_p50_s": 0.575,
+      "latency_p50_s": 12.565,
+      "round_tokens": [
+       1024,
+       1024
+      ],
+      "errors": 0
+     }
+    }
+   },
+   "S2": {
+    "label": "revolta-plain-segments-short-S2",
+    "ready_s": 46.0,
+    "clients": {
+     "1": {
+      "wall_tps": 52.206,
+      "decode_tps": 52.656,
+      "ttft_p50_s": 0.06,
+      "latency_p50_s": 4.93,
+      "round_tokens": [
+       256,
+       256
+      ],
+      "errors": 0
+     },
+     "2": {
+      "wall_tps": 65.899,
+      "decode_tps": 66.211,
+      "ttft_p50_s": 0.24,
+      "latency_p50_s": 7.615,
+      "round_tokens": [
+       512,
+       512
+      ],
+      "errors": 0
+     },
+     "4": {
+      "wall_tps": 78.923,
+      "decode_tps": 79.012,
+      "ttft_p50_s": 0.619,
+      "latency_p50_s": 12.534,
+      "round_tokens": [
+       1024,
+       1024
+      ],
+      "errors": 0
+     }
+    }
+   }
+  },
+  "comparisons": {
+   "1": {
+    "s_over_a_wall": [
+     1.0485,
+     1.0915
+    ],
+    "s_over_a_decode": [
+     1.0465,
+     1.0923
+    ]
+   },
+   "2": {
+    "s_over_a_wall": [
+     0.9119,
+     1.167
+    ],
+    "s_over_a_decode": [
+     0.911,
+     1.1626
+    ]
+   },
+   "4": {
+    "s_over_a_wall": [
+     1.0782,
+     0.9921
+    ],
+    "s_over_a_decode": [
+     1.0761,
+     0.9916
+    ]
+   }
+  },
+  "s_over_a_note": "S1/A1 and S2/A2; two ratios each, shown as min-max",
+  "token_budgets": "C1 256 each; C2 512 each; C4 1024 each except S1 round 0 = 799 (31 + 256 + 256 + 256)",
+  "ttft": {
+   "range_s": [
+    0.053,
+    0.619
+   ],
+   "cached_tokens_pairs": [
+    [
+     69,
+     70
+    ],
+    [
+     74,
+     75
+    ],
+    [
+     76,
+     77
+    ],
+    [
+     82,
+     83
+    ]
+   ],
+   "note": "every request reused all but one prompt token; TTFT is a prompt-cache hit, not cold prefill. The nonce A/B C1 requests start at cached_tokens 0 and 1.0-1.2 s TTFT; their C2/C4 values mix cached and cold requests. The plain TTFT is not comparable."
+  },
+  "errors": 0,
+  "finding": "C1 S faster in both repeats but not credited to segments (single request, overlapping ranges, thermal/host variance). C2 and C4 have mixed signs. No consistent concurrency gain from STRATA_QSA_SEGMENTS alone; do not promote it."
+ },
+ "plain_final": {
+  "run_tag": "revolta-plain-final",
+  "sources": [
+   "revolta-plain-final-full-A1.json",
+   "revolta-plain-final-full-A2.json",
+   "revolta-plain-final-full-B1.json",
+   "revolta-plain-final-full-B2.json",
+   "revolta-plain-final-short-A1.json",
+   "revolta-plain-final-short-A2.json",
+   "revolta-plain-final-short-B1.json",
+   "revolta-plain-final-short-B2.json"
+  ],
+  "sequence": "full: A1 B1 A2 B2; short: A1 B1 A2 B2",
+  "config": {
+   "full": {
+    "context": 262144,
+    "kv_resident": 32768,
+    "parallel": 2,
+    "batch": 2,
+    "batch_mtp": true,
+    "batch_groups": 1,
+    "max_tokens": 256,
+    "clients": [
+     1,
+     2,
+     4
+    ],
+    "rounds": 2,
+    "plain_prompts": true,
+    "fixed_length": false,
+    "expert_cache_slots": [
+     6877,
+     3932
+    ]
+   },
+   "short": {
+    "context": 32768,
+    "kv_resident": null,
+    "parallel": 4,
+    "batch": 4,
+    "batch_mtp": true,
+    "batch_groups": 1,
+    "max_tokens": 256,
+    "clients": [
+     1,
+     2,
+     4
+    ],
+    "rounds": 2,
+    "plain_prompts": true,
+    "fixed_length": false,
+    "expert_cache_slots": [
+     6943,
+     3918
+    ]
+   }
+  },
+  "arm_env": {
+   "A": {},
+   "B": {
+    "STRATA_QSA_SEGMENTS": "1",
+    "STRATA_BATCH_VERIFY_WIDTH": "1"
+   }
+  },
+  "engine_sha256": "d615147e71192210154d892aff2c41caa1537be7f6739b9cc861beb4f9622904",
+  "prompts": "same eight plain texts as method.prompts.plain; no nonce prefix",
+  "arms": {
+   "full": {
+    "full-A1": {
+     "ready_s": 236.1,
+     "clients": {
+      "1": {
+       "wall_tps": 41.22,
+       "decode_tps": 41.495,
+       "ttft_p50_s": 0.065,
+       "latency_p50_s": 6.22,
+       "round_tokens": [
+        256,
+        256
+       ],
+       "errors": 0
+      },
+      "2": {
+       "wall_tps": 56.056,
+       "decode_tps": 56.348,
+       "ttft_p50_s": 0.255,
+       "latency_p50_s": 8.888,
+       "round_tokens": [
+        512,
+        512
+       ],
+       "errors": 0
+      },
+      "4": {
+       "wall_tps": 50.057,
+       "decode_tps": 50.179,
+       "ttft_p50_s": 5.017,
+       "latency_p50_s": 12.567,
+       "round_tokens": [
+        858,
+        1024
+       ],
+       "errors": 0
+      }
+     }
+    },
+    "full-A2": {
+     "ready_s": 54.0,
+     "clients": {
+      "1": {
+       "wall_tps": 41.031,
+       "decode_tps": 41.29,
+       "ttft_p50_s": 0.063,
+       "latency_p50_s": 6.249,
+       "round_tokens": [
+        256,
+        256
+       ],
+       "errors": 0
+      },
+      "2": {
+       "wall_tps": 55.038,
+       "decode_tps": 55.236,
+       "ttft_p50_s": 0.246,
+       "latency_p50_s": 9.303,
+       "round_tokens": [
+        512,
+        512
+       ],
+       "errors": 0
+      },
+      "4": {
+       "wall_tps": 49.736,
+       "decode_tps": 49.834,
+       "ttft_p50_s": 4.885,
+       "latency_p50_s": 15.419,
+       "round_tokens": [
+        1024,
+        1024
+       ],
+       "errors": 0
+      }
+     }
+    },
+    "full-B1": {
+     "ready_s": 54.0,
+     "clients": {
+      "1": {
+       "wall_tps": 44.358,
+       "decode_tps": 44.715,
+       "ttft_p50_s": 0.068,
+       "latency_p50_s": 5.772,
+       "round_tokens": [
+        256,
+        256
+       ],
+       "errors": 0
+      },
+      "2": {
+       "wall_tps": 66.184,
+       "decode_tps": 66.53,
+       "ttft_p50_s": 0.227,
+       "latency_p50_s": 7.517,
+       "round_tokens": [
+        512,
+        512
+       ],
+       "errors": 0
+      },
+      "4": {
+       "wall_tps": 53.888,
+       "decode_tps": 55.315,
+       "ttft_p50_s": 4.648,
+       "latency_p50_s": 14.581,
+       "round_tokens": [
+        1024,
+        1024
+       ],
+       "errors": 0
+      }
+     }
+    },
+    "full-B2": {
+     "ready_s": 54.0,
+     "clients": {
+      "1": {
+       "wall_tps": 44.122,
+       "decode_tps": 44.415,
+       "ttft_p50_s": 0.06,
+       "latency_p50_s": 5.831,
+       "round_tokens": [
+        256,
+        256
+       ],
+       "errors": 0
+      },
+      "2": {
+       "wall_tps": 59.616,
+       "decode_tps": 60.15,
+       "ttft_p50_s": 0.308,
+       "latency_p50_s": 8.283,
+       "round_tokens": [
+        512,
+        512
+       ],
+       "errors": 0
+      },
+      "4": {
+       "wall_tps": 57.469,
+       "decode_tps": 57.614,
+       "ttft_p50_s": 4.042,
+       "latency_p50_s": 13.243,
+       "round_tokens": [
+        1024,
+        1024
+       ],
+       "errors": 0
+      }
+     }
+    }
+   },
+   "short": {
+    "short-A1": {
+     "ready_s": 46.0,
+     "clients": {
+      "1": {
+       "wall_tps": 43.069,
+       "decode_tps": 43.32,
+       "ttft_p50_s": 0.057,
+       "latency_p50_s": 5.956,
+       "round_tokens": [
+        256,
+        256
+       ],
+       "errors": 0
+      },
+      "2": {
+       "wall_tps": 61.244,
+       "decode_tps": 61.606,
+       "ttft_p50_s": 0.255,
+       "latency_p50_s": 8.055,
+       "round_tokens": [
+        512,
+        512
+       ],
+       "errors": 0
+      },
+      "4": {
+       "wall_tps": 80.608,
+       "decode_tps": 80.789,
+       "ttft_p50_s": 0.616,
+       "latency_p50_s": 12.235,
+       "round_tokens": [
+        1024,
+        1024
+       ],
+       "errors": 0
+      }
+     }
+    },
+    "short-A2": {
+     "ready_s": 44.0,
+     "clients": {
+      "1": {
+       "wall_tps": 46.156,
+       "decode_tps": 46.484,
+       "ttft_p50_s": 0.06,
+       "latency_p50_s": 5.548,
+       "round_tokens": [
+        256,
+        256
+       ],
+       "errors": 0
+      },
+      "2": {
+       "wall_tps": 65.867,
+       "decode_tps": 66.296,
+       "ttft_p50_s": 0.269,
+       "latency_p50_s": 7.498,
+       "round_tokens": [
+        512,
+        512
+       ],
+       "errors": 0
+      },
+      "4": {
+       "wall_tps": 79.474,
+       "decode_tps": 79.65,
+       "ttft_p50_s": 0.555,
+       "latency_p50_s": 12.3,
+       "round_tokens": [
+        1024,
+        1024
+       ],
+       "errors": 0
+      }
+     }
+    },
+    "short-B1": {
+     "ready_s": 44.0,
+     "clients": {
+      "1": {
+       "wall_tps": 47.04,
+       "decode_tps": 47.335,
+       "ttft_p50_s": 0.055,
+       "latency_p50_s": 5.457,
+       "round_tokens": [
+        256,
+        256
+       ],
+       "errors": 0
+      },
+      "2": {
+       "wall_tps": 60.937,
+       "decode_tps": 61.595,
+       "ttft_p50_s": 0.29,
+       "latency_p50_s": 7.89,
+       "round_tokens": [
+        512,
+        512
+       ],
+       "errors": 0
+      },
+      "4": {
+       "wall_tps": 82.115,
+       "decode_tps": 82.261,
+       "ttft_p50_s": 0.653,
+       "latency_p50_s": 10.515,
+       "round_tokens": [
+        1024,
+        790
+       ],
+       "errors": 0
+      }
+     }
+    },
+    "short-B2": {
+     "ready_s": 46.0,
+     "clients": {
+      "1": {
+       "wall_tps": 47.896,
+       "decode_tps": 48.224,
+       "ttft_p50_s": 0.056,
+       "latency_p50_s": 5.369,
+       "round_tokens": [
+        256,
+        256
+       ],
+       "errors": 0
+      },
+      "2": {
+       "wall_tps": 63.735,
+       "decode_tps": 64.415,
+       "ttft_p50_s": 0.282,
+       "latency_p50_s": 7.418,
+       "round_tokens": [
+        512,
+        512
+       ],
+       "errors": 0
+      },
+      "4": {
+       "wall_tps": 84.465,
+       "decode_tps": 85.138,
+       "ttft_p50_s": 0.606,
+       "latency_p50_s": 11.478,
+       "round_tokens": [
+        1003,
+        1024
+       ],
+       "errors": 0
+      }
+     }
+    }
+   }
+  },
+  "paired": {
+   "full": {
+    "1": {
+     "n_pairs": 4,
+     "ratio_wall_median": 1.074,
+     "ratio_wall_range": [
+      1.022,
+      1.1348
+     ],
+     "ratio_decode_median": 1.0743,
+     "ratio_decode_range": [
+      1.0215,
+      1.1384
+     ],
+     "ratio_ttft_median": 0.9996,
+     "ratio_ttft_range": [
+      0.8767,
+      1.1531
+     ],
+     "ratio_latency_median": 0.932,
+     "ratio_latency_range": [
+      0.8812,
+      0.9785
+     ],
+     "tokens_A": [
+      256,
+      256,
+      256,
+      256
+     ],
+     "tokens_B": [
+      256,
+      256,
+      256,
+      256
+     ],
+     "pairs": [
+      {
+       "pair": "A1r0/B1r0",
+       "ratio_wall": 1.1348,
+       "ratio_decode": 1.1384,
+       "ratio_ttft": 1.1531,
+       "ratio_latency": 0.8812,
+       "tokens_A": 256,
+       "tokens_B": 256
+      },
+      {
+       "pair": "A1r1/B1r1",
+       "ratio_wall": 1.022,
+       "ratio_decode": 1.0215,
+       "ratio_ttft": 0.9328,
+       "ratio_latency": 0.9785,
+       "tokens_A": 256,
+       "tokens_B": 256
+      },
+      {
+       "pair": "A2r0/B2r0",
+       "ratio_wall": 1.0402,
+       "ratio_decode": 1.0412,
+       "ratio_ttft": 1.0664,
+       "ratio_latency": 0.9613,
+       "tokens_A": 256,
+       "tokens_B": 256
+      },
+      {
+       "pair": "A2r1/B2r1",
+       "ratio_wall": 1.1078,
+       "ratio_decode": 1.1074,
+       "ratio_ttft": 0.8767,
+       "ratio_latency": 0.9027,
+       "tokens_A": 256,
+       "tokens_B": 256
+      }
+     ]
+    },
+    "2": {
+     "n_pairs": 4,
+     "ratio_wall_median": 1.1337,
+     "ratio_wall_range": [
+      1.0036,
+      1.2529
+     ],
+     "ratio_decode_median": 1.1345,
+     "ratio_decode_range": [
+      1.0123,
+      1.2541
+     ],
+     "ratio_ttft_median": 1.018,
+     "ratio_ttft_range": [
+      0.8759,
+      1.5434
+     ],
+     "ratio_latency_median": 0.8858,
+     "ratio_latency_range": [
+      0.7952,
+      0.9576
+     ],
+     "tokens_A": [
+      512,
+      512,
+      512,
+      512
+     ],
+     "tokens_B": [
+      512,
+      512,
+      512,
+      512
+     ],
+     "pairs": [
+      {
+       "pair": "A1r0/B1r0",
+       "ratio_wall": 1.2529,
+       "ratio_decode": 1.2541,
+       "ratio_ttft": 0.9165,
+       "ratio_latency": 0.7952,
+       "tokens_A": 512,
+       "tokens_B": 512
+      },
+      {
+       "pair": "A1r1/B1r1",
+       "ratio_wall": 1.1062,
+       "ratio_decode": 1.1049,
+       "ratio_ttft": 0.8759,
+       "ratio_latency": 0.9153,
+       "tokens_A": 512,
+       "tokens_B": 512
+      },
+      {
+       "pair": "A2r0/B2r0",
+       "ratio_wall": 1.0036,
+       "ratio_decode": 1.0123,
+       "ratio_ttft": 1.5434,
+       "ratio_latency": 0.9576,
+       "tokens_A": 512,
+       "tokens_B": 512
+      },
+      {
+       "pair": "A2r1/B2r1",
+       "ratio_wall": 1.1611,
+       "ratio_decode": 1.1642,
+       "ratio_ttft": 1.1195,
+       "ratio_latency": 0.8562,
+       "tokens_A": 512,
+       "tokens_B": 512
+      }
+     ]
+    },
+    "4": {
+     "n_pairs": 4,
+     "ratio_wall_median": 1.1407,
+     "ratio_wall_range": [
+      1.0266,
+      1.1713
+     ],
+     "ratio_decode_median": 1.157,
+     "ratio_decode_range": [
+      1.022,
+      1.2048
+     ],
+     "ratio_ttft_median": 0.9278,
+     "ratio_ttft_range": [
+      0.7057,
+      1.3177
+     ],
+     "ratio_latency_median": 0.9216,
+     "ratio_latency_range": [
+      0.7869,
+      1.2235
+     ],
+     "tokens_A": [
+      858,
+      1024,
+      1024,
+      1024
+     ],
+     "tokens_B": [
+      1024,
+      1024,
+      1024,
+      1024
+     ],
+     "pairs": [
+      {
+       "pair": "A1r0/B1r0",
+       "ratio_wall": 1.1399,
+       "ratio_decode": 1.2048,
+       "ratio_ttft": 1.3177,
+       "ratio_latency": 1.2235,
+       "tokens_A": 858,
+       "tokens_B": 1024
+      },
+      {
+       "pair": "A1r1/B1r1",
+       "ratio_wall": 1.0266,
+       "ratio_decode": 1.022,
+       "ratio_ttft": 0.8989,
+       "ratio_latency": 0.9409,
+       "tokens_A": 1024,
+       "tokens_B": 1024
+      },
+      {
+       "pair": "A2r0/B2r0",
+       "ratio_wall": 1.1713,
+       "ratio_decode": 1.1709,
+       "ratio_ttft": 0.7057,
+       "ratio_latency": 0.7869,
+       "tokens_A": 1024,
+       "tokens_B": 1024
+      },
+      {
+       "pair": "A2r1/B2r1",
+       "ratio_wall": 1.1415,
+       "ratio_decode": 1.1432,
+       "ratio_ttft": 0.9567,
+       "ratio_latency": 0.9024,
+       "tokens_A": 1024,
+       "tokens_B": 1024
+      }
+     ]
+    }
+   },
+   "short": {
+    "1": {
+     "n_pairs": 4,
+     "ratio_wall_median": 1.0374,
+     "ratio_wall_range": [
+      0.9877,
+      1.2053
+     ],
+     "ratio_decode_median": 1.0373,
+     "ratio_decode_range": [
+      0.9879,
+      1.2055
+     ],
+     "ratio_ttft_median": 0.9494,
+     "ratio_ttft_range": [
+      0.8438,
+      1.0876
+     ],
+     "ratio_latency_median": 0.966,
+     "ratio_latency_range": [
+      0.8297,
+      1.0125
+     ],
+     "tokens_A": [
+      256,
+      256,
+      256,
+      256
+     ],
+     "tokens_B": [
+      256,
+      256,
+      256,
+      256
+     ],
+     "pairs": [
+      {
+       "pair": "A1r0/B1r0",
+       "ratio_wall": 1.2053,
+       "ratio_decode": 1.2055,
+       "ratio_ttft": 0.8438,
+       "ratio_latency": 0.8297,
+       "tokens_A": 256,
+       "tokens_B": 256
+      },
+      {
+       "pair": "A1r1/B1r1",
+       "ratio_wall": 0.989,
+       "ratio_decode": 0.9898,
+       "ratio_ttft": 1.0876,
+       "ratio_latency": 1.0111,
+       "tokens_A": 256,
+       "tokens_B": 256
+      },
+      {
+       "pair": "A2r0/B2r0",
+       "ratio_wall": 0.9877,
+       "ratio_decode": 0.9879,
+       "ratio_ttft": 1.0433,
+       "ratio_latency": 1.0125,
+       "tokens_A": 256,
+       "tokens_B": 256
+      },
+      {
+       "pair": "A2r1/B2r1",
+       "ratio_wall": 1.0858,
+       "ratio_decode": 1.0848,
+       "ratio_ttft": 0.8556,
+       "ratio_latency": 0.9209,
+       "tokens_A": 256,
+       "tokens_B": 256
+      }
+     ]
+    },
+    "2": {
+     "n_pairs": 4,
+     "ratio_wall_median": 0.9889,
+     "ratio_wall_range": [
+      0.9491,
+      0.9997
+     ],
+     "ratio_decode_median": 0.9876,
+     "ratio_decode_range": [
+      0.9566,
+      1.0107
+     ],
+     "ratio_ttft_median": 1.0397,
+     "ratio_ttft_range": [
+      0.6496,
+      1.4403
+     ],
+     "ratio_latency_median": 0.9903,
+     "ratio_latency_range": [
+      0.9713,
+      0.998
+     ],
+     "tokens_A": [
+      512,
+      512,
+      512,
+      512
+     ],
+     "tokens_B": [
+      512,
+      512,
+      512,
+      512
+     ],
+     "pairs": [
+      {
+       "pair": "A1r0/B1r0",
+       "ratio_wall": 0.9893,
+       "ratio_decode": 0.9865,
+       "ratio_ttft": 0.6496,
+       "ratio_latency": 0.9869,
+       "tokens_A": 512,
+       "tokens_B": 512
+      },
+      {
+       "pair": "A1r1/B1r1",
+       "ratio_wall": 0.9997,
+       "ratio_decode": 1.0107,
+       "ratio_ttft": 1.4403,
+       "ratio_latency": 0.9936,
+       "tokens_A": 512,
+       "tokens_B": 512
+      },
+      {
+       "pair": "A2r0/B2r0",
+       "ratio_wall": 0.9886,
+       "ratio_decode": 0.9886,
+       "ratio_ttft": 0.8773,
+       "ratio_latency": 0.9713,
+       "tokens_A": 512,
+       "tokens_B": 512
+      },
+      {
+       "pair": "A2r1/B2r1",
+       "ratio_wall": 0.9491,
+       "ratio_decode": 0.9566,
+       "ratio_ttft": 1.2022,
+       "ratio_latency": 0.998,
+       "tokens_A": 512,
+       "tokens_B": 512
+      }
+     ]
+    },
+    "4": {
+     "n_pairs": 4,
+     "ratio_wall_median": 1.0411,
+     "ratio_wall_range": [
+      0.9241,
+      1.1811
+     ],
+     "ratio_decode_median": 1.0434,
+     "ratio_decode_range": [
+      0.9236,
+      1.1883
+     ],
+     "ratio_ttft_median": 1.104,
+     "ratio_ttft_range": [
+      0.8987,
+      1.1894
+     ],
+     "ratio_latency_median": 0.8815,
+     "ratio_latency_range": [
+      0.6849,
+      0.9943
+     ],
+     "tokens_A": [
+      1024,
+      1024,
+      1024,
+      1024
+     ],
+     "tokens_B": [
+      1024,
+      790,
+      1003,
+      1024
+     ],
+     "pairs": [
+      {
+       "pair": "A1r0/B1r0",
+       "ratio_wall": 1.1267,
+       "ratio_decode": 1.1264,
+       "ratio_ttft": 1.1894,
+       "ratio_latency": 0.9015,
+       "tokens_A": 1024,
+       "tokens_B": 1024
+      },
+      {
+       "pair": "A1r1/B1r1",
+       "ratio_wall": 0.9241,
+       "ratio_decode": 0.9236,
+       "ratio_ttft": 0.8987,
+       "ratio_latency": 0.6849,
+       "tokens_A": 1024,
+       "tokens_B": 790
+      },
+      {
+       "pair": "A2r0/B2r0",
+       "ratio_wall": 0.9555,
+       "ratio_decode": 0.9605,
+       "ratio_ttft": 1.135,
+       "ratio_latency": 0.9943,
+       "tokens_A": 1024,
+       "tokens_B": 1003
+      },
+      {
+       "pair": "A2r1/B2r1",
+       "ratio_wall": 1.1811,
+       "ratio_decode": 1.1883,
+       "ratio_ttft": 1.0731,
+       "ratio_latency": 0.8614,
+       "tokens_A": 1024,
+       "tokens_B": 1024
+      }
+     ]
+    }
+   }
+  },
+  "token_budgets": "C1 is 256 in every round; C2 is 512 in every round. C4 is 1024 except full A1r0 858 (one 90-token answer), short B1r1 790 (one 22-token answer) and short B2r0 1003 (one 235-token answer).",
+  "long_stream": {
+   "prompt_tokens": 39812,
+   "tokens": 32,
+   "arms": {
+    "A1": {
+     "ttft_s": 24.026,
+     "decode_tps": 20.965,
+     "tokens": 32,
+     "prompt_tokens": 39812,
+     "err": null
+    },
+    "B1": {
+     "ttft_s": 24.355,
+     "decode_tps": 26.061,
+     "tokens": 32,
+     "prompt_tokens": 39812,
+     "err": null
+    },
+    "A2": {
+     "ttft_s": 24.381,
+     "decode_tps": 20.981,
+     "tokens": 32,
+     "prompt_tokens": 39812,
+     "err": null
+    },
+    "B2": {
+     "ttft_s": 24.581,
+     "decode_tps": 19.129,
+     "tokens": 32,
+     "prompt_tokens": 39812,
+     "err": null
+    }
+   },
+   "note": "All four full arms completed a prompt beyond the 32768 resident cells. TTFT 24.03-24.58 s. The 32-token decode is too short for a speedup claim."
+  },
+  "finding": "Final plain full C2 is the strongest positive signal: B is higher in all four same-round pairs, median +13.5%, but one pair is near-neutral and the sample is two repeats. Full C4 also favors B in all four, with one A round at 858 tokens. Full C1 is +7.4% median but not attributed to segments. Short C2 is neutral/slower; short C4 is small and EOS-confounded. Full mode streams KV, so full-mode changes are not segments-only effects. No general gain is proven."
+ },
+ "plain_serial": {
+  "run_tag": "revolta-plain-serial",
+  "sources": [
+   "revolta-plain-serial-serial-A1.json",
+   "revolta-plain-serial-serial-A2.json"
+  ],
+  "config": {
+   "context": 262144,
+   "parallel": 1,
+   "batch": 1,
+   "batch_mtp": false,
+   "batch_groups": null,
+   "kv_resident": null,
+   "max_tokens": 256,
+   "clients": [
+    1,
+    2,
+    4
+   ],
+   "rounds": 2,
+   "plain_prompts": true,
+   "fixed_length": false,
+   "expert_cache_slots": [
+    7120,
+    4758
+   ],
+   "resident_experts_pct": 48
+  },
+  "engine_sha256": "d615147e71192210154d892aff2c41caa1537be7f6739b9cc861beb4f9622904",
+  "sequence": "A1 A2, recorded after the A/B arms; not interleaved",
+  "arms": {
+   "A1": {
+    "ready_s": 48.0,
+    "clients": {
+     "1": {
+      "wall_tps": 53.337,
+      "decode_tps": 53.786,
+      "per_client_decode_p50": 53.786,
+      "ttft_p50_s": 0.058,
+      "latency_p50_s": 4.823,
+      "round_tokens": [
+       256,
+       256
+      ],
+      "errors": 0
+     },
+     "2": {
+      "wall_tps": 50.285,
+      "decode_tps": 50.427,
+      "per_client_decode_p50": 50.717,
+      "ttft_p50_s": 2.896,
+      "latency_p50_s": 7.518,
+      "round_tokens": [
+       512,
+       512
+      ],
+      "errors": 0
+     },
+     "4": {
+      "wall_tps": 45.457,
+      "decode_tps": 45.569,
+      "per_client_decode_p50": 47.796,
+      "ttft_p50_s": 8.359,
+      "latency_p50_s": 11.254,
+      "round_tokens": [
+       784,
+       784
+      ],
+      "errors": 0
+     }
+    }
+   },
+   "A2": {
+    "ready_s": 46.0,
+    "clients": {
+     "1": {
+      "wall_tps": 47.573,
+      "decode_tps": 47.89,
+      "per_client_decode_p50": 47.89,
+      "ttft_p50_s": 0.056,
+      "latency_p50_s": 5.382,
+      "round_tokens": [
+       256,
+       256
+      ],
+      "errors": 0
+     },
+     "2": {
+      "wall_tps": 51.063,
+      "decode_tps": 51.195,
+      "per_client_decode_p50": 53.554,
+      "ttft_p50_s": 2.253,
+      "latency_p50_s": 7.022,
+      "round_tokens": [
+       512,
+       512
+      ],
+      "errors": 0
+     },
+     "4": {
+      "wall_tps": 53.703,
+      "decode_tps": 53.726,
+      "per_client_decode_p50": 56.907,
+      "ttft_p50_s": 4.913,
+      "latency_p50_s": 9.179,
+      "round_tokens": [
+       784,
+       784
+      ],
+      "errors": 0
+     }
+    }
+   }
+  },
+  "note": "Same candidate binary. No extra STRATA_* arm flags and no KV stream. The serial arms ran after the A/B arms, not interleaved, so cross-config thermal noise is explicit. This is a runtime reference, not a paired comparison.",
+  "runtime_levels": {
+   "C1_wall_median": {
+    "serial": 48.9219,
+    "streamA": 41.1221,
+    "streamB": 44.3585
+   },
+   "C2_wall_median": {
+    "serial": 50.9682,
+    "streamA": 55.3841,
+    "streamB": 62.7919
+   },
+   "C4_wall_median": {
+    "serial": 47.7115,
+    "streamA": 49.7363,
+    "streamB": 56.0393
+   },
+   "C4_round_tokens": {
+    "serial": [
+     784,
+     784,
+     784,
+     784
+    ],
+    "streamA": [
+     858,
+     1024,
+     1024,
+     1024
+    ],
+    "streamB": [
+     1024,
+     1024,
+     1024,
+     1024
+    ]
+   },
+   "ratios": {
+    "C2_streamB_over_streamA": 1.1338,
+    "C2_streamB_over_serial": 1.232,
+    "C1_streamB_over_serial": 0.9067,
+    "C1_streamB_over_streamA": 1.0787
+   },
+   "note": "All C1 rounds are 256 and all C2 rounds are 512, so C1/C2 budgets are consistent. C4 is not fixed. Values are medians over four rounds per path.",
+   "ratio_metric": "wall"
+  },
+  "arm_env": {}
+ },
+ "semantic_smoke": {
+  "transport": "actual /v1/chat/completions",
+  "config": {
+   "context": 262144,
+   "kv_resident": 32768,
+   "parallel": 2,
+   "batch_mtp": true,
+   "batch_groups": 1,
+   "first_turn_max_tokens": 96,
+   "followup_max_tokens": 16,
+   "temperature": 0,
+   "thinking": false
+  },
+  "launch": "two conversations per arm launched simultaneously",
+  "arms": {
+   "off": {
+    "conversations": [
+     {
+      "country": "France",
+      "capital": "Paris",
+      "followup": "France",
+      "capital_correct": true,
+      "followup_correct": true,
+      "initial_chars": 510,
+      "followup_chars": 6
+     },
+     {
+      "country": "Japan",
+      "capital": "Tokyo",
+      "followup": "Japan",
+      "capital_correct": true,
+      "followup_correct": true,
+      "initial_chars": 487,
+      "followup_chars": 5
+     }
+    ],
+    "checks": 4,
+    "all_correct": true
+   },
+   "both": {
+    "conversations": [
+     {
+      "country": "France",
+      "capital": "Paris",
+      "followup": "France",
+      "capital_correct": true,
+      "followup_correct": true,
+      "initial_chars": 231,
+      "followup_chars": 6
+     },
+     {
+      "country": "Japan",
+      "capital": "Tokyo",
+      "followup": "Japan",
+      "capital_correct": true,
+      "followup_correct": true,
+      "initial_chars": 322,
+      "followup_chars": 5
+     }
+    ],
+    "checks": 4,
+    "all_correct": true
+   }
+  },
+  "checks_total": 8,
+  "checks_true": 8,
+  "engine_sha256": "d615147e71192210154d892aff2c41caa1537be7f6739b9cc861beb4f9622904",
+  "note": "All eight country-capital and follow-up checks passed. Initial descriptions differ in length and content across width; this is not a general quality benchmark. The service was restored active and loaded at 262144."
+ },
+ "edge_final": {
+  "artifact": "edge-final/edge-smoke.json",
+  "settings": {
+   "lengths": [
+    1,
+    2,
+    3,
+    4,
+    64
+   ],
+   "transition_lengths": [
+    1,
+    1,
+    64,
+    64
+   ],
+   "batch": 4,
+   "batch_groups": "1",
+   "max_context": 32768
+  },
+  "arms": [
+   "off1",
+   "segments1",
+   "both1",
+   "off2"
+  ],
+  "failures": [],
+  "segments_vs_off_exact_lengths": [
+   1,
+   2,
+   3,
+   4,
+   64
+  ],
+  "solo_first_diff_token": {
+   "off": 14,
+   "segments": 14,
+   "both": 25
+  },
+  "cancel_reuse": {
+   "cancelled_all": true,
+   "reuse_ok_all": true,
+   "produced": {
+    "off1": 4,
+    "segments1": 4,
+    "both1": 5,
+    "off2": 4
+   }
+  },
+  "count_budgets": "lengths 1/2/3/4/64 and transition 1/1/64/64 completed with zero failures",
+  "width_identity_claim": false,
+  "note": "Structural token-stream checks, not quality or width-identity results."
+ }
+}

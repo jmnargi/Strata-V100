@@ -26,7 +26,8 @@ asked, with a note when it is more than setup would recommend.
 ```
 
 With MTP (`--mtp` and `--spec`), `--batch-mtp` (in the config's `args`, or `STRATA_BATCH_MTP=1` in the server's
-environment) lets each batch slot verify one MTP proposal per window. It is opt-in; without it the batch behaviour
+environment) lets each batch slot verify MTP proposals beside its token: one proposal per window by default, more
+with `STRATA_BATCH_VERIFY_WIDTH=1` (below). It is opt-in; without it the batch behaviour
 described below is exactly the one without MTP. It needs VRAM per slot for the draft state and buffers, so check the
 engine's free-memory log before using it on a smaller card. If it cannot run (one slot, no `--mtp`, a layer split with
 `--batch-groups` above 1 or with helper-GPU expert caches or `--remote-expert-opt`, a layer split with two stages on one
@@ -37,8 +38,9 @@ clients on one GPU (a RX R9700 run too).
 same way, with the slot drafters on the **last stage's GPU** (where the solo drafter and the head are): each slot gets a
 drafter that shares the solo drafter's weights and owns only its K/V ring and buffers (the engine logs `--batch-mtp: N
 slot drafters on CUDAk (X MiB ... each)` at start; the K/V ring of each also keeps a pinned-RAM copy, as the solo
-drafter's does). A window carries two rows per active slot (its token and its proposal) through every stage, so at most
-four slots are in one window; more slots (`--batch` up to what fits) rotate through. The windows run through the stages
+drafter's does). By default a window carries two rows per active slot (its token and its proposal) through every
+stage, so at most four slots are in one window; `STRATA_BATCH_VERIFY_WIDTH=1` widens a group (below) and can fit
+fewer slots at a time. More slots (`--batch` up to what fits) rotate through. The windows run through the stages
 one after the other (`--batch-groups 1`): on 0.1.41 a layer split with `--batch` 2 or more pipelines the slots in groups
 by default, and the pipelined path does not run the slots' MTP drafts, so with `--batch-mtp` and no `--batch-groups` the
 engine (0.1.43.1) pipelines and leaves `--batch-mtp` off, and says so (0.1.42/0.1.43 ran one serial group with it: 4 streams on 2x A4000 aggregated 63.9 tok/s against 91.8 pipelined, 85.8 pipelined without `--batch-mtp`; #2038). `--batch-groups 1` or `STRATA_BATCH_MTP_SERIAL=1` keeps `--batch-mtp` with serial windows, which is the better choice for about two streams as measured below; `--batch-groups G` (G above 1) or `--batch-groups auto` given on the command line
@@ -131,9 +133,10 @@ as fit in VRAM and at most 8 per group (`INFO batch_slots=N`). `--batch-mtp` kee
 doubled by the proposals). Nothing changes for 8 slots or fewer. Every slot of a 16-slot pipelined batch decodes
 exactly the tokens it decodes alone (`tools/batch_test.py --n 16`, which now takes up to 32 prompts).
 
-**Opt-in switches** (environment of the engine, i.e. `"env"` in the config; none is on by default). Each one changes
-how the work is scheduled or copied, not what is computed; `tools/batch_test.py` checks that every slot decodes the tokens it
-decodes alone.
+**Opt-in switches** (environment of the engine, i.e. `"env"` in the config; none is on by default). Most of them
+change how the work is scheduled or copied, not what is computed; `tools/batch_test.py` checks the default batch
+path's tokens against solo decoding. `STRATA_BATCH_VERIFY_WIDTH=1` is the exception: it changes the row layout and
+is not promised output-identical (see below), so that check is not a proof for it.
 
 | Switch | What it does |
 |---|---|
@@ -145,6 +148,8 @@ decodes alone.
 | `STRATA_PIPE_BYIELD_NODRAIN=1` | a BYIELD that reaches a pipelined batch is dropped without draining the groups |
 | `STRATA_BATCH_SELF_COMMIT=1` | a one-row-per-slot window advances the GDN state itself, no commit graph |
 | `STRATA_QSA_SLOTS=1` | a window's QSA block scores, top-k and attention run as one launch over its rows |
+| `STRATA_QSA_SEGMENTS=1` | a window's contiguous rows of one slot (its `--batch-mtp` proposals) run the indexer append, block scores, top-k and attention as one call over the run; wins over `STRATA_BATCH_ATTN_ROWS` and `STRATA_QSA_SLOTS`; a streamed KV cache keeps the per-row scores/top-k/attention |
+| `STRATA_BATCH_VERIFY_WIDTH=1` | with `--batch-mtp` on serial windows: a slot's group is as wide as the row budget allows (see below) |
 | `STRATA_HANDOFF_PIPE=P` | a layer split hands a prompt chunk to the next card in P pieces (2..16), gated by events, on a persistent thread |
 | `STRATA_ADMIT_SHORT_FIRST=N` (server) | a new prompt of at most N tokens takes the control lines before longer ones (a longer one that waited `STRATA_ADMIT_MAX_WAIT_S`, default 30, counts as short) |
 | `STRATA_TRACE=1` | one line per admission with its phases (drain, prompt, first window, slot copy, checkpoint copy) |
@@ -168,6 +173,14 @@ experts mostly run on the CPU, a batch also reads about as many distinct experts
 (different conversations route to different experts), so the gain is in **latency** (nobody waits for a whole
 answer), and a request alone
 runs slower (the smaller expert cache): 11-24 % on a 12 GB card, see the measurements below.
+
+The elastic K/V (`--kv-grow`) does not run with `--batch`: the engine's condition for it requires no batch slots. A
+batch at a full context therefore pays for its sessions out of the expert cache and falls back to fewer slots, or to
+one request at a time, when they do not fit (the 3.66 GiB per card per slot at 524,288 tokens above). KV streaming
+(`--kv-resident`, e.g. `--kv-resident 32768`) keeps the full `--max-context`: each layer keeps a 32K-cell window in
+VRAM, the rest of the slot's K/V sits in pinned host RAM, and the window's cells move over PCIe as it advances. That
+makes the sessions small enough to fit where they otherwise would not. The trade is VRAM for host RAM and PCIe
+traffic.
 
 So setup recommends `"parallel"` **only where the experts mostly fit in VRAM**: the expert cache (each card's VRAM
 less ~5 GB, every card of a layer split counted) must still hold at least half of the model's experts beside the
@@ -355,9 +368,11 @@ counter-based draw (Philox(seed, position)).
 
 - By default, batch windows carry no MTP drafts: a conversation in a slot decodes one token per window (the solo
   path keeps its drafts, which is why a request alone is not put in a slot, and goes back to it when left alone).
-- `--batch-mtp` uses one proposal per slot. With a layer split it needs each stage on its own GPU, does not combine
-  with `--batch-groups` above 1 (pipelined slot groups run no drafts, #1413) and has not been run with helper expert
-  caches.
+- `--batch-mtp` uses one proposal per slot, or up to `min(--spec, --mtp-max-t, 4)` with
+  `STRATA_BATCH_VERIFY_WIDTH=1` (two rows per slot from three active slots up). The width switch is not promised
+  output-identical to the default batch path and has no quality benchmark. With a layer split it needs each
+  stage on its own GPU, does not combine with `--batch-groups` above 1 (pipelined slot groups run no drafts, #1413)
+  and has not been run with helper expert caches.
 - Repetition / frequency / presence penalties are not applied in batch windows.
 - A prompt shorter than one chunk is read in one piece (the slots wait for it); a read gives way only at a chunk
   boundary, and not for pictures.
@@ -420,6 +435,43 @@ params, so the graph captured per row layout stays valid):
 
 Both are off by default; off, the engine runs the same launches as before. On, the arithmetic per row is the same:
 4 concurrent prompts at temperature 0 gave the same bytes as without them, with `--batch 4` and `--batch 8`.
+
+### Wider `--batch-mtp` groups (opt-in)
+
+`STRATA_BATCH_VERIFY_WIDTH=1` (the engine's environment) lets a slot's group carry more than one proposal. It needs
+the serial batch MTP windows: one group (`--batch-groups 1`, or `STRATA_BATCH_MTP_SERIAL=1`, which keeps
+`--batch-mtp` on a layer split) or one GPU. Pipelined groups run no `--batch-mtp`, so the switch has no effect there.
+
+- With at most two active slots, each group holds up to `min(--spec, --mtp-max-t, 4)` rows (`--spec` alone when
+  `--mtp-max-t` is unset): the slot's token first, then its proposals. Two slots at the four-row cap fill the
+  eight-row window.
+- With three or more active slots, each group holds at most two rows: the token and one proposal.
+- A group is often narrower than that budget. It holds only the proposals the drafter actually produced, and it
+  shrinks so its rows stay inside `--max-context`. A window still holds at most eight rows, so a slot that does not
+  fit waits for the next window.
+- Off (the default), `--batch-mtp` keeps two rows per slot. Without `--batch-mtp` a slot has one row. The solo path
+  and pipelined groups are unchanged.
+
+Its rows use the same per-row verify kernels, but the wider group changes what each window verifies. It is not
+promised output-identical to the default batch path or to solo decoding: under the current service routing and
+per-window plans a different path can be taken. No quality benchmark has been done. The switch stays opt-in.
+Wider groups also make the captured verify graphs more numerous. `--batch-mtp` keeps at most 64 layouts per verifier
+and evicts the least recently used beyond that; 0.1.39 kept every layout.
+
+### One call per slot run (opt-in)
+
+`STRATA_QSA_SEGMENTS=1` is the per-slot counterpart of the switches above. When a window carries a run of
+contiguous rows of one slot (the wider `--batch-mtp` groups), the slot's indexer append, block scores, top-k and
+decode attention run once over the run instead of once per row. It is off by default; outside batch windows, and
+for one-row runs, nothing changes. It reuses the existing multi-row calls and the window's per-row buffers, so it
+allocates nothing new. The score and attention arithmetic is FP32, and the result is bitwise the per-row loop's
+(`batch_rows_parity` checks runs of 1, 2, 4 and 8 rows, int8 and fp16 pools, and a captured graph replayed A/B/A).
+A streamed KV cache (`--kv-resident`) keeps the per-row resolve-then-attend order, so block scores, top-k and
+attention run per row on such a window (the indexer append still runs over the run, since the indexer key pool is
+not streamed). When both could run, it wins over `STRATA_BATCH_ATTN_ROWS` and `STRATA_QSA_SLOTS`.
+[QSAROWS.md](QSAROWS.md) has the kernel details. Neither switch changes a default. The
+[2026-11-02 V100 concurrency report](../benchmarks/v100-revolta-concurrency-2026-11-02.md) records the parity runs and
+the concurrent HTTP runs at 32K and 262K.
 
 ## Together with conversation parking
 

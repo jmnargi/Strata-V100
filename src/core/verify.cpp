@@ -240,6 +240,19 @@ const bool g_batch_self_commit = env_on("STRATA_BATCH_SELF_COMMIT");
 // one call per row; every row is computed by the same kernel with the same arithmetic as its own call.  Not with a
 // streamed KV cache (a row's block resolve could evict the blocks an earlier row of the same slot selected).
 const bool g_qsa_slots = env_on("STRATA_QSA_SLOTS");
+// STRATA_QSA_SEGMENTS=1 (opt-in): in a batch window, a run of contiguous rows of ONE slot - a request's proposal rows
+// (--batch-mtp) - runs the QSA layer's indexer append, block scores, top-k and attention as one call over the run
+// instead of one call per row, so the run's indexer keys are read once for all its rows (ReVolta #59's request
+// segments) and a run costs one launch per step.  A run's rows are one session: one indexer key set, one K/V pool, so
+// qsa_block_scores' nq = the run is the call the one-request decode window already makes (the same bits as the per-row
+// calls), qsa_block_topk and qsa_decode_attn_batch take the same nq, and native_qsa_indexer_append_steps is the solo
+// path's n-cell append (the same cells in the same order; qsa_parity holds it against the sequential appends).  Rows
+// of different slots stay runs of one row, which take exactly the per-row calls.  Not with a streamed KV cache (a
+// row's block resolve could evict the blocks an earlier row of the same slot selected), the same fallback
+// STRATA_QSA_SLOTS keeps; the indexer appends stay per-token under STRATA_NO_BATCH_KV_STEP=1 / STRATA_DEC_BATCH=0,
+// which promise per-token appends.  When a window could use both, this switch wins over STRATA_QSA_SLOTS and
+// STRATA_BATCH_ATTN_ROWS.
+const bool g_qsa_segments = env_on("STRATA_QSA_SEGMENTS");
 
 // every row of a batch window is another slot's (no slot has proposal rows)
 bool one_row_per_slot(const int* rows, int S) {
@@ -1560,6 +1573,26 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
                         native_qsa_indexer_append_steps(idx_raw + tb * ID, step_ + tb * kStepCount + kStepPos, kStepCount,
                                                         n, 0, (const float*) wikn->data, EPS, ib, s, st.max_cells,
                                                         rope_scaling(), ns);
+                    } else if (batch_rec_ && g_qsa_segments && dec_batch && !g_no_batch_kv) {
+                        // one append per run of one slot's rows: the solo path's n-step call for the run's cells, in
+                        // the same order as the per-row calls (the indexer's key pool is not streamed, so this holds
+                        // whatever the slot's KV mode); a one-row run keeps the per-row call.
+                        // STRATA_NO_BATCH_KV_STEP=1 / STRATA_DEC_BATCH=0 promise per-token appends: they keep them
+                        for (int t = tb; t < te;) {
+                            const int first = t;
+                            while (t < te && brow_[t] == brow_[first]) ++t;
+                            const QsaState& sx = slot_ss(first).qsa_states[qi];
+                            const QsaIndexerBuffers ib{sx.idx_tail, sx.idx_dead, sx.idx_pooled, sx.idx_block_pos};
+                            if (t - first == 1)
+                                native_qsa_indexer_append(idx_raw + first * ID, step_ + first * kStepCount + kStepPos, 0,
+                                                          (const float*) wikn->data, EPS, ib, s, sx.max_cells,
+                                                          rope_scaling(), ns);
+                            else
+                                native_qsa_indexer_append_steps(idx_raw + first * ID,
+                                                                step_ + first * kStepCount + kStepPos, kStepCount,
+                                                                t - first, 0, (const float*) wikn->data, EPS, ib, s,
+                                                                sx.max_cells, rope_scaling(), ns);
+                        }
                     } else {
                         for (int t = tb; t < te; ++t) {
                             const QsaState& sx = slot_ss(t).qsa_states[qi];
@@ -1724,7 +1757,7 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
                 }
                 stamp(l, 10, grp);
                 bool streamed = false;   // a streamed KV cache keeps the per-row resolve-then-attend order
-                if (batch_rec_ && g_qsa_slots)
+                if (batch_rec_ && (g_qsa_slots || g_qsa_segments))
                     for (int t = tb; t < te; ++t) streamed = streamed || slot_ss(t).qsa_states[qi].kv_mode == 1;
                 // STRATA_BATCH_ATTN_ROWS=1: the window's rows in ONE launch per step - scores with each row's
                 // own indexer keys, the top-k over all rows (row-independent), attention with each row's own pools -
@@ -1736,7 +1769,28 @@ bool Verifier::record_window(int T, cudaStream_t cs, std::string& err) {
                 }();
                 bool rows_ok = batch_rec_ && attn_rows && te - tb <= strata::kernels::kAttnRowsMax;
                 for (int t = tb; rows_ok && t < te; ++t) rows_ok = slot_ss(t).qsa_states[qi].kv_mode != 1;
-                if (rows_ok) {
+                if (batch_rec_ && g_qsa_segments && !streamed) {
+                    // STRATA_QSA_SEGMENTS: each run of contiguous rows of ONE slot in one call per step - the run's
+                    // queries in one qsa_block_scores, whose keys are read once for all of them, then one top-k and
+                    // one attention over the run, as the one-request window's n rows already run.  The rows of a run
+                    // read one pooled key set and one K/V pool and write their own score/sel/scratch/attn rows, so
+                    // running each step over the run before the next is the per-row loop's result; a one-row run
+                    // takes exactly the per-row calls (qsa_block_scores/... with nq = 1).
+                    for (int t0 = tb; t0 < te;) {
+                        int t1 = t0 + 1;
+                        while (t1 < te && brow_[t1] == brow_[t0]) ++t1;
+                        const QsaState& sx = slot_ss(t0).qsa_states[qi];
+                        qsa_block_scores(sx.idx_pooled, sx.idx_dead, qidx_ + t0 * IQ * ID, step_ + t0 * kStepCount,
+                                         t1 - t0, max_blocks_, s, scores_ + (size_t) t0 * max_blocks_, cs);
+                        qsa_block_topk(scores_ + (size_t) t0 * max_blocks_, step_ + t0 * kStepCount, t1 - t0, max_blocks_,
+                                       cap_, s, sel_ + (size_t) t0 * cap_, cs);
+                        qsa_decode_attn_batch(qcur_ + t0 * NH * HD, qsa_attn_pools(sx), sel_ + (size_t) t0 * cap_,
+                                              step_ + t0 * kStepCount, cap_, s,
+                                              attn_scratch_ + (size_t) t0 * attn_scratch_floats_,
+                                              attn_ + t0 * NH * HD, t1 - t0, cs);
+                        t0 = t1;
+                    }
+                } else if (rows_ok) {
                     const int n_rows = te - tb;
                     strata::kernels::QsaScoreRows sr;
                     strata::kernels::QsaAttnPoolsRows pr;

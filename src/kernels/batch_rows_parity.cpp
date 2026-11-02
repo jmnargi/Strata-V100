@@ -4,9 +4,15 @@
 //   1. qsa_block_scores_rows   == qsa_block_scores, one call per row, each row with its OWN indexer keys;
 //   2. qsa_decode_attn_batch_rows == qsa_decode_attn_batch, one call per row, each row over its OWN K/V pools
 //      (int8 codes + scales, and fp16);
-//   3. gdn_step_norm_groups    == gdn_step_norm_multi, one call per slot group, in the window (all outputs, the state
+//   3. STRATA_QSA_SEGMENTS: a run of 1/2/4/8 contiguous rows of ONE slot (one indexer key set, one K/V pool, the cells
+//      at successive positions) - qsa_block_scores / qsa_block_topk / qsa_decode_attn_batch with nq = the run,
+//      CAPTURED into a graph and instantiated once, the exec replayed A/B/A with changed device step contents (the batch
+//      window's replay) against the eager per-row loop - and native_qsa_indexer_append_steps over the run (the partial
+//      tail at 2046 and the block the run completes) == one call per row;
+//   4. gdn_step_norm_groups    == gdn_step_norm_multi, one call per slot group, in the window (all outputs, the state
 //      untouched) and in the 1-row commit (the state written after `keep` tokens).
 // Every case compares with memcmp, not a tolerance. Usage: batch_rows_parity
+#include "strata/kernels/native_qsa_indexer.hpp"
 #include "strata/kernels/qsa.hpp"
 #include "strata/kernels/qsa_decode_attn.hpp"
 #include "strata/kernels/qsa_select.hpp"
@@ -182,7 +188,185 @@ void attn_case(int rows, bool int8) {
     report(name, std::memcmp(a.data(), b.data(), n * 4) == 0);
 }
 
-// ---- 3. the GDN recurrence ----
+// ---- 3. one slot's rows in one call (STRATA_QSA_SEGMENTS) ----
+// A batch window's run of one slot's proposal rows: the run reads ONE indexer key set and ONE K/V pool and its cells
+// sit at successive positions (2046.. : 2046 leaves the partial tail, 2047 completes its block inside the run).  The
+// grouped calls the switch makes - qsa_block_scores / qsa_block_topk / qsa_decode_attn_batch with nq = the run, and
+// the run's native_qsa_indexer_append_steps - against the per-row loop verify.cpp runs without the switch.  One
+// capture, one instantiation, then the exec replayed over two step sets (A, B, A) with the steps changed in place.
+void segments_case(int rows, bool int8) {
+    const k::QsaShapes s = k::qsa_real_shapes();
+    const int64_t max_blocks = 3000;
+    const int64_t ID = s.idx_dim, NH = s.n_head, HD = s.head_dim, NKV = s.n_head_kv, PS = s.page_size;
+    const int64_t cap = k::qsa_selection_width(k::kTopkMaxCells, s);
+    const int64_t sf = (int64_t) k::qsa_decode_attn_scratch_floats(cap, s);
+    const int64_t bases[2] = {2046, 2049};   // a run starting on a partial tail, then one starting past the block edge
+    const int64_t cells = bases[1] + rows, pages = (cells + PS - 1) / PS, prow = pages * NKV * PS;
+    std::mt19937 rng(41 + rows + int8);
+    std::normal_distribution<float> nd(0.f, 1.f);
+    std::uniform_int_distribution<int> code(-127, 127);
+    std::uniform_real_distribution<float> scl(0.005f, 0.03f);
+    // the run's ONE indexer key set, K/V pool and page table
+    std::vector<float> hp((size_t) max_blocks * ID), hd((size_t) ID), q((size_t) rows * s.idx_n_head * ID);
+    for (auto& x : hp) x = nd(rng);
+    for (auto& x : hd) x = nd(rng);
+    for (auto& x : q) x = nd(rng) * 2.0f;
+    const float* pooled = up(hp);
+    const float* dead = up(hd);
+    const float* d_q = up(q);
+    k::QsaAttnPools pl;
+    if (int8) {
+        std::vector<int8_t> kq((size_t) prow * HD), vq((size_t) prow * HD);
+        std::vector<uint16_t> ks((size_t) prow * (HD / 64)), vs(ks.size());
+        for (auto& x : kq) x = (int8_t) code(rng);
+        for (auto& x : vq) x = (int8_t) code(rng);
+        for (auto& x : ks) x = f2h(scl(rng));
+        for (auto& x : vs) x = f2h(scl(rng));
+        pl.k_q = up(kq); pl.v_q = up(vq); pl.k_scale = up(ks); pl.v_scale = up(vs);
+    } else {
+        std::vector<uint16_t> kh((size_t) prow * HD), vh(kh.size());
+        for (auto& x : kh) x = f2h(nd(rng) * 1.5f);
+        for (auto& x : vh) x = f2h(nd(rng));
+        pl.k_pool = up(kh); pl.v_pool = up(vh);
+    }
+    std::vector<int32_t> table(pages);
+    for (int64_t i = 0; i < pages; ++i) table[i] = (int32_t) i;
+    std::shuffle(table.begin(), table.end(), rng);
+    pl.page_table = up(table);
+    std::vector<float> qc((size_t) rows * NH * HD);
+    for (auto& x : qc) x = nd(rng) * 2.0f;
+    const float* d_qc = up(qc);
+    std::vector<int32_t> steps((size_t) rows * k::kStepCount);
+    int32_t* d_steps = up(steps);
+    const size_t sn = (size_t) rows * max_blocks, in = (size_t) rows * cap, an = (size_t) rows * NH * HD;
+    float *sc_ref = nullptr, *sc_got = nullptr, *scr_ref = nullptr, *scr_got = nullptr;
+    int32_t *id_ref = nullptr, *id_got = nullptr;
+    float *at_ref = nullptr, *at_got = nullptr;
+    ck(cudaMalloc(&sc_ref, sn * 4), "malloc");
+    ck(cudaMalloc(&sc_got, sn * 4), "malloc");
+    ck(cudaMalloc(&scr_ref, (size_t) rows * sf * 4), "malloc");
+    ck(cudaMalloc(&scr_got, (size_t) rows * sf * 4), "malloc");
+    ck(cudaMalloc(&id_ref, in * 4), "malloc");
+    ck(cudaMalloc(&id_got, in * 4), "malloc");
+    ck(cudaMalloc(&at_ref, an * 4), "malloc");
+    ck(cudaMalloc(&at_got, an * 4), "malloc");
+    // The engine's batch window is a captured graph whose step records change every window.  Capture the grouped
+    // calls once, instantiate once, and replay the exec over two step sets - A, B, then A again on the same exec - with
+    // one call per row (the loop verify.cpp runs without the switch) as the reference for each replay.  A kernel or a
+    // grid that took n_bid/n_kv/width from host memory at capture time instead of reading the step record on every
+    // launch fails the B (and the second A) replay.
+    cudaStream_t cs = nullptr;
+    ck(cudaStreamCreate(&cs), "stream");
+    cudaGraph_t graph = nullptr;
+    cudaGraphExec_t exec = nullptr;
+    ck(cudaStreamBeginCapture(cs, cudaStreamCaptureModeThreadLocal), "begin capture");
+    k::qsa_block_scores(pooled, dead, d_q, d_steps, rows, max_blocks, s, sc_got, cs);
+    k::qsa_block_topk(sc_got, d_steps, rows, max_blocks, cap, s, id_got, cs);
+    k::qsa_decode_attn_batch(d_qc, pl, id_got, d_steps, cap, s, scr_got, at_got, rows, cs);
+    ck(cudaStreamEndCapture(cs, &graph), "end capture");
+    ck(cudaGraphInstantiate(&exec, graph, nullptr, nullptr, 0), "instantiate");
+    bool same = true;
+    char name[128];
+    for (int replay = 0; replay < 3; ++replay) {
+        const int64_t base = bases[replay == 1 ? 1 : 0];   // A, B, A: the device steps change between replays
+        for (int r = 0; r < rows; ++r) k::qsa_step_fill(steps.data() + (size_t) r * k::kStepCount, base + r, s);
+        ck(cudaMemcpy(d_steps, steps.data(), steps.size() * 4, cudaMemcpyHostToDevice), "upload");
+        // the reference: one call per row, in the same stream order
+        ck(cudaMemsetAsync(sc_ref, 0, sn * 4, cs), "memset");
+        ck(cudaMemsetAsync(id_ref, 0, in * 4, cs), "memset");
+        ck(cudaMemsetAsync(at_ref, 0, an * 4, cs), "memset");
+        for (int r = 0; r < rows; ++r) {
+            k::qsa_block_scores(pooled, dead, d_q + (size_t) r * s.idx_n_head * ID,
+                                d_steps + (size_t) r * k::kStepCount, 1, max_blocks, s,
+                                sc_ref + (size_t) r * max_blocks, cs);
+            k::qsa_block_topk(sc_ref + (size_t) r * max_blocks, d_steps + (size_t) r * k::kStepCount, 1, max_blocks,
+                              cap, s, id_ref + (size_t) r * cap, cs);
+            k::qsa_decode_attn_batch(d_qc + (size_t) r * NH * HD, pl, id_ref + (size_t) r * cap,
+                                     d_steps + (size_t) r * k::kStepCount, cap, s, scr_ref + (size_t) r * sf,
+                                     at_ref + (size_t) r * NH * HD, 1, cs);
+        }
+        // the captured run, replayed into zeroed outputs: a node that never ran stays zero and differs
+        ck(cudaMemsetAsync(sc_got, 0, sn * 4, cs), "memset");
+        ck(cudaMemsetAsync(id_got, 0, in * 4, cs), "memset");
+        ck(cudaMemsetAsync(at_got, 0, an * 4, cs), "memset");
+        ck(cudaGraphLaunch(exec, cs), "graph launch");
+        ck(cudaStreamSynchronize(cs), "sync");
+        const std::vector<float> sr = down(sc_ref, sn);
+        const std::vector<int32_t> ir = down(id_ref, in);
+        const std::vector<float> ar = down(at_ref, an);
+        const std::vector<float> sg = down(sc_got, sn);
+        const std::vector<int32_t> ig = down(id_got, in);
+        const std::vector<float> ag = down(at_got, an);
+        for (int r = 0; r < rows; ++r) {
+            const size_t nb = (size_t) steps[(size_t) r * k::kStepCount + k::kStepNBid] + 1;   // through n_bid
+            const size_t w = (size_t) steps[(size_t) r * k::kStepCount + k::kStepWidth];
+            same = same && std::memcmp(&sr[(size_t) r * max_blocks], &sg[(size_t) r * max_blocks], nb * 4) == 0;
+            same = same && std::memcmp(&ir[(size_t) r * cap], &ig[(size_t) r * cap], w * 4) == 0;
+            same = same &&
+                   std::memcmp(&ar[(size_t) r * NH * HD], &ag[(size_t) r * NH * HD], (size_t) (NH * HD) * 4) == 0;
+        }
+    }
+    std::snprintf(name, sizeof name,
+                  "one slot's %d rows: captured scores/topk/attention, 3 replays over 2 step sets (%s)", rows,
+                  int8 ? "int8" : "fp16");
+    report(name, same);
+    // the append run starts at the partial tail (2046), not at the last step set's base
+    for (int r = 0; r < rows; ++r) k::qsa_step_fill(steps.data() + (size_t) r * k::kStepCount, bases[0] + r, s);
+    ck(cudaMemcpy(d_steps, steps.data(), steps.size() * 4, cudaMemcpyHostToDevice), "upload");
+    // the run's indexer appends - one _steps call (the one-row run's single append) against one per row; the
+    // buffers must be left as the sequential calls leave them, partial tail and completed block included.  The
+    // appends are eager: they are stateful, so a replay would append the cells twice.
+    const int64_t tail_n = (s.idx_block - 1) * ID, max_cells = (max_blocks - 1) * s.idx_block;
+    std::vector<float> raw((size_t) rows * ID), gamma((size_t) ID);
+    for (auto& x : raw) x = nd(rng);
+    for (auto& x : gamma) x = nd(rng);
+    const float* d_raw = up(raw);
+    const float* d_gamma = up(gamma);
+    struct IdxSide { float* tail; float* dead; float* pooled; int32_t* bpos; };
+    std::vector<float> idx_dead((size_t) ID), idx_pooled((size_t) max_blocks * ID);
+    for (auto& v : idx_dead) v = nd(rng);
+    for (auto& v : idx_pooled) v = nd(rng);
+    auto idx_side = [&]() {   // both sides start from the same tail/dead/pooled: only the appends may differ
+        IdxSide x;
+        std::vector<float> t((size_t) tail_n, 0.f);
+        x.tail = up(t);
+        x.dead = up(idx_dead);
+        x.pooled = up(idx_pooled);
+        x.bpos = up(std::vector<int32_t>{0});
+        return x;
+    };
+    const IdxSide seq = idx_side();
+    const IdxSide grp = idx_side();
+    const strata::kernels::RopeScaling rst;
+    for (int r = 0; r < rows; ++r) {
+        const k::QsaIndexerBuffers b{seq.tail, seq.dead, seq.pooled, seq.bpos};
+        k::native_qsa_indexer_append(d_raw + (size_t) r * ID, d_steps + (size_t) r * k::kStepCount + k::kStepPos, 0,
+                                     d_gamma, k::qsa_rms_eps(), b, s, max_cells, rst, cs);
+    }
+    const k::QsaIndexerBuffers gb{grp.tail, grp.dead, grp.pooled, grp.bpos};
+    if (rows == 1)   // a one-row run keeps the per-row call, as verify.cpp does under the switch
+        k::native_qsa_indexer_append(d_raw, d_steps + k::kStepPos, 0, d_gamma, k::qsa_rms_eps(), gb, s, max_cells,
+                                     rst, cs);
+    else
+        k::native_qsa_indexer_append_steps(d_raw, d_steps + k::kStepPos, (int) k::kStepCount, rows, 0, d_gamma,
+                                           k::qsa_rms_eps(), gb, s, max_cells, rst, cs);
+    ck(cudaStreamSynchronize(cs), "sync");
+    const std::vector<float> sp = down(seq.pooled, (size_t) max_blocks * ID), gp = down(grp.pooled, (size_t) max_blocks * ID);
+    const std::vector<float> sd = down(seq.dead, (size_t) ID), gd = down(grp.dead, (size_t) ID);
+    const std::vector<float> st = down(seq.tail, (size_t) tail_n), gt = down(grp.tail, (size_t) tail_n);
+    const std::vector<int32_t> sb = down(seq.bpos, 1), gbb = down(grp.bpos, 1);
+    const bool asame = std::memcmp(sp.data(), gp.data(), sp.size() * 4) == 0 &&
+                       std::memcmp(sd.data(), gd.data(), sd.size() * 4) == 0 &&
+                       std::memcmp(st.data(), gt.data(), st.size() * 4) == 0 && sb[0] == gbb[0];
+    std::snprintf(name, sizeof name, "one slot's %d rows: native_qsa_indexer_append%s (partial tail)", rows,
+                  rows == 1 ? "" : "_steps");
+    report(name, asame);
+    ck(cudaGraphExecDestroy(exec), "exec destroy");
+    ck(cudaGraphDestroy(graph), "graph destroy");
+    ck(cudaStreamDestroy(cs), "stream destroy");
+}
+
+// ---- 4. the GDN recurrence ----
 void gdn_case(const std::vector<int>& ntok, bool commit) {
     const int S = 128, h_k = 16, h_v = 48;   // the artifact's geometry
     const int qk = S * h_k, C = 2 * qk + S * h_v, vd = S * h_v;
@@ -260,6 +444,10 @@ int main() {
     for (int r : {1, 3, 8}) {
         attn_case(r, true);
         attn_case(r, false);
+    }
+    for (int r : {1, 2, 4, 8}) {
+        segments_case(r, true);
+        segments_case(r, false);
     }
     gdn_case({1}, false);
     gdn_case({1, 1, 1, 1}, false);

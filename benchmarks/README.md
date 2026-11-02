@@ -25,6 +25,7 @@ This directory is the contributor-facing index for Strata benchmark results acro
 | 2 × NVIDIA Tesla V100-PCIE-16GB, Gen3 x4 + x16 | Qwen3.8-Flash-Next | IQ3_S | 0–3K incremental tool-result targets | [Expert-cache admission and exact wide dequantization, 2026-10-21](v100-prefill-cache-admission-2026-10-21.md) |
 | 1–2 × NVIDIA Tesla V100-PCIE-16GB + Ryzen 5 3600 | Qwen3.8-Flash-Next | IQ3_S | 2K / 8K / 32K prefill, 8K MTP | [Repeated expert prefill tiling and copy-overlap comparison, 2026-10-23](v100-iq3_s-prefill-decode-2026-10-23.md) |
 | 2 × NVIDIA Tesla V100-PCIE-16GB, Gen3 x4 + x16 | Qwen3.8-Flash-Next | IQ3_S + TQ6/TQ8 KV | 2K / 8K / 16K / 32K prefill, 122K retrieval | [TurboQuant KV and Volta TQ prompt attention, 2026-10-25](v100-turboquant-2026-10-25.md) |
+| 2 × NVIDIA Tesla V100-PCIE-16GB + Ryzen 5 3600 | Gyro-L Qwen3.8-Flash-Next | TQ3_0 native pack | 32K / 262,144 | [ReVolta-style request segments: parity, full-context memory, and concurrency, 2026-11-02](v100-revolta-concurrency-2026-11-02.md) |
 
 ## Contributing results
 1. Run the existing [`bench/run_v100_bench.py`](../bench/run_v100_bench.py) runner for the published workload, or add the closest equivalent runner under `bench/`.
