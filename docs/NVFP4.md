@@ -257,6 +257,15 @@ strata --pack <dir>/pack --native <dir>/dense.gguf --native-dense-gguf <dir>/den
 The vision tower is not converted: the checkpoint keeps it in the safetensors under `model.visual.*`, and the engine
 reads pictures with the original model's `mmproj` file, as for the other NVFP4 versions.
 
+Measured here (2x Tesla V100-PCIE-16GB, Ryzen 5 3600, 94 GiB RAM, this branch's engine, 32K context, int8 KV,
+`--layer-split 16`, `--resident-budget-gib 40`):
+
+- the prepared files: `pack/experts.bin` 67,948,118,016 B (24,576 experts, 2,764,816 B each), `ple-nvfp4.gguf` 28.8 GB
+  (320,001,536 rows), `dense.gguf` 5.6 GB, `mtp/rt` 0.9 GB; `prepare` took about 25 minutes (the n-gram table 40 s)
+- serving: both cards at 15.4 GiB of 16 GiB, 47 GiB of RAM used beside 40 GiB of page-locked experts
+- decode 35.9 tokens/s (median of three ~350-token answers: 34.9 / 39.1 / 35.9), MTP accepting 202-213 of 318-347
+  drafts; "9 + 8" answers `17`, a one-line string reverse and a `get_weather` call with `{"city":"Paris"}` are correct
+
 ## Decode on Volta: `STRATA_EXPERT_QPN2`
 
 The decode experts can also run as W4A16 on Volta's `mma.sync.m8n8k4`, through a port of v100-skinny's QPN2 dataflow
@@ -273,3 +282,10 @@ instead of `dp4a`.
 - `nvfp4_expert_gpu_parity pack/experts.bin` (with the switch on) checks the whole expert - gate/up, the SwiGLU, the q8_1
   hidden and down - against a double-precision expert: 1.229% worst over 8 tokens, against the W4A8 path's 1.217%. Both
   are the two activation roundings; the weights are exact on this path.
+
+Measured on the same pair, `NVFP4_BENCH_GROUPS=60 NVFP4_BENCH_ROWS=6` in `nvfp4_expert_gpu_parity` (one expert's blob
+in every group, so VRAM-resident): 533 us a window against the W4A8 kernels' 698 us, 24% less.  With this RAM-budget
+pack the engine **stalls the verify window** with the switch on (`verify: timed out at layer 1`, before the stage
+hand-off), because a lane's 8-byte weight reads scatter across rows where the default kernels read each row coalesced,
+and the experts below the budget are streamed.  It therefore stays opt-in and is not for serving until its weight reads
+are coalesced the same way (a packed fragment order, as v100-skinny itself uses).

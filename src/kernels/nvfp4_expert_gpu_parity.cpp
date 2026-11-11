@@ -91,6 +91,36 @@ int main(int argc, char** argv) {
         ck(cudaMalloc(&dtok, 4 * T), "t"); ck(cudaMemcpy(dtok, ids, 4 * T, cudaMemcpyHostToDevice), "t");
         k::quantize_q8_1_rows(dx, T, N, dxq, nullptr);
         // NVFP4_BENCH=<it>: time the call instead of comparing (one expert, T rows, weights resident)
+        if (const char* grp_env = std::getenv("NVFP4_BENCH_GROUPS")) {   // the verify window's shape: G groups x R rows
+            const int G = std::atoi(grp_env), R = std::getenv("NVFP4_BENCH_ROWS") ? std::atoi(std::getenv("NVFP4_BENCH_ROWS")) : 6;
+            std::vector<unsigned long long> ptrs(G, ptr);
+            std::vector<int32_t> st(G + 1), dst(G * R), tok(G * R);
+            for (int g = 0; g <= G; ++g) st[g] = g * R;
+            for (int i = 0; i < G * R; ++i) { dst[i] = i % R; tok[i] = i % R; }
+            unsigned long long* gp; int32_t *gs, *gd, *gt;
+            ck(cudaMalloc(&gp, G * 8), "gp"); ck(cudaMemcpy(gp, ptrs.data(), G * 8, cudaMemcpyHostToDevice), "gp");
+            ck(cudaMalloc(&gs, (G + 1) * 4), "gs"); ck(cudaMemcpy(gs, st.data(), (G + 1) * 4, cudaMemcpyHostToDevice), "gs");
+            ck(cudaMalloc(&gd, G * R * 4), "gd"); ck(cudaMemcpy(gd, dst.data(), G * R * 4, cudaMemcpyHostToDevice), "gd");
+            ck(cudaMalloc(&gt, G * R * 4), "gt"); ck(cudaMemcpy(gt, tok.data(), G * R * 4, cudaMemcpyHostToDevice), "gt");
+            void* scr2 = nullptr;
+            ck(cudaMalloc(&scr2, k::native_expert_scratch_bytes(G * R, FF)), "scr2");
+            const int ngv = G;
+            int32_t* dngv; ck(cudaMalloc(&dngv, 4), "dngv"); ck(cudaMemcpy(dngv, &ngv, 4, cudaMemcpyHostToDevice), "dngv");
+            for (int w = 0; w < 3; ++w)
+                k::native_expert_grouped(L, gp, gs, dngv, gd, gt, G, G * R, dxq, scr2, dout, nullptr);
+            ck(cudaDeviceSynchronize(), "warm");
+            cudaEvent_t e0, e1;
+            ck(cudaEventCreate(&e0), "ev"); ck(cudaEventCreate(&e1), "ev");
+            ck(cudaEventRecord(e0), "ev");
+            const int n = 50;
+            for (int i = 0; i < n; ++i)
+                k::native_expert_grouped(L, gp, gs, dngv, gd, gt, G, G * R, dxq, scr2, dout, nullptr);
+            ck(cudaEventRecord(e1), "ev");
+            ck(cudaEventSynchronize(e1), "ev");
+            float ms = 0; ck(cudaEventElapsedTime(&ms, e0, e1), "ev");
+            std::printf("window bench: %d groups x %d rows: %.1f us/call\n", G, R, ms / n * 1e3);
+            return 0;
+        }
         if (const char* iters = std::getenv("NVFP4_BENCH")) {
             const int n = std::atoi(iters);
             for (int w = 0; w < 5; ++w)

@@ -142,12 +142,17 @@ __global__ void __launch_bounds__(32 * QPN2_SPLITK) qpn2_nvfp4_kernel(
                 const half sc = ue4m3_to_half((d4 >> (8 * j)) & 0xFFu);
                 half2 b[8];
                 qpn2_b(w0, w1, __halves2half2(sc, sc), b);
-                if (!has_a) continue;
-                // this group's 16 activation values: half of a q8_1 block
+                // this group's 16 activation values: half of a q8_1 block; an entry the group does not have is a zero
+                // A row (its C rows are discarded below), so every lane runs the same instructions
                 const int k0 = s * 64 + j * 16;
-                const block_q8_1* bq = xq + (size_t) trow * xb + (k0 >> 5);
                 half2 av[8];
-                q8_1_16_to_half(bq->qs + (k0 & 31), __low2half(bq->ds), av);
+                if (has_a) {
+                    const block_q8_1* bq = xq + (size_t) trow * xb + (k0 >> 5);
+                    q8_1_16_to_half(bq->qs + (k0 & 31), __low2half(bq->ds), av);
+                } else {
+#pragma unroll
+                    for (int i = 0; i < 8; ++i) av[i] = __float2half2_rn(0.f);
+                }
                 const unsigned* A = reinterpret_cast<const unsigned*>(av);
                 const unsigned* B = reinterpret_cast<const unsigned*>(b);
                 mma8n8k4(c, A[0], A[1], B[0], B[1]);

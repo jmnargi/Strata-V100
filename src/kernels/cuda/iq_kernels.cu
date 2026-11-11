@@ -5254,7 +5254,7 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
     // STRATA_EXPERT_QPN2=1 (or "all") runs gate/up and down, "gu" only gate/up (the default down follows), "down"
     // only down (the default gate/up and the engine's SwiGLU + q8_1 precede it) - the stage split is for A/B runs.
     static const char* const qpn2_env = std::getenv("STRATA_EXPERT_QPN2");
-    static const bool qpn2_ok = qpn2_env != nullptr && qpn2_env[0] != '0';
+    static const bool qpn2_ok = qpn2_env != nullptr && qpn2_env[0] != '\0' && std::strcmp(qpn2_env, "0") != 0;
     static const bool qpn2_gu_on = qpn2_ok && (std::strstr(qpn2_env, "down") == nullptr || std::strstr(qpn2_env, "gu") != nullptr);
     static const bool qpn2_dn_on = qpn2_ok && (std::strstr(qpn2_env, "gu") == nullptr || std::strstr(qpn2_env, "down") != nullptr);
     const bool qpn2 = qpn2_ok && !g_grouped_v1 && g_exp_phase == 0 && qpn2_nvfp4_supported(L, cap_entries);
