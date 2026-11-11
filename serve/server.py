@@ -3505,6 +3505,63 @@ def gpu_vram_mib(indices: list[int], hip: bool = False) -> dict[int, int] | None
     return out
 
 
+def primary_gpu_of(cfg: dict) -> int | None:
+    """The card the engine takes FIRST ("primary_gpu": an index nvidia-smi numbers): the primary of a peer tier, so
+    a PC whose widest PCIe link is not card 0 - the x16 card behind an x4 card, say - reads prompts on the wide one.
+    The engine has no primary of its own beyond device 0: the server puts this card at the head of
+    CUDA_VISIBLE_DEVICES, and the rest keep the config's order.  ValueError for a value that is not an integer or a
+    card "gpu" does not list, so a typo stops the start instead of silently running on card 0; None when the key is
+    absent (the config's order decides, as before)."""
+    value = cfg.get("primary_gpu")
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f'"primary_gpu" must be an integer card index, not {value!r}')
+    cards = gpu_list(cfg)
+    if not cards:
+        raise ValueError('"primary_gpu" needs "gpu" to name the cards it numbers')
+    if value not in cards:
+        raise ValueError(f'"primary_gpu": {value} is not one of the config\'s "gpu" cards {cards}')
+    return value
+
+
+def gpu_link_widths(cards: list[int], *, backend: str | None = None) -> dict[int, int]:
+    """Each card's PCIe link width as the driver reports it now, by nvidia-smi index: the NEGOTIATED width
+    (pcie.link.width.current), so a 16-lane card in an x4 slot reads 4, which is the number a bandwidth budget
+    needs.  {} when the query is not available (no nvidia-smi, AMD/Metal, a driver without the field)."""
+    if backend == "hip" or not cards:
+        return {}
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=index,pcie.link.width.current", "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    if r.returncode != 0:
+        return {}
+    out: dict[int, int] = {}
+    for line in r.stdout.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) != 2:
+            continue
+        try:
+            out[int(parts[0])] = int(parts[1])
+        except ValueError:
+            continue
+    return {i: out[i] for i in cards if i in out}
+
+
+def primary_link_advice(primary: int, peer: int, widths: dict[int, int]) -> str | None:
+    """A line for a start whose peer tier reads prompts on a card with a narrower PCIe link than the peer's: the
+    streamed experts are what a prompt waits on, so the WIDE card should be the primary.  None when both widths are
+    known and fine, or when either is unknown (no advice from a guess)."""
+    got, want = widths.get(primary), widths.get(peer)
+    if not isinstance(got, int) or not isinstance(want, int) or got >= want:
+        return None
+    return (f'[strata] warning: prompts are read on GPU{primary}, whose PCIe link is x{got} against GPU{peer}\'s '
+            f'x{want} - set "primary_gpu": {peer} in the config (or list it first in "gpu") to read them on the '
+            f'wider card')
+
+
 def ordered_gpus(cfg: dict, scores=None, vrams=None) -> list[int]:
     """#1352: the cards of a layer split in the order the engine stages them.  With "layer_split": "auto" (the
     default) the faster card goes LAST - the last stage runs the head, the draft layer and the verify, and a prompt
@@ -3516,6 +3573,9 @@ def ordered_gpus(cfg: dict, scores=None, vrams=None) -> list[int]:
     draft and verify have a floor the smaller card cannot afford.  scores/vrams: {index: value} (tests); None asks
     the driver - injected scores without injected vrams means no VRAM check (a test seam is a test seam)."""
     gl = gpu_list(cfg)
+    first = primary_gpu_of(cfg)
+    if first is not None:                 # an explicit primary: it heads the engine's devices, the rest keep the order
+        return [first] + [i for i in gl if i != first]
     if len(gl) < 2 or cfg.get("gpu_order") == "as_given":
         return gl
     args = cfg.get("args") or []
@@ -8651,6 +8711,7 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         cfg = with_component_engine(cfg)
         try:
             peer_prefill = peer_prefill_primary(cfg)     # a conflicting config stops before the minutes-long start
+            primary_gpu_of(cfg)                          # a typo here stops the start; child_env orders the devices
         except ValueError as e:
             raise SystemExit(f"[strata] config {e}")
         vision = None
@@ -8716,6 +8777,19 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         if peer_prefill:
             print("[strata] peer prefill: every prompt row is read on the primary GPU; decode uses both cards "
                   "(peer_prefill_primary)", flush=True)
+            order = ordered_gpus(cfg)
+            peer_at = arg_value(cfg.get("args") or [], "--peer-device")
+            try:
+                peer_card = order[int(peer_at)] if peer_at is not None else None
+            except (ValueError, IndexError):
+                peer_card = None
+            widths = gpu_link_widths(order if order else gpu_list(cfg), backend=cfg.get("backend"))
+            if order and peer_card is not None:
+                fmt = [f"GPU{i} (PCIe x{widths[i]})" if i in widths else f"GPU{i}" for i in (order[0], peer_card)]
+                print(f"[strata] peer prefill: primary {fmt[0]}, peer {fmt[1]}", flush=True)
+                advice = primary_link_advice(order[0], peer_card, widths)
+                if advice:
+                    print(advice, flush=True)
         # a relative "exe" is the config's cwd's: Windows' CreateProcess resolves "engine/strata.exe" against nothing
         # it is told about (WinError 2), so it is made absolute here
         if engine_component.is_reference(cfg["exe"]):      # "component:strata-engine": the engine package for this PC

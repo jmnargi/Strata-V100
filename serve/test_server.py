@@ -25,10 +25,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from serve.frontend import (ChatTemplate, literal_tags, mark_think_literals, openai_to_messages,  # noqa: E402
                             unmark_think_literals)
 from serve.server import (ANSWER_RESERVE_MIN, CTX_SLACK, ByteTokenizer, DiskStats, EngineDied, EngineNonFinite,  # noqa: E402
-                          GpuBusy, MockEngine, PP_DONE_TAIL, Service, StrataEngine, api_key_of,
-                          engine_args, env_nonzero, key_matches, layer_split_value, lazy_vision_refusal,
-                          parse_disk_line, peer_prefill_primary, per_gpu_reserve, prompt_progress, prompt_tokens_seen,
-                          request_stats, request_timings, serve, start_failure_hint)
+                          GpuBusy, MockEngine, PP_DONE_TAIL, Service, StrataEngine, api_key_of, child_env,
+                          engine_args, env_nonzero, gpu_link_widths, key_matches, layer_split_value,
+                          lazy_vision_refusal, ordered_gpus, parse_disk_line, peer_prefill_primary,
+                          per_gpu_reserve, primary_gpu_of, primary_link_advice, prompt_progress,
+                          prompt_tokens_seen, request_stats, request_timings, serve, start_failure_hint)
 from types import SimpleNamespace  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2415,6 +2416,39 @@ class PeerPrefillPrimary(unittest.TestCase):
         self.assertEqual(per_gpu_reserve(4000, [1700, 600], 2), [4000, 600])
         self.assertEqual(per_gpu_reserve([1000, 200], [1700], 2), [1700, 200])
         self.assertEqual(per_gpu_reserve(None, 1800), [1800])
+
+
+class PrimaryGpu(unittest.TestCase):
+    """Which card runs first ("primary_gpu"): the engine has no primary beyond device 0, so the server puts this card
+    at the head of CUDA_VISIBLE_DEVICES.  A PC whose wide link is not card 0 (an x16 card behind an x4 one) reads
+    prompts on the card it names, and a start whose primary sits on the narrower link says so with the key to set."""
+
+    def test_the_key_moves_the_named_card_first(self):
+        self.assertIsNone(primary_gpu_of({"gpu": [0, 1]}))                      # absent: the order stays the config's
+        self.assertEqual(ordered_gpus({"gpu": [0, 1]}), [0, 1])
+        self.assertEqual(primary_gpu_of({"gpu": [0, 1], "primary_gpu": 1}), 1)
+        self.assertEqual(ordered_gpus({"gpu": [0, 1], "primary_gpu": 1}), [1, 0])
+        self.assertEqual(ordered_gpus({"gpu": [2, 0, 1], "primary_gpu": 1}), [1, 2, 0])   # the rest keep their order
+        env = child_env({"gpu": [0, 1], "primary_gpu": 1})
+        self.assertEqual(env["CUDA_VISIBLE_DEVICES"], "1,0")
+        self.assertEqual(child_env({"gpu": [0, 1]})["CUDA_VISIBLE_DEVICES"], "0,1")
+
+    def test_a_typo_stops_the_start(self):
+        for value in (2, -1, "1", 1.0, True):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                primary_gpu_of({"gpu": [0, 1], "primary_gpu": value})
+        with self.assertRaises(ValueError):
+            primary_gpu_of({"primary_gpu": 0})                                  # no "gpu" to number
+
+    def test_a_narrower_primary_is_pointed_out(self):
+        widths = {0: 4, 1: 16}
+        line = primary_link_advice(0, 1, widths)
+        self.assertIn('"primary_gpu": 1', line)                                  # the narrow card is named
+        self.assertIn("x4", line)
+        self.assertIsNone(primary_link_advice(1, 0, widths))                     # wide primary: nothing to say
+        self.assertIsNone(primary_link_advice(0, 1, {0: 16, 1: 16}))
+        self.assertIsNone(primary_link_advice(0, 1, {0: 4}))                     # unknown peer width: no advice
+        self.assertEqual(gpu_link_widths([0], backend="hip"), {})                # AMD: not nvidia-smi's to answer
 
 
 

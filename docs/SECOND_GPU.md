@@ -199,11 +199,38 @@ off; it does not cancel an explicit flag or a true configuration value.
 The mode refuses a positive `--peer-prefill-rows`; zero and the default auto
 value become primary-only prefill.
 
-Put the faster-linked card first in `"gpu"`. For this fork's V100 pair,
-`"gpu": [1, 0]` means physical GPU1 (PCIe x16) reads prompts and physical GPU0
-(PCIe x4) is the decode expert tier. The peer number is its position in that
-list, not its physical index. Remove `--layer-split` and `"layer_split"`:
-this is a peer tier, not a layer split.
+**Which card is the primary.** Name it with `"primary_gpu"`, an index numbered
+as nvidia-smi numbers the cards:
+
+```json
+"gpu": [0, 1],
+"primary_gpu": 1
+```
+
+The engine has no primary of its own beyond device 0, so the server puts that
+card at the head of `CUDA_VISIBLE_DEVICES` and the rest keep the config's order.
+Here that means physical GPU1 (PCIe x16) reads prompts and physical GPU0
+(PCIe x4) is the decode expert tier; `--peer-device 1` is then a position in
+that reordered list, not a physical index. Without the key the config's `"gpu"`
+order decides, as it always did, and a value that is not one of those cards
+stops the start with a message instead of running on card 0.
+
+The start prints the mapping in this mode and reads each card's negotiated link
+width, so the log names the cards rather than CUDA ordinals:
+
+```
+[strata] peer prefill: primary GPU1 (PCIe x16), peer GPU0 (PCIe x4)
+```
+
+When the primary ends up on the narrower link, it says so and names the key:
+
+```
+[strata] warning: prompts are read on GPU0, whose PCIe link is x4 against GPU1's x16 - set "primary_gpu": 1 in the config (or list it first in "gpu") to read them on the wider card
+```
+
+That warning matters because a prompt's time is the streamed experts' time, so
+the wide card should read the prompt. Remove `--layer-split` and
+`"layer_split"`: this is a peer tier, not a layer split.
 
 This mode requires CUDA VMM, GPU-only elastic KV, an expert profile, an enabled
 expert cache and **all experts in RAM**. It refuses resident low-RAM or mapped
