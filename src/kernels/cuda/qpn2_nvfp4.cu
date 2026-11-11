@@ -8,8 +8,9 @@
 // sub-block IS 8 contiguous bytes there (`qs[8j..8j+7]`, value 16j+i in the low nibble of byte i and 16j+i+8 in its
 // high one), so the fragment is a nibble pairing of two 4-byte loads instead of a repack at load time.
 //
-// M (the rows one expert serves in a verify window) is 1..8; the caller refuses the kernel above that, and the
-// environment switch keeps the default path byte-identical.
+// M (the rows one expert serves in a verify window) is 1..8: a group is one expert and an entry one (row, expert)
+// pair, and the engine's window holds at most kVerifyMaxT = 8 rows, so a group has at most 8 entries.  The switch is
+// an environment variable, so the default path stays byte-identical.
 // Activations are the caller's q8_1 image, dequantized to half in registers: decode's activation quantization stays
 // the engine's (no new buffer, no change in verify.cpp), and the weight side is the value the checkpoint stores.
 #include "strata/kernels/iq_kernels.hpp"
@@ -138,8 +139,9 @@ __global__ void __launch_bounds__(32 * QPN2_SPLITK) qpn2_nvfp4_kernel(
             for (int j = 0; j < 4; ++j) {
                 const unsigned w0 = *reinterpret_cast<const unsigned*>(bp + 4 + 8 * j);
                 const unsigned w1 = *reinterpret_cast<const unsigned*>(bp + 8 + 8 * j);
+                const half sc = ue4m3_to_half((d4 >> (8 * j)) & 0xFFu);
                 half2 b[8];
-                qpn2_b(w0, w1, __halves2half2(ue4m3_to_half((d4 >> (8 * j)) & 0xFFu), ue4m3_to_half((d4 >> (8 * j)) & 0xFFu)), b);
+                qpn2_b(w0, w1, __halves2half2(sc, sc), b);
                 if (!has_a) continue;
                 // this group's 16 activation values: half of a q8_1 block
                 const int k0 = s * 64 + j * 16;

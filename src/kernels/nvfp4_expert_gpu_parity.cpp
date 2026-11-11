@@ -2,6 +2,8 @@
 // blobs with their global scales, against a double-precision expert.
 //
 //     nvfp4_expert_gpu_parity pack/experts.bin [layer expert ...]
+//     NVFP4_BENCH=<calls> nvfp4_expert_gpu_parity pack/experts.bin: time the call instead (one expert, 8 rows, its
+//     weights resident) - both decode paths, selected by STRATA_EXPERT_QPN2
 //
 // Eight tokens of N(0,1) activations through one expert: q8_1 input, gate/up with s_gate / s_up, SwiGLU, q8_1 of the
 // hidden, down with s_down on its output. Only the two activation roundings separate it from the reference (~1%).
@@ -88,6 +90,29 @@ int main(int argc, char** argv) {
         ck(cudaMalloc(&ddst, 4 * T), "d"); ck(cudaMemcpy(ddst, ids, 4 * T, cudaMemcpyHostToDevice), "d");
         ck(cudaMalloc(&dtok, 4 * T), "t"); ck(cudaMemcpy(dtok, ids, 4 * T, cudaMemcpyHostToDevice), "t");
         k::quantize_q8_1_rows(dx, T, N, dxq, nullptr);
+        // NVFP4_BENCH=<it>: time the call instead of comparing (one expert, T rows, weights resident)
+        if (const char* iters = std::getenv("NVFP4_BENCH")) {
+            const int n = std::atoi(iters);
+            for (int w = 0; w < 5; ++w)
+                k::native_expert_grouped(L, dptr, dstart, dng, ddst, dtok, 1, T, dxq, scr, dout, nullptr);
+            ck(cudaDeviceSynchronize(), "warm");
+            cudaEvent_t e0, e1;
+            ck(cudaEventCreate(&e0), "ev"); ck(cudaEventCreate(&e1), "ev");
+            ck(cudaEventRecord(e0), "ev");
+            for (int i = 0; i < n; ++i)
+                k::native_expert_grouped(L, dptr, dstart, dng, ddst, dtok, 1, T, dxq, scr, dout, nullptr);
+            ck(cudaEventRecord(e1), "ev");
+            ck(cudaEventSynchronize(e1), "ev");
+            float ms = 0;
+            ck(cudaEventElapsedTime(&ms, e0, e1), "ev");
+            const double per = ms / n, gb = (double) L.bytes * 1e-9;
+            std::printf("bench: %.1f us/call  %.1f GB/s of expert bytes (%d calls)\n", per * 1e3, gb / (per * 1e-3), n);
+            cudaEventDestroy(e0); cudaEventDestroy(e1);
+            for (void* p2 : {(void*) db, (void*) dx, dxq, (void*) dout, scr, (void*) dptr, (void*) dstart, (void*) dng,
+                             (void*) ddst, (void*) dtok})
+                cudaFree(p2);
+            return 0;
+        }
         k::native_expert_grouped(L, dptr, dstart, dng, ddst, dtok, 1, T, dxq, scr, dout, nullptr);
         ck(cudaDeviceSynchronize(), "run");
         std::vector<float> got((size_t) T * N);
