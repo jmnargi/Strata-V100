@@ -292,28 +292,56 @@ are coalesced the same way (a packed fragment order, as v100-skinny itself uses)
 
 ### Throughput on the V100 pair (tuning, 2026-11-10)
 
-Decode tokens/s, median of three ~350-token answers, same prompt, 2x V100-PCIE-16GB, 32K context, int8 KV, one knob at
-a time from the arm above it (the box drifts 5-10% between batches, so read the differences, not the last digit):
+Decode tokens/s, median of four warm runs of the same ~350-token answer (one discarded warm-up first: the first window
+after a load is 20% cold), 2x V100-PCIE-16GB, int8 KV, `--layer-split 16`, one knob at a time from the arm above it. The
+box drifts 5-10% between batches; read the differences, not the last digit.
 
 | arm | tok/s | |
 | --- | ---: | --- |
-| first run: Gyro-M's expert profile, 750 MiB reserve | 35.9 | |
-| this model's own profile (`--expert-profile`, saved by the engine) and a 1200 MiB reserve | 42.3 | +18% |
-| + `--pipeline-windows 2` | 41.3 | no |
-| + 8K context | 41.6 | no |
-| + `--spec 6` | 41.1 | no |
+| first run: Gyro-M's expert profile, 750 MiB VRAM reserve, no `--adapt-async` | 35.9 | |
+| this model's own profile (`--expert-profile`, learned and saved by the engine), 1200 MiB reserve | 42.3 | +18% |
 | + `STRATA_ROUTE_TAIL_SKIP=7` | 45.7 | +8% |
 | + `--resident-budget-gib 48` / `56` | 49.1 / 49.6 | +16% |
-| + `--adapt-async 1` (budget 40 / 48 / 56) | 49.4 / 55.1 / 58.8 | +17% |
-| **budget 56 + `--adapt-async 1` + `STRATA_ROUTE_TAIL_SKIP=7`** | **62.3** | **+74%** |
-| `--layer-split 14` in place of 16 | 53.9 | worse |
-| `--spec-min-p 0.6` in place of 0.5 | 56.8 | no |
+| + `--adapt-async 1` (at budget 40 / 48 / 56) | 49.4 / 55.1 / 58.8 | +17% |
+| + the MTP draft vocabulary (`tools/draft_vocab.py`, 106,299 of 248,320 ids) | 64.7 | +10% |
+| + `--spec-min-p 0.7` (acceptance 0.61 -> 0.74) and `--vram-reserve-mib 800` | **68.8** | **+92%** |
+| `--pipeline-windows 2` / 8K context / `--prefill 2048` / `--spec 6` | 63.6 / 62.8 / 60.5 / 41.1 | no |
+| `--layer-split 14` | 53.9 | worse |
 
-What each does: the profile decides which experts are resident, so a profile from another model is the largest single
-loss (the engine learns this one and saves it with `--expert-profile-save`); the RAM budget decides how many experts
-never leave RAM (56 GiB of the 56.2 GiB the pack holds, at 94 GiB of RAM); `--adapt-async` advances the adaptive tier's
-swaps between windows instead of making a window wait; `STRATA_ROUTE_TAIL_SKIP=7` skips the 7 rarest experts' tail work
-(the NVFP4 pack's routing is flat enough for it to pay here, although the default is off for NVFP4).
+The window it produces (the engine's own `STRATA_DECODE_TIMING`): 35.6 ms at 2.35 drafts a window, of which **21.75 ms is
+the expert product on VRAM hits**, 9.86 ms the GPU-reach wait, 4.38 ms host CPU, 1.6 ms the drafter and 1.4 ms the
+commit. The expert product is therefore the whole game, and a pack layout that multiplies it on the tensor cores is the
+only large win left (see below).
 
-The tuned start is `qad-service-best.json` beside the pack (`--resident-budget-gib 56 --adapt-async 1`, the saved
-profile, `STRATA_ROUTE_TAIL_SKIP=7`); the MTP drafter accepts 205-213 of 337-354 drafts at 62 tok/s.
+What each knob does: the profile decides which experts are resident, so a profile from another model is the largest
+single loss; the RAM budget decides how many experts never leave RAM (56 GiB of the 56.2 GiB the pack holds); `--adapt-async`
+advances the adaptive tier's swaps between windows instead of making a window wait; `STRATA_ROUTE_TAIL_SKIP=7` skips the 7
+rarest experts' tail work; the draft vocabulary shrinks the drafter's logits from 248k to 106k rows (so the drafter stops
+being 4 full-vocabulary passes a window); `--spec-min-p 0.7` makes the drafter fewer, surer proposals, which shortens the
+window more than it costs in tokens.
+
+#### Context: what declaring a bigger window costs
+
+The checkpoint is trained to 262,144 tokens (no rope scaling); 524,288 needs `--rope-scaling yarn --rope-scale 2`. The
+12 full-attention layers of the 48 keep a K/V row a token: 12 KB a token at int8, so the window spends VRAM that would
+otherwise hold experts, and the expert cache shrinks with it (of the 24,576 experts, the GPU cache holds):
+
+| `--max-context` | KV at int8 | experts the GPU holds | decode tok/s |
+| ---: | ---: | ---: | ---: |
+| 32,768 | 0.4 GB | 8,612 | **68.8** |
+| 131,072 | 1.6 GB | 8,090 | 63.3 |
+| 262,144 (trained length) | 3.1 GB | 7,389 | 57.8 |
+| 524,288 (yarn 2) | 6.3 GB | 5,992 | 53.1 |
+
+Declare the window the work needs: 262,144 costs 16% of decode against 32,768, and 524,288 costs 23%.
+
+#### The QPN2 kernel in the engine (measured, off)
+
+`STRATA_EXPERT_QPN2` first stalled the window (see above). The cause was the *PCIe plan*: the engine calls
+`native_expert_grouped` twice per layer, once for the experts in VRAM (`grid_groups` 0) and once for those that must be
+read from the pinned RAM arena (`grid_groups` > 0), and a lane's 8-byte reads scatter across 32 rows over PCIe. With the
+kernel gated to the VRAM plan it serves, and the stall is gone - but it is **slower end to end on this pack**: 62.2
+tokens/s against the W4A8 kernels' 68.8 (and 53.5 with each warp's K slice made contiguous). The harness's 533 vs 698 us
+on a 60-group window does not survive the engine's per-layer 10-group calls, where the W4A8 `dp4a` kernels' decode-once
+loop is the better shape. It stays opt-in and off; a faster expert product here needs a pack in the kernel's fragment
+order, not a repack of the current one.

@@ -5257,7 +5257,12 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
     static const bool qpn2_ok = qpn2_env != nullptr && qpn2_env[0] != '\0' && std::strcmp(qpn2_env, "0") != 0;
     static const bool qpn2_gu_on = qpn2_ok && (std::strstr(qpn2_env, "down") == nullptr || std::strstr(qpn2_env, "gu") != nullptr);
     static const bool qpn2_dn_on = qpn2_ok && (std::strstr(qpn2_env, "gu") == nullptr || std::strstr(qpn2_env, "down") != nullptr);
-    const bool qpn2 = qpn2_ok && !g_grouped_v1 && g_exp_phase == 0 && qpn2_nvfp4_supported(L, cap_entries);
+    // The VRAM plan (grid_groups 0) is where the W4A16 kernel pays: its weights are already on the card.  The PCIe
+    // plan (grid_groups > 0) serves groups whose experts are NOT in the VRAM cache - those blobs come from the pinned
+    // RAM arena over PCIe, and a lane's 8-byte reads scatter across 32 rows there (the default kernels read each row
+    // coalesced), which stalls the window.  It keeps the default kernels.
+    const bool qpn2 = qpn2_ok && !g_grouped_v1 && g_exp_phase == 0 && grid_groups == 0 &&
+                      qpn2_nvfp4_supported(L, cap_entries);
     static const bool v2 = [] { const char* v = std::getenv("STRATA_EXPERT_V2"); return v && v[0] == '1'; }();
     if (v2 && L.gu_type == 21 && L.d_type == 20 && L.n_embd == 2560 && L.n_ff == 640) {   // S26: see s26_gu_l_kernel
         // S26 STRATA_TSUM=1: the sums as one transposed butterfly per warp (s26_tsum.cuh; bitwise the same values)
