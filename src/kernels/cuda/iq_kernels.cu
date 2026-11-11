@@ -4358,8 +4358,9 @@ void launch_down(int64_t cap_groups, cudaStream_t s, const unsigned long long* g
         native_down_pair_kernel<TD><<<pair_grid, 256, 0, s>>>(grp_ptr, grp_start, n_groups, ent_dst, hq, L, out);
     } else {
         const bool sub_down = !g_no_sub16_gu && ((TD != 144 && TD != 146) || g_tq_sub8);
+        // Match the kernel's sub-warp rows, including NVFP4's 32-row path.
         const int rows = (L.n_ff == 640 && sub_down)
-                             ? ((TD == 20 || TD == 144 || TD == 146) ? 32 : (TD == 42 ? 16 : 8)) : 8;
+                             ? ((TD == 20 || TD == 40 || TD == 144 || TD == 146) ? 32 : (TD == 42 ? 16 : 8)) : 8;
         const dim3 grid((unsigned) ((L.n_embd + rows - 1) / rows), (unsigned) cap_groups);
         if constexpr (TD == 144 || TD == 146) {
             if (!sub_down) {

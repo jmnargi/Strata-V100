@@ -415,3 +415,49 @@ The updated default served `17` for 9 + 8, a correct Python string reversal, and
 as did the new odd-length CPU row-range check. The changed CUDA source compiled
 for sm_70 and its shared integer-kernel source compiled for HIP gfx1100; no AMD
 runtime, other GPU generation, vision or filled-524K-context test was run.
+
+### NVFP4 down launch correction (second pass, 2026-11-11)
+
+The default NVFP4 down kernel handles 32 output rows per block when the expert's
+hidden width is 640. Its launcher still divided the output width by 8. For this
+model's 2560 output rows it launched 320 blocks per expert group instead of 80.
+The excess blocks did no dot product, but still copied the hidden activations
+into shared memory and synchronized. Nsight Systems confirmed the 320-block
+launch before the fix and the 80-block launch after it.
+
+The launcher now includes NVFP4 in the existing 32-row dispatch rule. No new
+kernel, switch, allocation or numerical operation is needed. Other formats and
+the full-warp fallback keep their launch sizes.
+
+On a Tesla V100-PCIE-16GB at 175 W, ten distinct experts, fused gate/up enabled,
+1000 calls per sample, five interleaved old/new samples:
+
+| Rows per expert | Whole expert before µs | After µs |
+| --- | ---: | ---: |
+| 1 | 73.0 | 67.7 |
+| 2 | 78.3 | 73.1 |
+| 4 | 94.4 | 85.3 |
+| 8 | 164.5 | 149.1 |
+
+These are medians for the whole expert, not just down. The six-expert GPU
+reference check still reported 1.157% worst error. All five focused grouped/IQ
+regression tests passed. CUDA sm_70 and HIP gfx1100 compilation passed; no AMD
+runtime measurement was made.
+
+Serving used the unchanged 524288-context, int8-KV configuration above, with
+`STRATA_DECODE_TIMING=1` in both arms. Each start used a copy of the same expert
+profile. A-B-A-B, eight warm replies per arm, gave:
+
+| Batch | Before tok/s | After tok/s |
+| --- | ---: | ---: |
+| first | 56.35 | 56.05 |
+| repeated | 55.40 | 56.05 |
+
+All 16 paired reply hashes matched, with the same token and draft counts. The
+median paired decode-time speedup was 1.26%; 12 of 16 pairs were faster. Pooled
+throughput medians were 56.10 before and 56.05 after, so this does not establish a
+large or stable whole-service throughput increase. The repeat batch's engine
+clock measured 0.37–0.53 ms less per verify window. The robust result is removal
+of the excess blocks and 7–10% less whole-expert time in the isolated comparison.
+The model, context, KV format and size, sampling, routing and drafting settings
+were not changed.
