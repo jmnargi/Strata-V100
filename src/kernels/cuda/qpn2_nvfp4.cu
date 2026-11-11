@@ -134,11 +134,11 @@ __global__ void __launch_bounds__(32 * QPN2_SPLITK) qpn2_nvfp4_kernel(
         const uint8_t* wr = blob + (GU ? (is_up ? L.up_off : 0) : L.down_off) + (size_t) (row0 + bcol) * row_bytes;
         for (int s = warp; s < SB; s += QPN2_SPLITK) {
             const uint8_t* bp = wr + (size_t) s * 36;
-            const unsigned d4 = *reinterpret_cast<const unsigned*>(bp);   // the block's four UE4M3 scale bytes
+            const unsigned d4 = __ldcs(reinterpret_cast<const unsigned*>(bp));   // the block's four UE4M3 scale bytes
 #pragma unroll
             for (int j = 0; j < 4; ++j) {
-                const unsigned w0 = *reinterpret_cast<const unsigned*>(bp + 4 + 8 * j);
-                const unsigned w1 = *reinterpret_cast<const unsigned*>(bp + 8 + 8 * j);
+                const unsigned w0 = __ldcs(reinterpret_cast<const unsigned*>(bp + 4 + 8 * j));   // no reuse: streaming
+                const unsigned w1 = __ldcs(reinterpret_cast<const unsigned*>(bp + 8 + 8 * j));
                 const half sc = ue4m3_to_half((d4 >> (8 * j)) & 0xFFu);
                 half2 b[8];
                 qpn2_b(w0, w1, __halves2half2(sc, sc), b);

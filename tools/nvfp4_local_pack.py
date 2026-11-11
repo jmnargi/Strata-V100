@@ -1,4 +1,8 @@
-"""tools/nvfp4_local_pack.py - NVIDIA's Qwen3.8-Flash-Next-FP4-Local (ModelOpt, QAD) -> files Strata can pack.
+"""tools/nvfp4_local_pack.py - a ModelOpt Qwen3.8-Flash-Next NVFP4 checkpoint (QAD) -> files Strata can pack.
+
+Written for NVIDIA's Qwen3.8-Flash-Next-FP4-Local, and it also takes local-inference-lab's
+Qwen3.8-Flash-Next-NVFP4 (see docs/NVFP4.md): plain `weight_scale` matrices instead of the CSF stream pair, F8_E4M3
+PLE scales, an MXFP8 MTP head, and the `hybrid-main-*.safetensors` overlay its `HYBRID.json` describes.
 
     python tools/nvfp4_local_pack.py convert --model <nvidia/Qwen3.8-Flash-Next-FP4-Local dir> --outfile <model.gguf>
     python tools/nvfp4_local_pack.py ple     --model <same dir> --out <ple-nvfp4.gguf>
@@ -10,12 +14,13 @@
 Nothing of NVIDIA's weights is shipped: the user downloads the checkpoint from NVIDIA's repository and this runs
 locally. What the checkpoint stores, and what is done with it:
 
-  * routed experts: NVFP4 (E2M1 codes, E4M3 scale per 16 values, F32 weight_scale_2). The block scales are stored
-    in NVIDIA's "CSF" form (config `weight_scale_encoding: "csf"`, codec byte-window4-fixed-stream-u24-exceptions/1):
-    per tensor a `.nvfp4_csf_fixed` U8 stream and a `.nvfp4_csf_exceptions` U32 stream. They are decoded here to the
-    plain E4M3 matrix (the format is documented by vLLM's loader, PR 60646, and flashinfer's b12x decoder, both
-    Apache-2.0; this is a fresh implementation of that description), and from there the ordinary ModelOpt NVFP4
-    repack of tools/nvfp4_convert.py applies, bit for bit.
+  * routed experts: NVFP4 (E2M1 codes, E4M3 scale per 16 values, F32 weight_scale_2). In NVIDIA's checkpoint the block
+    scales are stored in the "CSF" form (config `weight_scale_encoding: "csf"`, codec
+    byte-window4-fixed-stream-u24-exceptions/1): per tensor a `.nvfp4_csf_fixed` U8 stream and a
+    `.nvfp4_csf_exceptions` U32 stream, decoded here to the plain E4M3 matrix (the format is documented by vLLM's
+    loader, PR 60646, and flashinfer's b12x decoder, both Apache-2.0; this is a fresh implementation of that
+    description). A QAD export keeps that plain matrix as the ordinary `.weight_scale` tensor instead. From either
+    form the ordinary ModelOpt NVFP4 repack of tools/nvfp4_convert.py applies, bit for bit.
   * attention, GDN projections, shared experts, indexer: MXFP8 (E4M3 values, E8M0 scale per 32 values). They are
     dequantized exactly to BF16 and then take the type policy of tools/nvfp4_convert.py (Q8_0 for the big ones,
     BF16 for the small projections the BF16 kernels read). Q8_0 has the same 32-value blocks; the added error is
