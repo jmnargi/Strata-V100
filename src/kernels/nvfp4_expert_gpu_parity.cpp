@@ -94,6 +94,20 @@ int main(int argc, char** argv) {
         if (const char* grp_env = std::getenv("NVFP4_BENCH_GROUPS")) {   // the verify window's shape: G groups x R rows
             const int G = std::atoi(grp_env), R = std::getenv("NVFP4_BENCH_ROWS") ? std::atoi(std::getenv("NVFP4_BENCH_ROWS")) : 6;
             std::vector<unsigned long long> ptrs(G, ptr);
+            uint8_t* dbg = nullptr;
+            if (std::getenv("NVFP4_BENCH_DISTINCT")) {   // distinct experts from the file, as the engine's plan has
+                ck(cudaMalloc(&dbg, (size_t) G * L.bytes), "dbg");
+                std::vector<uint8_t> all((size_t) G * L.bytes);
+                for (int g = 0; g < G; ++g) {
+                    const int layer = g / 8, e = g % 8;
+                    f.seekg((std::streamoff) (layer * layer_bytes + (size_t) e * L.bytes));
+                    if (!f.read((char*) all.data() + (size_t) g * L.bytes, (std::streamsize) L.bytes)) {
+                        std::printf("cannot read expert %d/%d\n", layer, e); return 2;
+                    }
+                }
+                ck(cudaMemcpy(dbg, all.data(), all.size(), cudaMemcpyHostToDevice), "dbg");
+                for (int g = 0; g < G; ++g) ptrs[g] = (unsigned long long) (dbg + (size_t) g * L.bytes);
+            }
             std::vector<int32_t> st(G + 1), dst(G * R), tok(G * R);
             for (int g = 0; g <= G; ++g) st[g] = g * R;
             for (int i = 0; i < G * R; ++i) { dst[i] = i % R; tok[i] = i % R; }
@@ -106,6 +120,18 @@ int main(int argc, char** argv) {
             ck(cudaMalloc(&scr2, k::native_expert_scratch_bytes(G * R, FF)), "scr2");
             const int ngv = G;
             int32_t* dngv; ck(cudaMalloc(&dngv, 4), "dngv"); ck(cudaMemcpy(dngv, &ngv, 4, cudaMemcpyHostToDevice), "dngv");
+            if (std::getenv("NVFP4_BENCH_GRAPH")) {      // the engine's verify window: captured, then replayed
+                cudaGraph_t graph = nullptr;
+                ck(cudaStreamBeginCapture(cudaStreamPerThread, cudaStreamCaptureModeThreadLocal), "capture");
+                k::native_expert_grouped(L, gp, gs, dngv, gd, gt, G, G * R, dxq, scr2, dout, (void*) cudaStreamPerThread);
+                ck(cudaStreamEndCapture(cudaStreamPerThread, &graph), "capture end");
+                cudaGraphExec_t exec = nullptr;
+                ck(cudaGraphInstantiate(&exec, graph, 0), "instantiate");
+                ck(cudaGraphLaunch(exec, cudaStreamPerThread), "graph launch");
+                ck(cudaStreamSynchronize(cudaStreamPerThread), "graph sync");
+                std::printf("graph: 1 captured window replayed OK (%d groups x %d rows)\n", G, R);
+                return 0;
+            }
             for (int w = 0; w < 3; ++w)
                 k::native_expert_grouped(L, gp, gs, dngv, gd, gt, G, G * R, dxq, scr2, dout, nullptr);
             ck(cudaDeviceSynchronize(), "warm");

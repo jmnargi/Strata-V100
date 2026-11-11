@@ -289,3 +289,31 @@ pack the engine **stalls the verify window** with the switch on (`verify: timed 
 hand-off), because a lane's 8-byte weight reads scatter across rows where the default kernels read each row coalesced,
 and the experts below the budget are streamed.  It therefore stays opt-in and is not for serving until its weight reads
 are coalesced the same way (a packed fragment order, as v100-skinny itself uses).
+
+### Throughput on the V100 pair (tuning, 2026-11-10)
+
+Decode tokens/s, median of three ~350-token answers, same prompt, 2x V100-PCIE-16GB, 32K context, int8 KV, one knob at
+a time from the arm above it (the box drifts 5-10% between batches, so read the differences, not the last digit):
+
+| arm | tok/s | |
+| --- | ---: | --- |
+| first run: Gyro-M's expert profile, 750 MiB reserve | 35.9 | |
+| this model's own profile (`--expert-profile`, saved by the engine) and a 1200 MiB reserve | 42.3 | +18% |
+| + `--pipeline-windows 2` | 41.3 | no |
+| + 8K context | 41.6 | no |
+| + `--spec 6` | 41.1 | no |
+| + `STRATA_ROUTE_TAIL_SKIP=7` | 45.7 | +8% |
+| + `--resident-budget-gib 48` / `56` | 49.1 / 49.6 | +16% |
+| + `--adapt-async 1` (budget 40 / 48 / 56) | 49.4 / 55.1 / 58.8 | +17% |
+| **budget 56 + `--adapt-async 1` + `STRATA_ROUTE_TAIL_SKIP=7`** | **62.3** | **+74%** |
+| `--layer-split 14` in place of 16 | 53.9 | worse |
+| `--spec-min-p 0.6` in place of 0.5 | 56.8 | no |
+
+What each does: the profile decides which experts are resident, so a profile from another model is the largest single
+loss (the engine learns this one and saves it with `--expert-profile-save`); the RAM budget decides how many experts
+never leave RAM (56 GiB of the 56.2 GiB the pack holds, at 94 GiB of RAM); `--adapt-async` advances the adaptive tier's
+swaps between windows instead of making a window wait; `STRATA_ROUTE_TAIL_SKIP=7` skips the 7 rarest experts' tail work
+(the NVFP4 pack's routing is flat enough for it to pay here, although the default is off for NVFP4).
+
+The tuned start is `qad-service-best.json` beside the pack (`--resident-budget-gib 56 --adapt-async 1`, the saved
+profile, `STRATA_ROUTE_TAIL_SKIP=7`); the MTP drafter accepts 205-213 of 337-354 drafts at 62 tok/s.
