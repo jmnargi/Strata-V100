@@ -179,6 +179,94 @@ context write them. The tier size is manual for now (`--peer-reserve-mib`,
 `--peer-slots`); automatic sizing on small cards wants the buffer lending of
 #216 and is a follow-up.
 
+### Primary-only prefill with two-GPU decode
+
+`--peer-prefill-primary` is an opt-in CUDA serving mode. It keeps every prompt
+row on the primary card, including short prompts read through verify windows.
+During generation, the peer card computes its resident routed experts again.
+Attention, dense weights, the draft layer and KV stay on the primary.
+
+Add these flags to the existing model and expert-profile arguments:
+
+```text
+--peer-device 1 --peer-prefill-primary --kv-grow
+```
+
+The server also accepts `"peer_prefill_primary": true` in the configuration, or
+`"env": {"STRATA_PEER_PREFILL_PRIMARY": "1"}`. Keep `--peer-device 1` and
+`--kv-grow` in `"args"` with either form. Zero leaves the environment option
+off; it does not cancel an explicit flag or a true configuration value.
+The mode refuses a positive `--peer-prefill-rows`; zero and the default auto
+value become primary-only prefill.
+
+Put the faster-linked card first in `"gpu"`. For this fork's V100 pair,
+`"gpu": [1, 0]` means physical GPU1 (PCIe x16) reads prompts and physical GPU0
+(PCIe x4) is the decode expert tier. The peer number is its position in that
+list, not its physical index. Remove `--layer-split` and `"layer_split"`:
+this is a peer tier, not a layer split.
+
+This mode requires CUDA VMM, GPU-only elastic KV, an expert profile, an enabled
+expert cache and **all experts in RAM**. It refuses resident low-RAM or mapped
+expert modes, batch inference, remote/helper caches and `--vram-elastic`.
+It does not change the model, KV type or logical context limit. Physical KV
+memory grows with the conversation; the primary expert cache gives it room.
+
+Lazy GPU vision can stay enabled:
+
+```json
+"vision": {
+  "gpu": true,
+  "lazy": true,
+  "idle_s": 900,
+  "vram_mib": [1700, 600]
+}
+```
+
+Keep the existing projector and vocabulary-model paths in that section.
+Reserve values follow the configured order: primary, then peer. The first
+image releases expert-cache backing on both cards before loading the encoder.
+After the image idle interval, the encoder unloads and both caches reclaim
+their available backing. A released expert is a CPU miss until restored;
+no route may use an unmapped slot. The peer cache uses 64 MiB segments only
+in this mode. An ordinary peer tier keeps its original allocation behavior.
+
+The request log reports `primary-only prefill: peer entries 0` and a separate
+decode peer-entry count. This checks routing, not speed. A peer tier has its
+own transfer and synchronization costs, so compare prompt time and sustained
+decode on the same workload before making it the daily default.
+
+Generated tokens differ slightly from the layer-split service for two reasons.
+The route tail skip (`STRATA_ROUTE_TAIL_SKIP`) is off during generation here,
+because a peer-resident expert is no miss and skipping it would discard work
+the peer can do. Prompt reads keep the engine default, since they run on the
+primary alone. The peer also computes with its own grouping, though each
+expert's rows are bit-identical to the primary's kernels.
+
+**Measured on two Tesla V100-PCIE-16GB** (GPU0 on a PCIe 3.0 x4 slot, GPU1
+on x16), 94 GiB RAM, the QAD NVFP4 pack, 524288 context, int8 KV, yarn 2,
+`--vram-reserve-mib 800`, an identical frozen expert profile copy per arm,
+greedy sampling and 512-token replies. Arms ran interleaved A-B-A-B; each
+value is the mean of four samples, one per arm and stage, and the spread
+between repeats was under 1% for prefill and under 8% for decode.
+
+| Prompt tokens | Layer split, prefill | Primary-only, prefill | Layer split, decode | Primary-only, decode |
+|---:|---:|---:|---:|---:|
+| 2,047 | 272.5 tok/s | 389.3 tok/s (+42.9%) | 56.4 tok/s | 49.0 tok/s (-13.1%) |
+| 8,191 | 810.4 | 1,365.8 (+68.6%) | 59.4 | 52.9 (-10.9%) |
+| 32,767 | 1,295.5 | 1,415.9 (+9.3%) | 56.4 | 54.5 (-3.4%) |
+
+The read itself was 7,512 / 10,110 / 25,285 ms with the layer split and
+5,254 / 5,986 / 23,128 ms with primary-only prefill. The gain is largest for
+the short and mid reads an agentic turn makes: the layer split hands every
+pipeline stage a serial turn, and this mode never does. The peer holds 5,689
+experts to the primary's 2,738 (8,427 of 24,576 on the cards); the request log
+shows `peer entries 0` during the read and about 45% of decode entries on the
+peer. Decode pays for the tier's per-window launches and host waits, so a
+workload that mostly generates should stay on the layer split, or on one card.
+This measured one model pack on one machine; measure your own before switching.
+
+
+
 ## The resident RAM mode with the helper caches
 
 `--resident-experts` (the low-RAM mode) works with the helper caches: the

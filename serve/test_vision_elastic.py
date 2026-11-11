@@ -119,5 +119,30 @@ class Elastic(unittest.TestCase):
         self.assertEqual((v.elastic_mib, v.elastic_idle_s), (2048, 120.0))
 
 
+class LazyPeerPrefill(unittest.TestCase):
+    """Text requests must leave the lazy encoder unloaded in the primary-only prefill configuration."""
+
+    def setUp(self):
+        self.tok = ByteTokenizer()
+        self.engine = VramEngine(self.tok)
+        self.engine.loaded = True
+        self.vision = ElasticVision(tempfile.mkdtemp(), elastic=False)
+        self.vision.lazy = True
+        self.vision.vram_mib = [1700, 600]
+        self.svc = Service(self.engine, self.tok, ChatTemplate(ROOT / "serve/chat_template.jinja"), vision=self.vision)
+        self.svc.gpu_indices = [1, 0]                   # the config's order: x16 primary, then the peer
+        self.addCleanup(self.drop_embeddings)
+
+    def drop_embeddings(self):
+        path = getattr(getattr(self.svc, "embeddings", None), "path", None)
+        if path is not None:
+            path.unlink(missing_ok=True)
+
+    def test_text_leaves_the_lazy_encoder_alone(self):
+        self.svc.prepare([{"role": "user", "content": [{"type": "text", "text": "hello"}]}], None, {})
+        self.assertEqual((self.vision.starts, self.engine.calls), (0, []))
+        self.assertFalse(self.vision.up)
+
+
 if __name__ == "__main__":
     unittest.main()

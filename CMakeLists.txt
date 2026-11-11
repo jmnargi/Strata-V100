@@ -665,6 +665,14 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     add_test(NAME expert_profile_version_test COMMAND expert_profile_version_test)
     set_tests_properties(expert_profile_version_test PROPERTIES TIMEOUT 60)
   endif()
+  # the peer tier's VRAM handoff (--peer-prefill-primary, lazy vision): a pending refill at a shrink, the restore,
+  # an empty cache and a refused reserve - every resident row checked byte for byte against its source (2 GPUs)
+  if(STRATA_BUILD_TESTS AND STRATA_ENABLE_CUDA)
+    add_executable(peer_resize_test tests/core/peer_resize_test.cpp)
+    target_link_libraries(peer_resize_test PRIVATE strata_engine)
+    add_test(NAME peer_resize_test COMMAND peer_resize_test)
+    set_tests_properties(peer_resize_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+  endif()
   if(STRATA_BUILD_TESTS AND STRATA_NATIVE_EXPERTS)
     # native_experts.txt v2-v4 (the real packs' copies and the per-role shard column) and the arena filled from
     # synthetic GGUF shards at the real expert dimensions

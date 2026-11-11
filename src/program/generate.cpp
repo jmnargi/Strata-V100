@@ -605,6 +605,7 @@ struct Options {
     /// there, `peer_slots` caps its size (0 = as many as fit), `peer_adapt_swaps` per adaptive round
     /// (-1 = adapt_swaps).
     int peer_device = -1;
+    bool peer_prefill_primary = false;   ///< opt-in: primary-only prompt work, resizable peer decode cache
     int peer_reserve_mib = 600;
     int64_t peer_slots = 0;
     int peer_adapt_swaps = -1;
@@ -1066,6 +1067,9 @@ void usage() {
                  "  --peer-adapt-swaps N  peer cache swaps per adaptation step (default: --adapt-swaps)\n"
                  "  --peer-prefill-rows N  prompt rows per layer the peer computes (default half of chunk x top-k;\n"
                  "                       0 = the prompt path stays on the primary)\n"
+                 "  --peer-prefill-primary  primary-only prefill, peer-assisted decode with elastic KV and lazy vision\n"
+                 "                       (CUDA, --serve --peer-device N --kv-grow, full-RAM arena; no layer split).\n"
+                 "                       STRATA_PEER_PREFILL_PRIMARY=1 also; GPU order chooses the primary.\n"
                  "  --expert-cache-per-layer  R4.2g: give each layer its OWN slots instead of letting the first\n"
                  "                       position take all of them.  The default policy fills in arrival order\n"
                  "                       from one shared counter, so 256 slots went to ~26 layers of position 0\n"
@@ -2913,6 +2917,7 @@ int main(int argc, char** argv) {
         else if (a == "--peer-slots") o.peer_slots = std::atoll(next("--peer-slots"));
         else if (a == "--peer-adapt-swaps") o.peer_adapt_swaps = std::atoi(next("--peer-adapt-swaps"));
         else if (a == "--peer-prefill-rows") o.peer_prefill_rows = std::atoll(next("--peer-prefill-rows"));
+        else if (a == "--peer-prefill-primary") o.peer_prefill_primary = true;
         else if (a == "--no-hit-poke") o.no_hit_poke = true;
         else if (a == "--expert-profile") o.expert_profile = next("--expert-profile");
         else if (a == "--expert-profile-save") o.expert_profile_save = next("--expert-profile-save");
@@ -3042,6 +3047,8 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+    if (const char* v = std::getenv("STRATA_PEER_PREFILL_PRIMARY"); v != nullptr && std::atoi(v) != 0)
+        o.peer_prefill_primary = true;
     strata::core::set_peer_portable(o.peer_device >= 1);   // multi-GPU: the Portable flag on mapped host buffers only with a peer device (before any allocation)
     {   // the RAM guard (parking, session save/restore): --memory-limit-mib, else STRATA_MEMORY_LIMIT_MIB, else none
         int64_t mib = o.memory_limit_mib;
@@ -3510,6 +3517,30 @@ int main(int argc, char** argv) {
     if (o.remote_expert_opt && !o.serve) {
         std::fprintf(stderr, "strata generate: --remote-expert-opt requires --serve\n");
         return 2;
+    }
+    if (o.peer_prefill_primary) {
+#if defined(STRATA_USE_HIP) || defined(STRATA_GPU_METAL)
+        std::fprintf(stderr, "strata generate: --peer-prefill-primary requires CUDA virtual memory management\n");
+        return 2;
+#endif
+        const bool helpers = std::any_of(o.expert_cache_remote.begin(), o.expert_cache_remote.end(),
+                                         [](int n) { return n > 0; });
+        if (!o.serve || o.peer_device < 1 || primary_device != 0 || !o.layer_split.empty() ||
+            o.batch != 0 || o.vram_elastic || o.mmap_experts || o.remote_expert_opt || helpers ||
+            o.expert_profile.empty() || o.expert_cache == 0 || o.peer_prefill_rows > 0) {
+            std::fprintf(stderr, "strata generate: --peer-prefill-primary needs --serve, --peer-device >= 1, "
+                                 "--expert-profile, an expert cache and the full-RAM arena; select the primary "
+                                 "with --gpu PRIMARY,PEER. No layer split, batch, remote caches, "
+                                 "--vram-elastic or nonzero --peer-prefill-rows\n");
+            return 2;
+        }
+        int devices = 0;
+        if (cudaGetDeviceCount(&devices) != cudaSuccess || o.peer_device >= devices) {
+            (void) cudaGetLastError();
+            std::fprintf(stderr, "strata generate: --peer-prefill-primary: the peer device is not visible\n");
+            return 2;
+        }
+        o.peer_prefill_rows = 0;
     }
     // the peer tier is the second card's only user: a layer split or a remote expert cache would put a second engine
     // part (and a second copy of the same experts) on it
@@ -5313,7 +5344,12 @@ int main(int argc, char** argv) {
             const bool on = asked && vmm_all && o.kv_resident <= 0 &&
                             !o.expert_profile.empty() && !o.resident_cpu_experts && o.expert_cache != 0 && !remote &&
                             // the batch slots carve their own K/V and --vram-elastic's cache is not one VMM range
-                            o.batch == 0 && !o.vram_elastic && o.peer_device < 0;
+                            o.batch == 0 && !o.vram_elastic && (o.peer_device < 0 || o.peer_prefill_primary);
+            if (o.peer_prefill_primary && (!asked || !on)) {
+                std::fprintf(stderr, "strata generate: --peer-prefill-primary needs --kv-grow "
+                                     "(or STRATA_KV_GROW=1) and CUDA VMM on the primary GPU\n");
+                return 1;
+            }
             if (asked && !on)
                 std::fprintf(stderr, "strata generate: --kv-grow is off (a profile, the whole K/V in VRAM, every expert "
                                      "in RAM, no --batch, --vram-elastic or --peer-device, and VMM on every GPU)\n");
@@ -7065,7 +7101,7 @@ int main(int argc, char** argv) {
         }
         const auto tp0 = Clock::now();
         if (!peer.open(o.peer_device, profile, xcache, *srcp, g.n_layers, g.n_expert, o.peer_reserve_mib, o.peer_slots,
-                       err)) {
+                       err, o.peer_prefill_primary ? 64 : 0)) {
             std::fprintf(stderr, "strata generate: %s\n", err.c_str());
             return 1;
         }
@@ -7073,6 +7109,9 @@ int main(int argc, char** argv) {
                              "%lld that is %lld of %lld on the GPUs\n", o.peer_device, (long long) peer.resident(), peer.gib(),
                      std::chrono::duration<double>(Clock::now() - tp0).count(), (long long) xcache.slots(),
                      (long long) (peer.resident() + xcache.slots()), (long long) (g.n_layers * g.n_expert));
+        if (o.peer_prefill_primary)
+            std::fprintf(stderr, "strata generate: primary-only prefill on CUDA0; CUDA%d serves decode experts "
+                                 "and gives VRAM back for lazy vision\n", o.peer_device);
     }
 
     if (remote_opt && !remote_opt->init(err)) { std::fprintf(stderr, "strata generate: %s\n", err.c_str()); return 1; }
@@ -8373,7 +8412,8 @@ int main(int argc, char** argv) {
             for (; pi < c.profile->size(); ++pi) {
                 const int32_t l = (*c.profile)[pi].first, e = (*c.profile)[pi].second;
                 const size_t i = (size_t) l * (size_t) g.n_expert + (size_t) e;
-                if (host_res[i] >= 0 || lay.blob_bytes(l) > room) continue;
+                if (host_res[i] >= 0 || lay.blob_bytes(l) > room ||
+                    (o.peer_prefill_primary && peer.has(l, e))) continue;
                 const uint8_t* b = srcp->blob_stable(l, e);
                 if (b == nullptr) continue;
                 cudaMemcpyAsync(xc.device_slot((int32_t) s), b, (size_t) lay.blob_bytes(l), cudaMemcpyHostToDevice,
@@ -12339,6 +12379,10 @@ int main(int argc, char** argv) {
                     slots_all += remote_experts[(size_t) r].resident();
                     mib_all += (int64_t) (remote_experts[(size_t) r].gib() * 1024.0);
                 }
+            if (o.peer_prefill_primary && peer.valid()) {
+                slots_all += peer.resident();
+                mib_all += (int64_t) (peer.gib() * 1024.0);
+            }
             std::printf("INFO logit_bias=1 context=%lld kv=%s kv_resident=%lld expert_slots=%lld expert_cache_mib=%lld "
                         "expert_slots_primary=%lld expert_cache_primary_mib=%lld spec=%d "
                         "mtp_max=%d lookup=%d vram_free_mib=%lld cvec=%s arena_mib=%lld pool_workers=%d pcie_frac=%.2f "
@@ -12349,7 +12393,7 @@ int main(int argc, char** argv) {
                         "conversation_cache_disk_bytes=%llu conversation_cache_disk_recoveries=%llu "
                         "conversation_cache_disk_corruptions=%llu conversation_cache_keep_root=%d "
                         "conversation_cache_disk_keep_root=%d prefill_cap=%lld prefill_stages=%d stream_all_min=%lld "
-                        "prefill_pipe=%g%s prefill_only=1 engine=" STRATA_VERSION "\n",
+                        "prefill_pipe=%g%s%s prefill_only=1 engine=" STRATA_VERSION "\n",
                         (long long) o.max_context, o.kv.c_str(),
                         (long long) (g.n_qsa_layers() > 0 && ss.qsa_states[ss.qsa_primary()].kv_mode == 1
                                          ? ss.qsa_states[ss.qsa_primary()].n_slots * 4 : 0),
@@ -12373,7 +12417,9 @@ int main(int argc, char** argv) {
                         strata::prefill::Prefill::pipe_setting(),
                         o.batch > 0 ? (" batch_slots=" + std::to_string(o.batch) +
                                        " slot_cache=" + std::to_string(o.prompt_cache > 0 ? 1 : 0) +
-                                       " batch_groups=" + std::to_string(o.batch_groups)).c_str() : "");
+                                       " batch_groups=" + std::to_string(o.batch_groups)).c_str() : "",
+                        o.peer_prefill_primary ? (" peer_prefill_primary=1 peer_device=" +
+                                                  std::to_string(o.peer_device)).c_str() : "");
         }
         // issue #29: a request whose heartbeat (tokens, prompt chunks, verify windows) stops for this long is stuck on
         // a flag nobody will raise - end the engine with where it was, so the server starts it again instead of the
@@ -12490,12 +12536,14 @@ int main(int argc, char** argv) {
                     p.first_now = -1;   // laid out again at the next loan
                 }
         };
-        const int n_cache = 1 + (int) stages.size();
+        const int n_stage_cache = 1 + (int) stages.size();
+        const int n_cache = n_stage_cache + (o.peer_prefill_primary ? 1 : 0);
         auto vram_command = [&](const std::string& cmd, std::string& e) -> bool {
             // `VRAM` alone: every cache back to its full start-up size (the caches boot at full: the reserve was
             // only the sizing target).  An explicit value means "leave that much free on this GPU".
             const bool bare = cmd.find_first_not_of(' ', 4) == std::string::npos;
             std::vector<int64_t> want((size_t) n_cache, bare && !kvg_on() ? 0 : (int64_t) o.vram_reserve_mib);
+            if (o.peer_prefill_primary) want.back() = bare ? 0 : o.peer_reserve_mib;
             if (!bare) {
                 const char* q = cmd.c_str() + 4;
                 for (int k = 0; k < n_cache; ++k) {
@@ -12514,7 +12562,7 @@ int main(int argc, char** argv) {
                 e = "VRAM: not with the resident low-RAM mode (the cache holds experts RAM does not)";
                 return false;
             }
-            if (peer.valid()) { e = "VRAM: not with --peer-device"; return false; }
+            if (peer.valid() && !o.peer_prefill_primary) { e = "VRAM: not with --peer-device"; return false; }
             for (const PfPart& p : pf_parts)
                 if (!p.lent.empty()) { e = "VRAM: a prompt's loan is still out"; return false; }
             if (!ver.wait_commit(e)) return false;
@@ -12541,6 +12589,22 @@ int main(int argc, char** argv) {
                 after_slots((size_t) n_cache), full_slots((size_t) n_cache), mapped((size_t) n_cache),
                 full_bytes((size_t) n_cache), free_now((size_t) n_cache);
             for (int k = 0; k < n_cache; ++k) {
+                if (o.peer_prefill_primary && k == n_stage_cache) {
+                    before_slots[(size_t) k] = peer.slots();
+                    if (!peer.resize_reserve(want[(size_t) k], host_res.data(), e)) return false;
+                    after_slots[(size_t) k] = peer.slots();
+                    full_slots[(size_t) k] = peer.full_slots();
+                    mapped[(size_t) k] = peer.mapped_bytes();
+                    full_bytes[(size_t) k] = peer.full_bytes();
+                    const strata::core::OnDevice on_peer(peer.device());
+                    size_t free_b = 0, total_b = 0;
+                    if (cudaMemGetInfo(&free_b, &total_b) != cudaSuccess) {
+                        e = "VRAM: reading the peer's free memory failed";
+                        return false;
+                    }
+                    free_now[(size_t) k] = (int64_t) (free_b >> 20);
+                    continue;
+                }
                 CacheTurn& t = turns[(size_t) k];
                 strata::core::ExpertCache& c = *t.cache;
                 const strata::core::OnDevice on(t.dev);
@@ -14635,6 +14699,14 @@ int main(int argc, char** argv) {
             if (use_mtp && resume > 0 && reread_to <= 0) mtp.kv_restore(resume);
             tr("request", n, geni ? 1 : 0);
             req_times = ReqTimes{};
+            const int64_t peer_prompt_start = o.peer_prefill_primary ? peer.entries() : 0;
+            struct PromptPeerRestore {
+                strata::core::PeerExperts*& active;
+                strata::core::PeerExperts* saved;
+                ~PromptPeerRestore() { active = saved; }
+                void restore() { active = saved; }
+            } prompt_peer_restore{drive.d.peer, drive.d.peer};
+            if (o.peer_prefill_primary) drive.d.peer = nullptr;   // includes short reads through verify windows
             if (use_mtp) mtp.set_prompt_len(n);
             const int64_t read_from = reread_to > 0 ? 0 : resume;
             conversations.limit_reuse(read_from);
@@ -16163,6 +16235,8 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+            const int64_t peer_decode_start = o.peer_prefill_primary ? peer.entries() : 0;
+            prompt_peer_restore.restore();
             const double prompt_ms = std::chrono::duration<double, std::milli>(Clock::now() - r0).count();
             std::printf("REUSED %lld\n", (long long) resume);   // the prompt is read; the first window comes next
             std::fflush(stdout);
@@ -17714,6 +17788,11 @@ int main(int argc, char** argv) {
                              100.0 * (double) req_hits / (double) req_look,
                              (long long) req_hits, (long long) req_look, off);
             }
+            if (o.peer_prefill_primary)
+                std::fprintf(stderr, "strata serve: primary-only prefill: peer entries %lld; "
+                                     "decode on peer CUDA%d: %lld entries, %lld resident experts\n",
+                             (long long) (peer_decode_start - peer_prompt_start), peer.device(),
+                             (long long) (peer.entries() - peer_decode_start), (long long) peer.resident());
             if (drive.d.tail_experts > 0)   // STRATA_ROUTE_TAIL_SKIP, cumulative
                 std::fprintf(stderr, "strata serve: route tail skip: %lld missed experts skipped (%lld entries) since the "
                                      "start\n", (long long) drive.d.tail_experts, (long long) drive.d.tail_skipped);

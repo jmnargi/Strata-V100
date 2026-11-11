@@ -94,6 +94,9 @@ bool ck(cudaError_t e, const char* what, std::string& err) {
 PeerExperts::~PeerExperts() { close(); }
 
 void PeerExperts::close() {
+    ranked_.clear();
+    slot_layer_.clear();
+    pending_.clear();
     if (device_ < 0) return;
     {
         On on(device_);
@@ -123,8 +126,15 @@ void PeerExperts::close() {
 
 bool PeerExperts::open(int device, const std::vector<std::pair<int32_t, int32_t>>& ranked, const ExpertCache& primary,
                        ExpertSource& src, int64_t n_layers, int64_t n_expert, int reserve_mib, int64_t max_slots,
-                       std::string& err) {
+                       std::string& err, int64_t segment_mib) {
     close();
+    if (segment_mib < 0) {
+        err = "peer experts: the segment size must not be negative";
+        return false;
+    }
+    // Segmented backing for VRAM handoff: set BEFORE the open, and the segmented path wins over the global
+    // ExpertCache::set_vmm that the primary's elastic K/V turns on.  0 keeps the existing backing choice.
+    cache_.set_segment_bytes(segment_mib * 1024 * 1024);
     int count = 0;
     if (!ck(cudaGetDeviceCount(&count), "cudaGetDeviceCount", err)) return false;
     if (device < 1 || device >= count) {
@@ -210,6 +220,12 @@ bool PeerExperts::open(int device, const std::vector<std::pair<int32_t, int32_t>
     const bool opened = lay.native ? cache_.open_sized(sizes, n_layers, n_expert, err)
                                    : cache_.open((int64_t) pick.size(), n_layers, n_expert, (int64_t) lay.max_blob, err);
     if (!opened) { err = "peer experts: " + err; close(); return false; }
+    if (segment_mib > 0) {
+        // the handoff's bookkeeping, only when it was asked for: the rank order to restore from and the layer each
+        // slot was laid out for (a slot NEVER changes layer, so its blob size never changes either)
+        ranked_ = ranked;
+        slot_layer_.assign(pick.size(), -1);
+    }
     // open() zeroes the arena with cudaMemset on the legacy stream, which is not ordered against the non-blocking
     // refill stream: wait for it, or the zeroing can land on top of the fills
     if (!ck(cudaDeviceSynchronize(), "arena zeroing", err)) { close(); return false; }
@@ -227,6 +243,7 @@ bool PeerExperts::open(int device, const std::vector<std::pair<int32_t, int32_t>
             return false;
         }
         src.note_async_read(b, refill_);   // #1237
+        if (!slot_layer_.empty() && slot >= 0 && (size_t) slot < slot_layer_.size()) slot_layer_[(size_t) slot] = pr.first;
         res_[(size_t) (pr.first * n_expert + pr.second)] = slot;
     }
     if (!ck(cudaStreamSynchronize(refill_), "fill", err)) { close(); return false; }
@@ -238,6 +255,218 @@ bool PeerExperts::open(int device, const std::vector<std::pair<int32_t, int32_t>
         return false;
     }
     resident_ = (int64_t) pick.size();
+    return true;
+}
+
+void PeerExperts::recount_resident() {
+    int64_t n = 0;
+    for (const int32_t s : res_)
+        if (s >= 0) ++n;
+    resident_ = n;
+}
+
+bool PeerExperts::restore_free_slots(const int32_t* primary_res, std::string& err) {
+    const int64_t live = cache_.slots();
+    if (live <= 0 || ranked_.empty()) return true;
+    if ((int64_t) slot_layer_.size() < live) {
+        err = "peer experts: the slot-to-layer table does not cover the peer cache";
+        return false;
+    }
+    On on(device_);   // refill_ and the cache's slots are this device's: queue and sync there, not on the caller's
+    // a slot is free when no live expert claims it; every claim must also point inside the backing that is left
+    std::vector<uint8_t> used((size_t) live, 0);
+    for (int32_t& s : res_) {
+        if (s >= live) s = kNotResident;
+        else if (s >= 0) used[(size_t) s] = 1;
+    }
+    // the startup rank, per layer, so a slot only ever gets an expert whose blob is exactly its layer's size
+    std::vector<std::vector<int32_t>> cand((size_t) n_layers_);
+    for (const auto& pr : ranked_)
+        if (pr.first >= 0 && pr.first < n_layers_ && pr.second >= 0 && pr.second < n_expert_)
+            cand[(size_t) pr.first].push_back(pr.second);
+    std::vector<size_t> next((size_t) n_layers_, 0);
+    std::vector<uint8_t> picked(res_.size(), 0);
+    std::vector<std::pair<int32_t, int32_t>> fills;   // (residency index, slot): invisible until the copies land
+    const auto& lay = strata::kernels::cpu::expert_layout();
+    bool ok = true, stop = false;
+    for (int64_t s = 0; s < live && !stop; ++s) {
+        if (used[(size_t) s]) continue;
+        const int32_t layer = slot_layer_[(size_t) s];
+        if (layer < 0 || layer >= n_layers_) {
+            err = "peer experts: slot " + std::to_string(s) + " has no layer";
+            ok = false;
+            stop = true;
+            break;
+        }
+        auto& c = cand[(size_t) layer];
+        size_t& at = next[(size_t) layer];
+        const uint64_t bytes = lay.blob_bytes(layer);
+        if ((uint64_t) cache_.slot_room((int32_t) s) < bytes) {
+            err = "peer experts: slot " + std::to_string(s) + " is too small for layer " + std::to_string(layer);
+            ok = false;
+            stop = true;
+            break;
+        }
+        bool filled = false;
+        std::string skipped;   // a ranked expert the source cannot give us; the next one may still fit
+        while (at < c.size()) {
+            const int32_t e = c[at];
+            const size_t idx = (size_t) ((int64_t) layer * n_expert_ + e);
+            if (res_[idx] >= 0 || picked[idx] || (primary_res != nullptr && primary_res[idx] >= 0)) {
+                ++at;
+                continue;
+            }
+            const uint8_t* b = src_ != nullptr ? src_->blob(layer, e) : nullptr;
+            if (b == nullptr) {
+                skipped = "peer experts: no blob for layer " + std::to_string(layer) + ", expert " + std::to_string(e) +
+                          " to restore slot " + std::to_string(s);
+                ++at;
+                continue;
+            }
+            if (!cache_.fill_slot((int32_t) s, b, refill_, err, (int64_t) bytes)) {
+                err = "peer experts: restore fill failed: " + err;
+                ok = false;
+                stop = true;   // the stream may be in error: queue nothing more
+                break;
+            }
+            src_->note_async_read(b, refill_);
+            picked[idx] = 1;
+            fills.emplace_back((int32_t) idx, (int32_t) s);
+            used[(size_t) s] = 1;
+            ++at;
+            filled = true;
+            break;
+        }
+        if (!filled && !skipped.empty() && !stop) {
+            err = skipped;   // honest: the slot stays empty and this restore is partial
+            ok = false;
+        }
+    }
+    if (fills.empty()) return ok;   // nothing queued: the refill stream was already drained by the resize
+    // residency is published only after every queued copy has completed
+    std::string serr;
+    if (!ck(cudaStreamSynchronize(refill_), "restore fill", serr)) {
+        if (!err.empty()) err += "; ";
+        err += serr;
+        ok = false;
+    } else {
+        for (const auto& [idx, slot] : fills) res_[(size_t) idx] = slot;
+    }
+    return ok;
+}
+
+bool PeerExperts::resize_reserve(int64_t reserve_mib, const int32_t* primary_res, std::string& err) {
+    if (device_ < 0) {
+        err = "peer experts: no peer tier is open";
+        return false;
+    }
+    if (reserve_mib < 0) {
+        err = "peer experts: the reserve must not be negative";
+        return false;
+    }
+    if (!cache_.segmented()) {
+        err = "peer experts: the peer cache is not segmented (open it with a segment size for VRAM handoff)";
+        return false;
+    }
+    if ((int64_t) slot_layer_.size() != cache_.full_slots()) {
+        err = "peer experts: the slot-to-layer table does not cover the peer cache";
+        return false;
+    }
+    // Quiesce BOTH streams before any unmap/reuse: the verification window's peer work and the adaptive tier's
+    // queued refills.  The refill copies have landed by here, so the pending table can be published below.
+    {
+        On on(device_);
+        if (!ck(cudaStreamSynchronize(stream_), "resize: peer work", err) ||
+            !ck(cudaStreamSynchronize(refill_), "resize: pending refill", err))
+            return false;
+    }
+    const int64_t live_before = cache_.slots();
+    for (const auto& [idx, slot] : pending_)
+        if (idx >= 0 && (size_t) idx < res_.size() && slot >= 0 && slot < live_before && res_[(size_t) idx] < 0)
+            res_[(size_t) idx] = slot;
+    pending_.clear();
+    for (int32_t& s : res_)
+        if (s >= live_before) s = kNotResident;   // defensive: nothing may point past the backing
+
+    if (reserve_mib == 0) {   // idle restore: map the arena back towards its startup size, then refill the holes
+        const int64_t want = cache_.full_bytes();
+        bool ok = true;
+        if (cache_.mapped_bytes() < want) {
+            std::string gerr;
+            bool grown = false;
+            {
+                On on(device_);   // the arena's context (and the device cudaDeviceSynchronize inside grow)
+                // The arena's last segment is rounded up past full_bytes(); `grow` only maps a segment whose
+                // whole size fits in the target, so ask past that rounding - it still stops at the arena.
+                grown = cache_.grow(want + cache_.segment_bytes(), gerr);
+            }
+            if (grown && cache_.slots() < cache_.full_slots()) {
+                gerr = "the driver backed only " + std::to_string(cache_.slots()) + " of " +
+                       std::to_string(cache_.full_slots()) + " slots";
+                grown = false;
+            }
+            if (!grown) {
+                err = "peer experts: the peer cache could not be mapped back in full: " +
+                      (gerr.empty() ? std::string("the driver has no VRAM for another segment") : gerr);
+                ok = false;
+            }
+        }
+        const int64_t live = cache_.slots();
+        for (int32_t& s : res_)
+            if (s >= live) s = kNotResident;
+        std::string rerr;
+        if (!restore_free_slots(primary_res, rerr)) {
+            if (!ok) err += "; then " + rerr;
+            else err = rerr;
+            ok = false;
+        }
+        recount_resident();
+        return ok;
+    }
+
+    // positive: leave at least `reserve_mib` MiB of physical VRAM free on the peer card
+    size_t free_b = 0, total_b = 0;
+    {
+        On on(device_);
+        if (!ck(cudaMemGetInfo(&free_b, &total_b), "resize: cudaMemGetInfo", err)) return false;
+    }
+    const int64_t reserve = reserve_mib * 1024 * 1024;
+    if ((int64_t) free_b >= reserve) {
+        recount_resident();
+        return true;
+    }
+    const int64_t need = reserve - (int64_t) free_b;
+    const int64_t mapped = cache_.mapped_bytes();
+    const int64_t keep = cache_.keep_bytes_for_free(need);
+    if (keep == 0 && need > mapped) {
+        char buf[320];
+        std::snprintf(buf, sizeof buf,
+                      "peer experts: cannot leave %lld MiB free on GPU %d: the peer cache backs only %.1f MiB and "
+                      "%.1f MiB is already free", (long long) reserve_mib, device_,
+                      (double) mapped / 1048576.0, (double) free_b / 1048576.0);
+        err = buf;
+        recount_resident();
+        return false;
+    }
+    const int64_t new_live = cache_.slots_within(keep);
+    for (int32_t& s : res_)
+        if (s >= new_live) s = kNotResident;   // these slots are about to be unmapped: their experts become CPU rows
+    bool shrunk = false;
+    {
+        On on(device_);   // the arena's context (and the device cudaDeviceSynchronize inside shrink)
+        shrunk = cache_.shrink(keep, err);
+    }
+    if (!shrunk) {
+        if (err.empty()) err = "peer experts: the peer cache could not release VRAM";
+        const int64_t live = cache_.slots();
+        for (int32_t& s : res_)
+            if (s >= live) s = kNotResident;
+        recount_resident();
+        return false;
+    }
+    for (int32_t& s : res_)   // the backing shrank exactly as planned; clamp again so no path can dangle
+        if (s >= cache_.slots()) s = kNotResident;
+    recount_resident();
     return true;
 }
 
@@ -260,7 +489,10 @@ bool PeerExperts::launch(int64_t layer, const float* x, const int32_t* ids, int6
             if (kind[j] == 2 && ids[j] == ids[i]) { seen = true; break; }
         if (seen) continue;
         const int32_t slot = res_[(size_t) (layer * n_expert_ + ids[i])];
-        if (slot < 0) { err = "peer experts: an entry was planned for the peer but is not resident"; return false; }
+        if (slot < 0 || slot >= cache_.slots()) {
+            err = "peer experts: an entry was planned for the peer but is not resident";
+            return false;
+        }
         m.ptr[groups] = (unsigned long long) cache_.device_slot(slot);
         m.start[groups] = rows;
         for (int64_t j = i; j < n; ++j)
@@ -343,8 +575,9 @@ bool PeerExperts::adapt(const float* usage, const int32_t* res0, int max_swaps, 
         vict.clear();
         const float* u = usage + l * n_expert_;
         const int32_t* r0 = res0 + l * n_expert_;
-        const int32_t* r1 = res_.data() + l * n_expert_;
+        int32_t* r1 = res_.data() + l * n_expert_;
         for (int32_t e = 0; e < (int32_t) n_expert_; ++e) {
+            if (r1[e] >= cache_.slots()) r1[e] = kNotResident;   // a resize released the slot: no dangling victim
             if (r1[e] >= 0) vict.emplace_back(u[e], e);
             else if (r0[e] < 0 && u[e] >= 2.0f) cand.emplace_back(u[e], e);
         }
@@ -366,7 +599,7 @@ bool PeerExperts::adapt(const float* usage, const int32_t* res0, int max_swaps, 
         const size_t in = (size_t) (s.layer * n_expert_ + s.in), out = (size_t) (s.layer * n_expert_ + s.out);
         const int32_t slot = res_[out];
         const uint8_t* b = src_->blob(s.layer, s.in);
-        if (slot < 0 || b == nullptr) continue;
+        if (slot < 0 || slot >= cache_.slots() || b == nullptr) continue;
         if (!ck(cudaMemcpyAsync(cache_.device_slot(slot), b, (size_t) lay.blob_bytes(s.layer), cudaMemcpyHostToDevice,
                                 refill_), "refill", err))
             return false;
@@ -384,7 +617,8 @@ void PeerExperts::apply_pending(bool wait) {
         if (wait) cudaEventSynchronize(refill_ev_);
         else if (cudaEventQuery(refill_ev_) != cudaSuccess) return;
     }
-    for (const auto& [i, slot] : pending_) res_[(size_t) i] = slot;
+    for (const auto& [i, slot] : pending_)
+        if (slot >= 0 && slot < cache_.slots()) res_[(size_t) i] = slot;
     pending_.clear();
 }
 

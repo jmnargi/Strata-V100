@@ -40,21 +40,46 @@ public:
     PeerExperts& operator=(const PeerExperts&) = delete;
 
     /// Opens the tier on `device`: fills it with the first pairs of `ranked` that `primary` does not hold, as many
-    /// as fit in the card's free memory minus `reserve_mib` (`max_slots` > 0 caps the count).
+    /// as fit in the card's free memory minus `reserve_mib` (`max_slots` > 0 caps the count).  `segment_mib` > 0
+    /// lays the slots out in segments of that size (ExpertCache::set_segment_bytes, before the open), so
+    /// `resize_reserve` can hand VRAM back to another model and take it again; it takes precedence over the
+    /// global ExpertCache::set_vmm, which the primary's own cache may still use for the elastic K/V.  0 (the
+    /// default) leaves `open` exactly as it was.
     bool open(int device, const std::vector<std::pair<int32_t, int32_t>>& ranked, const ExpertCache& primary,
               ExpertSource& src, int64_t n_layers, int64_t n_expert, int reserve_mib, int64_t max_slots,
-              std::string& err);
+              std::string& err, int64_t segment_mib = 0);
     void close();
     bool valid() const { return device_ >= 0; }
     int device() const { return device_; }
 
-    /// Whether the peer holds (layer, expert) right now.
-    bool has(int64_t layer, int64_t expert) const { return res_[(size_t) (layer * n_expert_ + expert)] >= 0; }
+    /// VRAM handoff (lazy vision), opt-in and segmented caches only: quiesces the peer and any pending refill,
+    /// then resizes the slot arena through ExpertCache::shrink/grow and repairs the residency table.
+    ///
+    /// `reserve_mib` > 0: release whole segments until at least that much physical VRAM is free on the peer (a
+    /// request that even releasing every segment cannot meet fails before anything is unmapped).  `reserve_mib`
+    /// == 0: map the arena back towards its full startup size, then refill the freed slots from `ranked` (the
+    /// startup profile, in rank order) with missing experts of each slot's ORIGINAL layer, skipping those
+    /// `primary_res` (the primary's residency table, n_layers * n_expert, or null) or the peer already holds.
+    /// A slot's layer never changes, so its blob size never does.  Residency becomes visible only after its
+    /// copies complete; on a partial grow/fill the slots that did land stay routable and the call returns false
+    /// with `err`.  `has`/`launch`/`adapt` remain valid throughout: anything not resident routes to the CPU.
+    bool resize_reserve(int64_t reserve_mib, const int32_t* primary_res, std::string& err);
+    int64_t slots() const { return cache_.slots(); }            ///< slots inside the VRAM backed now
+    int64_t full_slots() const { return cache_.full_slots(); }  ///< slots the startup open laid out
+    int64_t mapped_bytes() const { return cache_.mapped_bytes(); }   ///< VRAM backing the arena now
+    int64_t full_bytes() const { return cache_.full_bytes(); }       ///< the startup arena's bytes
+
+    /// Whether the peer holds (layer, expert) right now.  A slot outside the backing left by a resize is never
+    /// resident, even if a stale table entry survived (the resize clears them; this is the second check).
+    bool has(int64_t layer, int64_t expert) const {
+        const int32_t sl = res_[(size_t) (layer * n_expert_ + expert)];
+        return sl >= 0 && sl < cache_.slots();
+    }
 
     /// The device address of (layer, expert)'s blob on the peer, or null when it is not resident.
     const uint8_t* slot_ptr(int64_t layer, int64_t expert) {
         const int32_t sl = res_[(size_t) (layer * n_expert_ + expert)];
-        return sl >= 0 ? cache_.device_slot(sl) : nullptr;
+        return sl >= 0 && sl < cache_.slots() ? cache_.device_slot(sl) : nullptr;
     }
     /// Whether the primary (device 0) and the peer can read each other's memory directly (NVLink / PCIe P2P).
     bool p2p() const { return p2p_; }
@@ -83,6 +108,12 @@ public:
     double ms_wait = 0;                               ///< host time spent in finish() waiting for the peer
 
 private:
+    /// Refills every live slot no `res_` entry points at from `ranked_`, in rank order, same layer only.  Copies
+    /// on `refill_`; publishes the residency only after the stream drained.  False with `err` when a copy could
+    /// not be queued or did not land (the slots that did land stay visible).
+    bool restore_free_slots(const int32_t* primary_res, std::string& err);
+    void recount_resident();
+
     int device_ = -1;
     bool p2p_ = false;
     int64_t n_layers_ = 0, n_expert_ = 0;
@@ -90,6 +121,8 @@ private:
     ExpertSource* src_ = nullptr;
     std::vector<int32_t> res_;                        ///< [n_layers * n_expert] -> peer slot or -1
     std::vector<std::pair<int32_t, int32_t>> pending_;   ///< (residency index, slot) once the copies land
+    std::vector<std::pair<int32_t, int32_t>> ranked_;  ///< startup profile; kept only for a segmented cache
+    std::vector<int32_t> slot_layer_;                  ///< full slot -> the layer it was laid out for
     int64_t resident_ = 0, entries_ = 0, experts_ = 0, swaps_ = 0;
     cudaStream_t stream_ = nullptr, refill_ = nullptr;
     cudaEvent_t refill_ev_ = nullptr;

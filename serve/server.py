@@ -3081,6 +3081,29 @@ def gpu_list(cfg: dict) -> list[int]:
     return [int(str(x).strip()) for x in items if str(x).strip() != ""]
 
 
+def per_gpu_reserve(base, need, gpus: int = 0) -> list[int]:
+    """One VRAM reserve per GPU, in the engine's order (the primary first, then the peer tier or each later stage):
+    the larger of a requested reserve (`base`: one number for the primary, or one per GPU) and the lazy encoder's own
+    per-GPU need (`need`), 0 where neither names one.  `gpus` pads the list to the cards the engine runs on: a peer
+    tier reports and resizes one reserve per card even though its prefill stage is one, so an encoder's single value
+    must not leave the peer's reserve out."""
+    def values(v):
+        if isinstance(v, (list, tuple)):
+            return [int(x) for x in v if isinstance(x, int) and not isinstance(x, bool)]
+        return [int(v)] if isinstance(v, int) and not isinstance(v, bool) else []
+    requested, wanted = values(base), values(need)
+    n = max(len(requested), len(wanted), int(gpus or 0), 1)
+    return [max(requested[i] if i < len(requested) else 0,
+                wanted[i] if i < len(wanted) else 0) for i in range(n)]
+
+
+def default_vision_vram_mib(cfg: dict) -> list[int]:
+    """The lazy encoder's per-GPU VRAM while it is up: [1700, 600] for two or more configured cards (the primary's
+    share first, then the peer tier's or each later stage's), [1800] for one.  A peer tier counts as two cards: the
+    engine resizes and reports one reserve per card even though its prefill has a single stage."""
+    return [1700, 600] if len(gpu_list(cfg)) > 1 or peer_prefill_primary(cfg) else [1800]
+
+
 def engine_binary(exe: str, cfg: dict | None = None) -> str:
     """The file that holds the engine's own option strings, for a feature check that reads it.  The Intel launcher
     (sycl/serve/strata-sycl.sh) is a shell script that runs its repo's STRATA_SYCL_BIN (default build-sycl-aot/strata)
@@ -3170,6 +3193,103 @@ def layer_split_of(cfg: dict) -> bool:
     return len(gpu_list(cfg)) > 1 and "--peer-device" not in cfg["args"]
 
 
+def env_nonzero(value) -> bool:
+    """The engine's parsing of a nonzero environment flag (std::atoi's: leading spaces, an optional sign and digits;
+    a value that does not begin with a number reads 0): None, "" and "0" are off; "1", "2" and "-1" are on."""
+    if value is None:
+        return False
+    m = re.match(r"\s*[+-]?\d+", str(value))
+    return bool(m) and int(m.group(0)) != 0
+
+
+def config_env(cfg: dict, name: str) -> str | None:
+    """`name` as the engine will see it: the config's "env" first, then this server's own environment (the engine is
+    started with both, the config's entry winning)."""
+    env = cfg.get("env")
+    if isinstance(env, dict) and name in env:
+        value = env[name]
+        return None if value is None else str(value)
+    return os.environ.get(name)
+
+
+PEER_PREFILL_PRIMARY_ENV = "STRATA_PEER_PREFILL_PRIMARY"    # the engine's own spelling of --peer-prefill-primary
+
+
+def arg_value(args: list, flag: str) -> str | None:
+    """The value the config's args give `flag` - its last occurrence, as the engine's own option loop reads it - or
+    None when the flag is absent.  ValueError for a flag with no value (the engine reads the next element, or
+    nothing)."""
+    positions = [i for i, a in enumerate(args) if a == flag]
+    if not positions:
+        return None
+    i = positions[-1]
+    if i + 1 >= len(args):
+        raise ValueError(f"{flag} needs a value")
+    return str(args[i + 1])
+
+
+def peer_prefill_primary(cfg: dict) -> bool:
+    """The peer tier's primary-only prefill mode (opt-in): true when the root config says "peer_prefill_primary": true,
+    the args carry --peer-prefill-primary, or the engine's environment has STRATA_PEER_PREFILL_PRIMARY nonzero.  A
+    false/absent root key and env=0 do not turn off an explicit flag or config: the mode is on when any of them asks.
+
+    The mode needs a peer tier (--peer-device N, N >= 1), refuses a layer split (the two cards' uses are exclusive)
+    and keeps every prompt row on the primary (--peer-prefill-rows 0): a positive rows request conflicts with it
+    (the engine's negative default means "half", which the mode itself turns into 0).
+    ValueError for such a config - the engine must not start a mode the server would then read differently."""
+    wanted = cfg.get("peer_prefill_primary")
+    if wanted is not None and not isinstance(wanted, bool):
+        raise ValueError(f'"peer_prefill_primary" must be true or false, not {wanted!r}')
+    args = cfg.get("args") or []
+    if not (wanted is True or "--peer-prefill-primary" in args
+            or env_nonzero(config_env(cfg, PEER_PREFILL_PRIMARY_ENV))):
+        return False
+    peer = arg_value(args, "--peer-device")
+    try:
+        peer_n = None if peer is None else int(peer.strip())
+    except ValueError:
+        peer_n = None
+    if peer_n is None or peer_n < 1:
+        raise ValueError('peer_prefill_primary needs "--peer-device N" with N >= 1 in the config\'s args (the second '
+                         "card's expert tier); it decodes across both GPUs")
+    cards = gpu_list(cfg)
+    if cards and peer_n >= len(cards):
+        raise ValueError(f'peer_prefill_primary: --peer-device {peer_n} is not one of the config\'s "gpu" cards '
+                         f"{cards} (the number is the card's position in that list, primary first)")
+    if "--layer-split" in args:
+        raise ValueError("peer_prefill_primary cannot be combined with --layer-split (the peer tier is the second "
+                         "card's use)")
+    split = cfg.get("layer_split")
+    if split is not None and not (isinstance(split, str) and split.strip().lower() in ("", "auto")):
+        raise ValueError(f'peer_prefill_primary cannot be combined with "layer_split": {split!r} (the peer tier is '
+                         "the second card's use)")
+    rows = arg_value(args, "--peer-prefill-rows")
+    if rows is not None:
+        try:
+            rows_n = int(rows.strip())
+        except ValueError:
+            raise ValueError(f"--peer-prefill-rows needs a whole number, not {rows!r}") from None
+        if rows_n > 0:                       # the engine's nonzero auto (-1) is the mode's 0; a positive share is not
+            raise ValueError("peer_prefill_primary keeps every prompt row on the primary GPU: remove "
+                             f'"--peer-prefill-rows {rows_n}" (or set it to 0)')
+    return True
+
+
+def lazy_vision_refusal(cfg: dict) -> str | None:
+    """Why the lazy image encoder cannot hand its VRAM over under this config, or None when it can.  The resident
+    low-RAM modes always refuse the engine's VRAM command; --peer-device refuses it too, unless the peer tier runs
+    peer_prefill_primary (the primary-only prefill mode answers the command with one reserve per card: primary, peer).
+    ValueError only for the peer mode's own invalid state (peer_prefill_primary)."""
+    args = cfg.get("args") or []
+    resident = next((f for f in ("--resident-experts", "--resident-cpu-experts", "--resident-budget-gib")
+                     if f in args), None)
+    if resident:
+        return f"the resident low-RAM mode ({resident})"
+    if "--peer-device" in args and not peer_prefill_primary(cfg):
+        return "--peer-device"
+    return None
+
+
 def engine_args(cfg: dict) -> list[str]:
     """The engine's arguments: the config's, and with several GPUs the layer split across them ("layer_split" in the
     config: "auto" by default, or the first layer of each later GPU's share, e.g. "18" or "16,32"; see
@@ -3192,6 +3312,13 @@ def engine_args(cfg: dict) -> list[str]:
     # opt-in: an auto split runs on the first card alone when it holds every profiled expert and the KV
     if layer_split_of(cfg) and cfg.get("split_skip_if_fits") and "--split-skip-if-fits" not in args:
         args.append("--split-skip-if-fits")
+    # opt-in: the peer tier's prompt runs on the primary GPU only (decode stays across both); an engine without the
+    # option refuses it at start, so an older build never runs a half-configured mode
+    if peer_prefill_primary(cfg):
+        if "--peer-prefill-primary" not in args:
+            args.append("--peer-prefill-primary")
+        if "--peer-prefill-rows" not in args:
+            args += ["--peer-prefill-rows", "0"]
     for key, neg in (("conversation_cache_keep_root", "--no-conversation-cache-keep-root"),
                      ("conversation_cache_disk_keep_root", "--no-conversation-cache-disk-keep-root")):
         value = cfg.get(key)
@@ -4026,6 +4153,13 @@ class Service:
         started with, a segment or more below the size it had)."""
         return self.vram_reserve if self.vram_reserve_asked else 0
 
+    def _encoder_share(self, reserve_mib):
+        """A reserve with the elastic encoder's own share added: one value per GPU when the reserve is a list (the
+        engine resizes a peer tier's two cards with two values: primary, peer), a single number otherwise."""
+        if isinstance(reserve_mib, (list, tuple)):
+            return [int(x) + self.vision.elastic_mib for x in reserve_mib]
+        return (reserve_mib or 0) + self.vision.elastic_mib
+
     def _vision_up(self):
         """The image turn's start for an elastic encoder that is not running (the caller holds self.fifo): the expert
         cache first keeps the encoder's elastic_mib of VRAM free on top of the reserve, then the encoder starts (load and
@@ -4036,7 +4170,7 @@ class Service:
             return
         if hasattr(self.engine, "vram") and self.loaded():
             try:
-                out = self.engine.vram((self._engine_reserve() or 0) + v.elastic_mib)
+                out = self.engine.vram(self._encoder_share(self._engine_reserve()))
                 self.vision_held = True
                 print(f"[strata] images: the expert cache keeps {v.elastic_mib} MiB free for the image encoder "
                       f"({out.get('expert_cache_mib')} of {out.get('expert_cache_full_mib')} MiB left)", flush=True)
@@ -4221,7 +4355,7 @@ class Service:
                 return {"status": "not loaded", "reserve_mib": reserve_mib,
                         "note": "applied when the model loads"}
             # an elastic encoder that runs keeps its VRAM on top of the asked reserve
-            out = self.engine.vram((reserve_mib or 0) + self.vision.elastic_mib if self.vision_held else reserve_mib)
+            out = self.engine.vram(self._encoder_share(reserve_mib) if self.vision_held else reserve_mib)
             self.vram_reserve, self.vram_reserve_asked = reserve_mib, True
             print(f"[strata] VRAM: {out.get('vram_free_mib')} MiB free, expert cache {out.get('expert_cache_mib')} of "
                   f"{out.get('expert_cache_full_mib')} MiB ({out.get('expert_slots')} experts)", flush=True)
@@ -4341,15 +4475,14 @@ class Service:
             raise ValueError("the lazy vision encoder takes the engine's one-request-at-a-time mode: remove "
                              '"parallel" from the config (or give the vision encoder its VRAM with POST /v1/vram)')
         need = self.vision.vram_mib
-        if not isinstance(need, (list, tuple)):
-            need = [need] if isinstance(need, int) and not isinstance(need, bool) else []
         base = self.vram_reserve
-        if isinstance(base, int) and not isinstance(base, bool):
-            base = [base]
-        elif not isinstance(base, (list, tuple)):
-            base = []
-        n = max(len(need), len(base), 1)
-        want = [max(int(base[i]) if i < len(base) else 0, int(need[i]) if i < len(need) else 0) for i in range(n)]
+        # one reserve per GPU the engine runs on: a peer tier is two even with a single prefill stage (primary, peer);
+        # replicas run one engine per group, so the group's card count, not every configured card
+        groups = getattr(self, "replica_gpu_groups", None) or []
+        gpus = len(groups[0]) if groups else len(getattr(self, "gpu_indices", []) or [])
+        if self.engine.info.get("peer_prefill_primary"):
+            gpus = max(gpus, 2)                          # a peer tier can use the default CUDA visibility, with no "gpu"
+        want = per_gpu_reserve(base, need, gpus)
         print("[strata] image request: giving " + ", ".join(f"{w} MiB" for w in want) +
               " of VRAM back per GPU and starting the vision encoder ...", flush=True)
         self.engine.vram(want)                            # the fifo is held; the engine is idle between requests
@@ -8511,10 +8644,15 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         if blocked:
             ap.error("--offline cannot be strict for this profile: " + "; ".join(blocked))
     lazy = False
+    peer_prefill = False
     if a.engine == "strata":
         if not cfg:
             ap.error("--engine strata needs --config")
         cfg = with_component_engine(cfg)
+        try:
+            peer_prefill = peer_prefill_primary(cfg)     # a conflicting config stops before the minutes-long start
+        except ValueError as e:
+            raise SystemExit(f"[strata] config {e}")
         vision = None
         # The engine's own environment. It carries the offline policy too: an engine that fetched a
         # missing shard or a plugin would break the promise the flag makes.
@@ -8541,20 +8679,17 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
                       "encoder its VRAM): the encoder starts with the model instead", flush=True)
                 vcfg["elastic"] = False
             # The lazy encoder takes its VRAM from the expert caches and gives it back through the engine's VRAM
-            # command, and the engine refuses that command with the resident low-RAM mode and with --peer-device
-            # (generate.cpp, the VRAM command).  Started anyway, the encoder finds no VRAM to take: the first image
-            # request fails with 400 and the engine's refusal, on every request after it, while /health stays ok.
-            # A config that cannot hand the VRAM over runs the encoder the plain way instead -
-            # up from the start, the expert caches sized around it at boot - which is what a config without lazy
-            # vision does.  The resident flags are read from the config's args: the engine's INFO line
+            # command, and the engine refuses that command with the resident low-RAM mode and with a plain
+            # --peer-device (generate.cpp, the VRAM command); peer_prefill_primary's engine answers it with one
+            # reserve per card (primary, peer), so lazy vision stays on there.  Started anyway, the encoder finds no
+            # VRAM to take: the first image request fails with 400 and the engine's refusal, on every request after
+            # it, while /health stays ok.  A config that cannot hand the VRAM over runs the encoder the plain way
+            # instead - up from the start, the expert caches sized around it at boot - which is what a config without
+            # lazy vision does.  The resident flags are read from the config's args: the engine's INFO line
             # reports vram_elastic but not whether the resident complement is up, and when the complement cannot be
             # pinned the engine falls back to --mmap-experts and does answer the command; that costs an encoder
             # started at boot, not a failed request.
-            cargs = cfg.get("args") or []
-            refused = next((f for f in ("--resident-experts", "--resident-cpu-experts", "--resident-budget-gib")
-                            if f in cargs), None)
-            refused = (f"the resident low-RAM mode ({refused})" if refused else
-                       "--peer-device" if "--peer-device" in cargs else None)
+            refused = lazy_vision_refusal(cfg)
             if vcfg.get("lazy") and refused:
                 vcfg["lazy"] = False
                 print(f"[strata] vision.lazy is off with {refused}: the encoder's VRAM handoff needs the engine's "
@@ -8563,7 +8698,7 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
             if vcfg.get("lazy") and "vram_mib" not in vcfg:
                 # the encoder's per-GPU VRAM while it is up: handed back from the expert caches by the VRAM command
                 # (defaults measured with this mmproj: 1430 MiB on CUDA0 + 308 MiB on CUDA1, rounded to segments)
-                vcfg["vram_mib"] = [1700, 600] if len(gpu_list(cfg)) > 1 else [1800]
+                vcfg["vram_mib"] = default_vision_vram_mib(cfg)
             vision = Vision(vcfg, log=open(cfg["log"], "a", encoding="utf-8") if cfg.get("log") else None,
                             env=vision_env(cfg, env), lazy=lazy)
         print("model unloaded; the first request loads it ..." if lazy else
@@ -8578,6 +8713,9 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         elif len(gpu_list(cfg)) > 1:
             print(f"[strata] GPUs {gpu_list(cfg)}: the later card(s) serve as the peer expert tier (--peer-device)",
                   flush=True)
+        if peer_prefill:
+            print("[strata] peer prefill: every prompt row is read on the primary GPU; decode uses both cards "
+                  "(peer_prefill_primary)", flush=True)
         # a relative "exe" is the config's cwd's: Windows' CreateProcess resolves "engine/strata.exe" against nothing
         # it is told about (WinError 2), so it is made absolute here
         if engine_component.is_reference(cfg["exe"]):      # "component:strata-engine": the engine package for this PC
@@ -8769,6 +8907,8 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
     svc.terminal_visibility_order = visible_device_order(env, cfg.get("backend")) if a.engine == "strata" else []
     svc.terminal_topology_mode = ("replicas (configured)" if a.engine == "strata" and groups
                                   else "layer split (configured)" if a.engine == "strata" and layer_split_of(cfg)
+                                  else "peer tier, primary-only prefill (configured)"
+                                  if a.engine == "strata" and peer_prefill
                                   else "single GPU or CPU" if a.engine == "strata" else "mock")
     svc.terminal_configured_split = (layer_split_value(cfg) if a.engine == "strata" and layer_split_of(cfg)
                                      else None)

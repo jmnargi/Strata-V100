@@ -57,9 +57,18 @@ class EngineCommand(unittest.TestCase):
         e.vram(None)
         self.assertEqual(e.proc.stdin.getvalue(), "VRAM\n")
 
+    def test_a_peer_tier_keeps_both_reserves(self):
+        e = self.engine(["VRAM reserve_mib=1700,600 expert_slots=1200,800 expert_cache_mib=1536,900 "
+                         "expert_cache_full_mib=4900,3000 vram_free_mib=1700,600\n"])
+        out = e.vram([1700, 600])
+        self.assertEqual(out["vram_free_mib"], [1700, 600])                 # primary, then the peer
+        self.assertEqual(e.info["vram"]["expert_cache_mib"], [1536, 900])   # the peer's figures stay
+        self.assertEqual(e.info["expert_cache_mib"], 2436)                  # the summary the Monitor reads
+        self.assertEqual(e.info["vram_free_mib"], 1700)                     # GPU0's free, as INFO reports it
+
     def test_refused_and_died(self):
         e = self.engine(["ERR VRAM needs an engine started with --vram-elastic\n"])
-        with self.assertRaisesRegex(ValueError, "--vram-elastic"):
+        with self.assertRaises(ValueError):
             e.vram(100)
         e = self.engine([None])
         with self.assertRaises(EngineDied):

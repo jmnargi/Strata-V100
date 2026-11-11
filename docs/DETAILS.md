@@ -864,7 +864,9 @@ move on a Threadripper PRO 3975WX + R9700 (14.5 ms, +0.4%, 5 pairs); no case rea
   The logical `--max-context` capacity does not change. With a layer split, each GPU stage manages its own
   K/V pools and expert cache. This option requires VMM support on each GPU, an expert profile, GPU-only K/V
   (no KV streaming), and all experts in RAM (not the resident low-RAM mode). It does not support remote experts,
-  `--batch`, `--vram-elastic`, or `--peer-device`. The engine reports when these conditions disable the option.
+  `--batch` or `--vram-elastic`. A peer tier requires the opt-in
+  [`--peer-prefill-primary` mode](SECOND_GPU.md#primary-only-prefill-with-two-gpu-decode);
+  an ordinary `--peer-device` still disables KV growth. The engine reports when these conditions disable the option.
   During an active series of requests, keep a recent K/V target of at most 65,536 cells.
   After 30 seconds without a completed request, return surplus K/V memory to the expert cache.
   The current request can still use the full logical context. Vision and reserve-pressure paths
@@ -2494,13 +2496,15 @@ split, or `[1800]` for one GPU; the defaults match this model's encoder).  After
 request the encoder stops and the VRAM goes back to the caches (its encoded pictures stay cached on disk).  The
 first picture after an idle gap answers a few seconds later, so the encoder can start again.
 
-**Lazy vision with the resident low-RAM mode or `--peer-device`:** neither path above exists there. The engine
-refuses the `VRAM` command with the resident low-RAM mode (its caches hold experts RAM does not) and with
-`--peer-device`, and GPU-only KV growth needs every expert in RAM and no `--vram-elastic`, so a resident config
-cannot have it either. Started anyway, the encoder finds no VRAM to take: the first image request answers 400
-with the engine's refusal, on every request after it, while `/health` stays ok. The launcher therefore turns
-`"lazy"` off in such a config and starts the encoder with the model, so the expert caches size around it at
-boot (the same shape as `"lazy": false`).
+**Lazy vision with a peer tier:** use [`--peer-prefill-primary`](SECOND_GPU.md#primary-only-prefill-with-two-gpu-decode)
+with `--kv-grow` and all experts in RAM. This mode hands VRAM back on both cards and restores their expert caches
+after the encoder stops. Reserve values follow the configured GPU order: primary first, peer second.
+An ordinary `--peer-device` still refuses the `VRAM` command.
+
+**Lazy vision with the resident low-RAM mode:** this remains unsupported. Its caches hold experts RAM does not,
+so the engine cannot release them for the encoder. The launcher starts the encoder with the model instead
+(`"lazy": false`), allowing the expert caches to size around it at boot. The same fallback applies to an ordinary
+peer tier without `--peer-prefill-primary`.
 
 **Lazy GPU vision with GPU-only KV growth:** Keep `"vram_elastic": false` in the main configuration.
 Set `"gpu": true`, `"lazy": true`, and `"idle_s": 900` in the `"vision"` section. The encoder loads on an

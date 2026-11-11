@@ -25,8 +25,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from serve.frontend import (ChatTemplate, literal_tags, mark_think_literals, openai_to_messages,  # noqa: E402
                             unmark_think_literals)
 from serve.server import (ANSWER_RESERVE_MIN, CTX_SLACK, ByteTokenizer, DiskStats, EngineDied, EngineNonFinite,  # noqa: E402
-                          GpuBusy, MockEngine, PP_DONE_TAIL, Service, StrataEngine, api_key_of, engine_args,
-                          key_matches, layer_split_value, parse_disk_line, prompt_progress, prompt_tokens_seen,
+                          GpuBusy, MockEngine, PP_DONE_TAIL, Service, StrataEngine, api_key_of,
+                          engine_args, env_nonzero, key_matches, layer_split_value, lazy_vision_refusal,
+                          parse_disk_line, peer_prefill_primary, per_gpu_reserve, prompt_progress, prompt_tokens_seen,
                           request_stats, request_timings, serve, start_failure_hint)
 from types import SimpleNamespace  # noqa: E402
 
@@ -2346,6 +2347,75 @@ class PeerDevice(unittest.TestCase):
         from serve.server import child_env
         env = child_env({"args": ["--peer-device", "1"], "gpu": [0, 1]})
         self.assertEqual(env["CUDA_VISIBLE_DEVICES"], "0,1")
+
+
+class PeerPrefillPrimary(unittest.TestCase):
+    """The peer tier's primary-only prefill mode (opt-in): the root key, the engine flag and the config environment
+    ask for it, and it leaves the default and an ordinary peer tier's engine arguments alone.  It needs a peer tier
+    (--peer-device N, N >= 1), refuses a layer split, and keeps every prompt row on the primary (rows 0)."""
+
+    BASE = ["--native", "x", "--peer-device", "1"]
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {"STRATA_PEER_PREFILL_PRIMARY": "0"})   # a clean, off ambient value
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def cfg(self, **kw):
+        cfg = {"args": list(self.BASE), "gpu": [1, 0]}
+        cfg.update(kw)
+        return cfg
+
+
+    def test_the_args_flag_and_the_environment_opt_in(self):
+        args = self.BASE + ["--peer-prefill-primary"]
+        self.assertTrue(peer_prefill_primary({"args": list(args)}))
+        envcfg = self.cfg(env={"STRATA_PEER_PREFILL_PRIMARY": "1"})
+        self.assertTrue(peer_prefill_primary(envcfg))
+        with mock.patch.dict(os.environ, {"STRATA_PEER_PREFILL_PRIMARY": "1"}):   # the server's own environment
+            self.assertTrue(peer_prefill_primary(self.cfg()))
+        for value, on in ((None, False), ("", False), ("0", False), ("00", False), ("no", False),
+                          ("1", True), ("2", True), ("-1", True), (" 3", True)):
+            self.assertEqual(env_nonzero(value), on, value)
+
+    def test_env_zero_does_not_turn_off_an_explicit_request(self):
+        off = {"STRATA_PEER_PREFILL_PRIMARY": "0"}
+        self.assertTrue(peer_prefill_primary(self.cfg(peer_prefill_primary=True, env=off)))
+        self.assertTrue(peer_prefill_primary({**self.cfg(env=off), "args": self.BASE + ["--peer-prefill-primary"]}))
+        self.assertFalse(peer_prefill_primary(self.cfg(env=off)))       # no root key, flag or env on: off
+
+    def test_invalid_states_are_refused(self):
+        invalid = [
+            {"peer_prefill_primary": True, "args": ["--native", "x"], "gpu": [0, 1]},
+            self.cfg(peer_prefill_primary=True, args=["--native", "x", "--peer-device", "0"]),
+            self.cfg(peer_prefill_primary=True, gpu=[1]),
+            self.cfg(peer_prefill_primary=True, args=self.BASE + ["--layer-split", "auto"]),
+            self.cfg(peer_prefill_primary=True, layer_split="24"),
+            self.cfg(peer_prefill_primary=True, args=self.BASE + ["--peer-prefill-rows", "8"]),
+            self.cfg(peer_prefill_primary="yes"),
+            {"args": ["--native", "x", "--peer-prefill-primary"]},
+        ]
+        for cfg in invalid:
+            with self.subTest(cfg=cfg), self.assertRaises(ValueError):
+                engine_args(cfg)
+        for rows in ("0", "-1"):
+            self.assertTrue(peer_prefill_primary(self.cfg(
+                peer_prefill_primary=True, args=self.BASE + ["--peer-prefill-rows", rows])))
+
+    def test_lazy_vision_is_allowed_only_in_the_mode(self):
+        self.assertIsNotNone(lazy_vision_refusal({"args": list(self.BASE)}))
+        self.assertIsNone(lazy_vision_refusal(self.cfg(peer_prefill_primary=True)))
+        for flag in ("--resident-experts", "--resident-cpu-experts", "--resident-budget-gib"):
+            why = lazy_vision_refusal(self.cfg(peer_prefill_primary=True, args=self.BASE + [flag]))
+            self.assertIsNotNone(why)
+        self.assertIsNone(lazy_vision_refusal({"args": ["--native", "x"]}))          # no peer: lazy vision as before
+
+    def test_one_reserve_per_configured_card(self):
+        self.assertEqual(per_gpu_reserve(None, [1800], 2), [1800, 0])     # primary, peer
+        self.assertEqual(per_gpu_reserve(4000, [1700, 600], 2), [4000, 600])
+        self.assertEqual(per_gpu_reserve([1000, 200], [1700], 2), [1700, 200])
+        self.assertEqual(per_gpu_reserve(None, 1800), [1800])
+
 
 
 class LearnedProfile(unittest.TestCase):

@@ -11,6 +11,14 @@ verify window (a few hundred KB through pinned RAM), not twice per layer. No NVL
 needed; cards on x4 or x1 slots work, and the PCIe share of each card is probed on its own link. A `--pcie-frac` you give
 is every card's share and skips those probes; there is no per-card setting yet.
 
+**One card for prompts, two for decode:** CUDA also has an opt-in
+[`--peer-prefill-primary` mode](SECOND_GPU.md#primary-only-prefill-with-two-gpu-decode).
+It keeps the full text model's dense layers and elastic KV on the primary,
+and uses the other card as a decode expert tier. Lazy GPU vision can release
+and reclaim VRAM on both cards. This is not a layer split; do not combine the
+two modes. Compare both on your workload, since the peer tier has different
+transfer and synchronization costs.
+
 **Two models on two cards (the app).** A layer split puts one model on several cards. The other way to use two cards is two
 models, one per card, each answering on its own. In the app, turn on **Run multiple models** on the Models page: the card
 list then says which card a loaded model uses ("Already used by ..."), preselects a free card for the next model, and
