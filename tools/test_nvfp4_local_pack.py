@@ -18,6 +18,70 @@ def _scales(rows, cols, seed, outliers=0.01):
     return s.astype(np.uint8)
 
 
+def _write_safetensors(path, tensors: dict[str, tuple[str, np.ndarray]]):
+    """A shard in the format Checkpoint reads: 8-byte header length, the header JSON, then the bytes."""
+    import json
+    import struct
+    head, off, blobs = {}, 0, []
+    for name, (dtype, arr) in tensors.items():
+        raw = np.ascontiguousarray(arr).tobytes()
+        head[name] = {"dtype": dtype, "shape": list(np.shape(arr)), "data_offsets": [off, off + len(raw)]}
+        blobs.append(raw)
+        off += len(raw)
+    h = json.dumps(head).encode("utf-8")
+    path.write_bytes(struct.pack("<Q", len(h)) + h + b"".join(blobs))
+
+
+def test_hybrid_shards_override_the_trunk(tmp_path):
+    # HYBRID.json: the export replaced some modules with another revision's tensors in hybrid-main-*.safetensors.
+    _write_safetensors(tmp_path / "model-00001-of-00002.safetensors",
+                       {"a.weight": ("F32", np.array([1.0, 1.0], np.float32)),
+                        "b.weight": ("F32", np.array([7.0], np.float32))})
+    _write_safetensors(tmp_path / "hybrid-main-00001.safetensors",
+                       {"a.weight": ("F32", np.array([2.0, 3.0], np.float32))})
+    ck = P.Checkpoint(tmp_path)
+    assert ck.array("a.weight", np.float32).tolist() == [2.0, 3.0]      # the overlay wins
+    assert ck.array("b.weight", np.float32).tolist() == [7.0]           # the trunk stays
+
+
+def test_expert_scales_plain_and_csf_forms(tmp_path):
+    scale = _scales(32, 8, 5)
+    base = "model.language_model.layers.0.mlp.experts.0.gate_proj."
+    _write_safetensors(tmp_path / "model-1.safetensors", {base + "weight_scale": ("F8_E4M3", scale)})
+    ck = P.Checkpoint(tmp_path)
+    assert np.array_equal(P.expert_scales(ck, base), scale)             # F8_E4M3 bytes read as bytes
+
+    fixed, exc = P.csf_encode(scale)
+    _write_safetensors(tmp_path / "model-1.safetensors",
+                       {base + "weight_scale" + P.CSF_FIXED: ("U8", fixed),
+                        base + "weight_scale" + P.CSF_EXC: ("U32", exc)})
+    assert np.array_equal(P.expert_scales(P.Checkpoint(tmp_path), base), scale)
+
+
+def test_mtp_expert_matrix_reads_both_codecs(tmp_path):
+    pytest.importorskip("torch")
+    rng = np.random.default_rng(3)
+    codes = rng.integers(0, 256, size=(4, 32), dtype=np.uint8)          # K = 64
+    scale = rng.integers(56, 64, size=(4, 4), dtype=np.uint8)
+    s2 = np.array(1e-3, np.float32)
+    b = "mtp.layers.0.mlp.experts.0.up_proj."
+    _write_safetensors(tmp_path / "model-1.safetensors",
+                       {b + "weight": ("U8", codes), b + "weight_scale": ("F8_E4M3", scale),
+                        b + "weight_scale_2": ("F32", np.array(s2))})
+    ck = P.Checkpoint(tmp_path)
+    want = P.nvfp4_dequant(codes, scale, float(s2))
+    assert np.array_equal(P.mtp_expert_matrix(ck, b), want)
+    assert P.mtp_weight_cols(ck, b) == 64
+
+    fp8 = rng.integers(0, 128, size=(4, 64), dtype=np.uint8)            # MXFP8: one byte a value
+    ms = rng.integers(120, 130, size=(4, 2), dtype=np.uint8)
+    _write_safetensors(tmp_path / "model-1.safetensors",
+                       {b + "weight": ("F8_E4M3", fp8), b + "weight_scale": ("U8", ms)})
+    ck = P.Checkpoint(tmp_path)
+    assert np.array_equal(P.mtp_expert_matrix(ck, b), P.mxfp8_dequant(fp8, ms).numpy())
+    assert P.mtp_weight_cols(ck, b) == 64
+
+
 @pytest.mark.parametrize("rows,cols", [(32, 8), (640, 160), (2560, 40)])
 def test_csf_roundtrip_is_exact(rows, cols):
     s = _scales(rows, cols, rows + cols)

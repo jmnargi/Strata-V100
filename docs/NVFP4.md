@@ -228,3 +228,48 @@ decode 159 tokens/s (median of chat answers, 137-216), 4K prompt 3,981 tokens/s,
 agent session 151 tokens/s; the engine holds 69 GB of RAM beside 72 GB of VRAM. Against Unsloth's Q8_0 (set v1): top-1
 90.5%, mean KL 0.085, perplexity 3.95 (Q8_0: 4.05).
 This is a retrained model, so its distance to the original's Q8_0 includes real weight changes, not only rounding.
+
+## The QAD distillation (`local-inference-lab/Qwen3.8-Flash-Next-NVFP4`)
+
+`local-inference-lab`'s checkpoint is a quantization-aware distillation of the original: the routed experts, the n-gram
+table and the shared experts were retrained in their 4-/8-bit form against the BF16 teacher. It reads through the same
+converter and packer as NVIDIA's FP4-Local above, with three differences the tools now handle:
+
+| In the checkpoint | What differs from FP4-Local |
+| --- | --- |
+| routed experts: NVFP4, group 16 | the scales are the plain `weight_scale` matrix (F8_E4M3, `[rows, K/16]`) with one F32 `weight_scale_2` and one F32 `input_scale` per expert and projection, not the CSF stream pair |
+| n-gram (PLE) table: NVFP4, rows of 160 values | the block scales are `F8_E4M3` (FP4-Local's are U8); the row bytes are identical, and the table is written by the same `ple` step |
+| MTP head: NVFP4 experts, BF16 rest | the same triple; `tools/nvfp4_local_pack.py mtp` also reads an MXFP8 MTP head (`export-manifest.json` names one), which some revisions of this checkpoint carry |
+
+It also ships `hybrid-main-00001.safetensors` and `hybrid-main-00002.safetensors`: `HYBRID.json` lists the modules those
+files replace (the text attention projections and the MTP experts, taken from another revision of the same model). They
+carry the tensors under their ordinary names, so the reader indexes them **last** and a name present in both places is
+read from the overlay - without that the attention would be the trunk's, not the one the checkpoint means.
+
+Prepare it with the same command (it needs `torch` for the MXFP8 dequantization, which `pip install torch` provides):
+
+```
+python tools/nvfp4_local_pack.py prepare --model <checkpoint dir> --out <dir>
+strata --pack <dir>/pack --native <dir>/dense.gguf --native-dense-gguf <dir>/dense.gguf \
+       --ple-gguf <dir>/ple-nvfp4.gguf --mtp <dir>/mtp/rt --expert-cache auto --prefill auto --spec 4 ...
+```
+
+The vision tower is not converted: the checkpoint keeps it in the safetensors under `model.visual.*`, and the engine
+reads pictures with the original model's `mmproj` file, as for the other NVFP4 versions.
+
+## Decode on Volta: `STRATA_EXPERT_QPN2`
+
+The decode experts can also run as W4A16 on Volta's `mma.sync.m8n8k4`, through a port of v100-skinny's QPN2 dataflow
+(`src/kernels/cuda/qpn2_nvfp4.cu`; upstream `kernels/skinny_kernels.cu`, Apache-2.0). One warp instruction is four
+8x8x4 products sharing one 8x4 activation tile, so a verify window of up to 8 rows is multiplied by the tensor cores
+instead of `dp4a`.
+
+- The pack's own rows are used as they are: a fragment is the 16 codes of one 16-value sub-block, which is 8 contiguous
+  bytes in `block_nvfp4`, re-paired in registers. No prepacked copy, no second `experts.bin`.
+- `STRATA_EXPERT_QPN2=1` (or `all`) runs gate/up and down; `gu` / `down` run one stage, the other staying on the default
+  kernels, for an A/B of a single stage. The switch is off by default: the default path stays byte-identical.
+- One expert serves at most 8 rows (the verify window's `kVerifyMaxT`), which is the instruction's tile; the dispatch
+  refuses anything else and the default kernels take it.
+- `nvfp4_expert_gpu_parity pack/experts.bin` (with the switch on) checks the whole expert - gate/up, the SwiGLU, the q8_1
+  hidden and down - against a double-precision expert: 1.229% worst over 8 tokens, against the W4A8 path's 1.217%. Both
+  are the two activation roundings; the weights are exact on this path.

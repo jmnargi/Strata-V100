@@ -56,6 +56,14 @@ class Checkpoint:
             files = sorted(set(wmap.values()))
         else:
             files = sorted(p.name for p in self.dir.glob("*.safetensors"))
+        # Overlay shards: `HYBRID.json` names the modules this export replaced with another revision's tensors, and the
+        # files hold them under their plain names (`replaced_modules`). Every shard is indexed in order and a later one
+        # overrides a tensor of the same name, so the overlay is placed last: the model shards are the trunk, the
+        # overlay is what the model means.
+        over = {f for f in files if pathlib.Path(f).name.startswith("hybrid-main-")}
+        over |= {str(p.relative_to(self.dir)) if p.parent != self.dir else p.name
+                 for p in self.dir.glob("hybrid-main-*.safetensors")}
+        files = [f for f in files if f not in over] + sorted(over)
         if not files:
             raise FileNotFoundError("no .safetensors files in " + str(self.dir))
         self.meta: dict[str, tuple[str, str, list[int], int, int]] = {}
@@ -144,6 +152,18 @@ def csf_encode(scales: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     pos = np.flatnonzero(exc.reshape(-1))
     words = (pos.astype(np.uint64) | (scales.reshape(-1)[pos].astype(np.uint64) << 24)).astype(np.uint32)
     return fixed, words
+
+
+def expert_scales(ck: "Checkpoint", base: str) -> np.ndarray:
+    """One expert projection's E4M3 block scales [rows, K / 16] as bytes, in either storage form.
+
+    NVIDIA's FP4-Local keeps them as the CSF stream pair; a ModelOpt export (`local-inference-lab`'s QAD checkpoint)
+    keeps the plain `.weight_scale` matrix, whose dtype is F8_E4M3 there rather than U8 - the raw bytes are the same
+    E4M3 values either way, which is what ggml's `block_nvfp4` stores."""
+    if base + "weight_scale" + CSF_FIXED in ck:
+        return csf_decode(np.asarray(ck.array(base + "weight_scale" + CSF_FIXED, np.uint8)),
+                          np.asarray(ck.array(base + "weight_scale" + CSF_EXC, np.uint32)))
+    return np.asarray(ck.array(base + "weight_scale", np.uint8))
 
 
 # --------------------------------------------------------------------------------------------- MXFP8 dequantizing
@@ -367,6 +387,25 @@ def f32_to_bf16_bits(x: np.ndarray) -> np.ndarray:
     return (r >> 16).astype(np.uint16)
 
 
+def mtp_expert_matrix(ck: "Checkpoint", base: str) -> np.ndarray:
+    """One MTP expert projection as float32, whichever codec the export used.
+
+    NVIDIA's head is NVFP4 (U8 codes, E4M3 scales, one F32). The QAD export's manifest names MXFP8 for the MTP
+    experts (`export-manifest.json`: `mtp_experts: mxfp8_block32`) although some of its files carry the NVFP4 triple,
+    so both are read: F8_E4M3 values are MXFP8, U8 values are NVFP4."""
+    w = base + "weight"
+    if ck.dtype(w) == "F8_E4M3":
+        got = mxfp8_dequant(np.asarray(ck.array(w, np.uint8)), np.asarray(ck.array(base + "weight_scale", np.uint8)))
+        return got.numpy()                                   # mxfp8_dequant returns a torch tensor
+    return nvfp4_dequant(np.asarray(ck.array(w, np.uint8)), np.asarray(ck.array(base + "weight_scale", np.uint8)),
+                         float(ck.array(base + "weight_scale_2", np.float32).reshape(-1)[0]))
+
+
+def mtp_weight_cols(ck: "Checkpoint", base: str) -> int:
+    """The projection's K: NVFP4 packs two values a byte, MXFP8 one."""
+    return ck.shape(base + "weight")[1] * (2 if ck.dtype(base + "weight") == "U8" else 1)
+
+
 def cmd_mtp(a) -> int:
     """The MTP head in tools/mtp_fetch.py's folder form (raw BF16 files + mtp-manifest.json), so tools/mtp_pack.py and
     tools/mtp_rt.py take it as they take Qwen's own: the 31 tensors, experts fused as gate_up_proj / down_proj."""
@@ -391,7 +430,7 @@ def cmd_mtp(a) -> int:
     for fused, parts in (("mtp.layers.0.mlp.experts.gate_up_proj", ("gate_proj", "up_proj")),
                          ("mtp.layers.0.mlp.experts.down_proj", ("down_proj",))):
         rows = [ck.shape("mtp.layers.0.mlp.experts.0.%s.weight" % p)[0] for p in parts]
-        cols = ck.shape("mtp.layers.0.mlp.experts.0.%s.weight" % parts[0])[1] * 2
+        cols = mtp_weight_cols(ck, "mtp.layers.0.mlp.experts.0.%s." % parts[0])
         shape = [n_exp, sum(rows), cols]
         fn = fused + ".bin"
         with open(out / fn, "wb") as f:
@@ -400,9 +439,7 @@ def cmd_mtp(a) -> int:
                 mats = []
                 for p in parts:
                     b = "mtp.layers.0.mlp.experts.%d.%s." % (e, p)
-                    mats.append(nvfp4_dequant(np.asarray(ck.array(b + "weight", np.uint8)),
-                                              np.asarray(ck.array(b + "weight_scale", np.uint8)),
-                                              float(ck.array(b + "weight_scale_2", np.float32).reshape(-1)[0])))
+                    mats.append(mtp_expert_matrix(ck, b))
                 blob = f32_to_bf16_bits(np.concatenate(mats, axis=0)).tobytes()
                 f.write(blob)
                 h.update(blob)
@@ -495,9 +532,8 @@ def experts_from_checkpoint(model, ck: Checkpoint, n_layers: int = 48, n_exp: in
             rows = []
             for e in range(n_exp):
                 b = base % (l, e, role)
-                dec = csf_decode(np.asarray(ck.array(b + "weight_scale" + CSF_FIXED, np.uint8)),
-                                 np.asarray(ck.array(b + "weight_scale" + CSF_EXC, np.uint32)))
-                rows.append(nvfp4_blocks(np.asarray(ck.array(b + "weight", np.uint8)), dec).reshape(-1))
+                rows.append(nvfp4_blocks(np.asarray(ck.array(b + "weight", np.uint8)),
+                                         expert_scales(ck, b)).reshape(-1))
             cache[key] = (np.stack(rows),)
         return cache[key]
 

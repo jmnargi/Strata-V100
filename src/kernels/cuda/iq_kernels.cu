@@ -5,6 +5,7 @@
 // MIT license, third_party/ggml/LICENSE).  The block structs and codebook grids come from its ggml-common.h,
 // included unchanged.
 #include "strata/kernels/iq_kernels.hpp"
+#include "strata/kernels/qpn2_nvfp4.hpp"
 #include "strata/core/sm75_series.hpp"
 #include "strata/core/sm120_series.hpp"
 #include "strata/kernels/gfx_arch.hpp"
@@ -28,6 +29,8 @@
 #include <utility>
 #include <cstdlib>
 #include <map>
+#include <string>
+#include <vector>
 #include <mutex>
 #include <tuple>
 #include <type_traits>
@@ -5249,6 +5252,14 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
     float* h = (float*) ((uint8_t*) scratch + 2 * fa);
     block_q8_1* hq = (block_q8_1*) ((uint8_t*) scratch + 3 * fa);
     const auto* X = (const block_q8_1*) x_q8_1;
+    // NVFP4 W4A16 on Volta's mma.m8n8k4 (qpn2_nvfp4.cu): opt-in, so the default path stays byte-identical.
+    // STRATA_EXPERT_QPN2=1 (or "all") runs gate/up and down, "gu" only gate/up (the default down follows), "down"
+    // only down (the default gate/up and the engine's SwiGLU + q8_1 precede it) - the stage split is for A/B runs.
+    static const char* const qpn2_env = std::getenv("STRATA_EXPERT_QPN2");
+    static const bool qpn2_ok = qpn2_env != nullptr && qpn2_env[0] != '0';
+    static const bool qpn2_gu_on = qpn2_ok && (std::strstr(qpn2_env, "down") == nullptr || std::strstr(qpn2_env, "gu") != nullptr);
+    static const bool qpn2_dn_on = qpn2_ok && (std::strstr(qpn2_env, "gu") == nullptr || std::strstr(qpn2_env, "down") != nullptr);
+    const bool qpn2 = qpn2_ok && !g_grouped_v1 && g_exp_phase == 0 && qpn2_nvfp4_supported(L, cap_entries);
     static const bool v2 = [] { const char* v = std::getenv("STRATA_EXPERT_V2"); return v && v[0] == '1'; }();
     if (v2 && L.gu_type == 21 && L.d_type == 20 && L.n_embd == 2560 && L.n_ff == 640) {   // S26: see s26_gu_l_kernel
         // S26 STRATA_TSUM=1: the sums as one transposed butterfly per warp (s26_tsum.cuh; bitwise the same values)
@@ -5341,7 +5352,8 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
 #else
     const bool gs_layout = true;
 #endif
-    if (gs_layout && g_exp_phase == 0 && !v1 && gu_swiglu_on() && !(expdec_mode() && !g_old_kernels && expdec_gu_ok(L))) {
+    if (gs_layout && g_exp_phase == 0 && !v1 && gu_swiglu_on() && !(qpn2 && qpn2_gu_on) &&
+        !(expdec_mode() && !g_old_kernels && expdec_gu_ok(L))) {
         switch (L.gu_type) {
 #define STRATA_GS(T) case T: gs_done = launch_gu_swiglu<T>(L, gy, s, grp_ptr, grp_start, n_groups, ent_tok, X, hq); break;
             STRATA_GU_FMTS(STRATA_GS)
@@ -5385,7 +5397,16 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
     } else
 #undef STRATA_GU_AMD
 #endif
-    if (!expdec_gu(L, gy, cap_groups, s, grp_ptr, grp_start, n_groups, ent_tok, X, gate, up))   // STRATA_EXPDEC=1
+    if (qpn2 && qpn2_gu_on) {                    // NVFP4 W4A16 gate/up; the engine's SwiGLU + q8_1 below stay
+        static bool said = false;
+        if (!said) {
+            said = true;
+            std::fprintf(stderr, "strata: decode experts: NVFP4 W4A16 (mma.m8n8k4, STRATA_EXPERT_QPN2)%s\n",
+                         qpn2_dn_on ? "" : " gate/up only");
+        }
+        qpn2_nvfp4_gu(L, cap_groups, cap_entries, s, grp_ptr, grp_start, n_groups, ent_tok, X, gate, up, grid_groups);
+        check("native_expert_grouped/qpn2 gu");
+    } else if (!expdec_gu(L, gy, cap_groups, s, grp_ptr, grp_start, n_groups, ent_tok, X, gate, up))   // STRATA_EXPDEC=1
     switch (L.gu_type) {
 #define STRATA_GU(T) case T: launch_gu<T>(cap_groups, s, grp_ptr, grp_start, n_groups, ent_tok, X, L, gate, up); break;
         STRATA_GU_FMTS(STRATA_GU)
@@ -5418,6 +5439,11 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
     check("native_expert_grouped/swiglu");
     }
     if (g_exp_phase == 1) return;
+    if (qpn2 && qpn2_dn_on) {                      // down by QPN2, from the q8_1 hidden just written
+        qpn2_nvfp4_down(L, cap_groups, cap_entries, s, grp_ptr, grp_start, n_groups, ent_dst, hq, out, grid_groups);
+        check("native_expert_grouped/qpn2 down");
+        return;
+    }
     const int d_rows = (!g_old_kernels && !g_no_sub16_gu && L.n_ff == 640) ? (L.d_type == 20 || L.d_type == 40 || L.d_type == 144 || L.d_type == 146 ? 32 : (L.d_type == 42 ? 16 : 8)) : 8;
     const dim3 gd((unsigned) ((L.n_embd + d_rows - 1) / d_rows), (unsigned) gy);
 #if STRATA_EXP_LAYOUTS
