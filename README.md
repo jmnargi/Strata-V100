@@ -8,6 +8,31 @@ Strata is an open-source local runtime for [Qwen3.8-Flash-Next](https://huggingf
 
 [Upstream Strata](https://github.com/Niko1221/Strata) · [Issues](https://github.com/jmnargi/Strata-V100/issues) · [Pull requests](https://github.com/jmnargi/Strata-V100/pulls) · [Discussions](https://github.com/jmnargi/Strata-V100/discussions)
 
+## Models and quants that run here
+
+Strata runs **Qwen3.8-Flash-Next** from seven families of quantized releases, plus a smaller **Qwen3.6-35B-A3B**. Every
+row below is supported by this fork's engine and setup; the last column says what has actually been run end to end on
+the V100 pair here. Sizes, quality and per-size speeds: [docs/MODELS.md](docs/MODELS.md).
+
+| Model / quant | Routed experts | Where the weights come from | Download | Run on this V100 pair |
+| --- | --- | --- | ---: | --- |
+| **NVFP4 — `local-inference-lab` (QAD)** | NVFP4, group 16; MXFP8 attention and shared experts; NVFP4 n-gram table | [`local-inference-lab/Qwen3.8-Flash-Next-NVFP4`](https://huggingface.co/local-inference-lab/Qwen3.8-Flash-Next-NVFP4), converted on your PC ([NVFP4.md](docs/NVFP4.md#the-qad-distillation-local-inference-labqwen38-flash-next-nvfp4)) | 106 GB | yes — 62.3 tokens/s decode |
+| **NVFP4 — NVIDIA, trained for FP4 (`FP4-Local`, QAD)** | NVFP4, group 16 (scales in NVIDIA's CSF form) | [`nvidia/Qwen3.8-Flash-Next-FP4-Local`](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-FP4-Local), converted on your PC ([NVFP4.md](docs/NVFP4.md#nvidias-fp4-local-checkpoint)) | 102 GB (+110 GB while preparing) | supported; not run here |
+| **NVFP4 — NVIDIA's version** | NVFP4, group 16 | [`Maximilian228/Qwen3.8-Flash-Next-NVIDIA-NVFP4-Strata`](https://huggingface.co/Maximilian228/Qwen3.8-Flash-Next-NVIDIA-NVFP4-Strata) (ready-made pack) | 128 GB | supported; not run here |
+| **NVFP4 — Strata's version** | NVFP4, group 16 | [`Maximilian228/Qwen3.8-Flash-Next-NVFP4-GPTQ-Strata`](https://huggingface.co/Maximilian228/Qwen3.8-Flash-Next-NVFP4-GPTQ-Strata) (ready-made pack, GPTQ) | 128 GB | supported; not run here |
+| **Unsloth Dynamic v3.1 (1-4 bit)** | UD-IQ1_M, UD-Q2_0, UD-IQ2_XS, UD-Q2_K_XL, UD-IQ3_XXS, UD-Q3_K_XL, UD-IQ4_XS-v31 | [`unsloth/Qwen3.8-Flash-Next-GGUF`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF), revision of 2026-11-04 | 68-94 GB | yes — UD-IQ4_XS-v31, 81 tokens/s |
+| **Unsloth Dynamic (earlier revision)** | UD-IQ4_XS, UD-Q4_K_XL, UD-Q5_K_XL, UD-Q6_K_XL, Q8_0 | [`unsloth/Qwen3.8-Flash-Next-GGUF`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF) | 94-188 GB | supported; not run here |
+| **ISTA-DASLab i-quants and Q2_0 (2-3.5 bit)** | Q2_0, IQ2_XS, IQ3_XXS, IQ3_S | [`ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF`](https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF) | 66-84 GB | yes — IQ3_S, the earlier daily profile |
+| **Gyro (agentionai), trellis** | Gyro-S TQ1_0, Gyro-M TQ2_0 (pair trellis) | [`agentionai/Qwen3.8-Flash-Next-Gyro-GGUF`](https://huggingface.co/agentionai/Qwen3.8-Flash-Next-Gyro-GGUF) ([GYRO.md](docs/GYRO.md)) | 58.5 / 92 GB | yes — Gyro-M, about 70 tokens/s |
+| **Coder (ISTA-DASLab), half the experts** | IQ1_M, IQ2_S-IQ4_XS like IQ3_S | [`ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF`](https://huggingface.co/ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-Coder-GGUF) | 58 GB | supported; not run here |
+| **OrcaRouter Uncensored** | IQ3_XXS | `OrcaRouter`'s Flash-Next Uncensored ([ORCA.md](docs/ORCA.md); a manual packing step, not an installer option) | 84 GB | supported; not run here |
+| **Qwen3.6-35B-A3B** (a smaller model) | Unsloth's UD-Q4_K_XL, UD-Q6_K_XL and Q8_0, with the MTP draft layer | [`unsloth/Qwen3.6-35B-A3B-MTP-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF) ([MODELS.md](docs/MODELS.md#qwen36-35b-a3b)) | 23-38 GB | supported; not run here |
+
+The NVFP4 rows need NVIDIA cards (RTX 50 cards multiply at FP4 width; older cards, including the V100, at 8-bit
+precision), and the two QAD rows are prepared on your PC from the authors' safetensors — no quantized weights of theirs
+are redistributed here. The Gyro and trellis rows need engine 0.1.45.1 or newer, the Unsloth Q5_0-down rows 0.1.45.7.
+
+
 ## What this fork focuses on
 
 - **Tesla V100 / Volta support (`sm_70`)**: preserve normal V100 builds and runtime support. V100 builds use a CUDA 12.x toolkit; CUDA 13 does not compile `sm_70` code.
