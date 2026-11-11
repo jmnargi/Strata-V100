@@ -345,3 +345,73 @@ tokens/s against the W4A8 kernels' 68.8 (and 53.5 with each warp's K slice made 
 on a 60-group window does not survive the engine's per-layer 10-group calls, where the W4A8 `dp4a` kernels' decode-once
 loop is the better shape. It stays opt-in and off; a faster expert product here needs a pack in the kernel's fragment
 order, not a repack of the current one.
+
+### Exact expert hot-path changes (2026-11-11)
+
+These changes keep the checkpoint, pack, activation formats and KV settings. CUDA
+uses immediate E2M1 lookup words and removes the early-return branch from UE4M3
+scale decoding. AVX2 decodes each block from one 32-byte load and shares activation
+loads between two rows at one token. Each CPU row keeps its original FMA order.
+
+On the Ryzen 5 3600, an old/new, single-thread, best-of-30 comparison measured:
+
+| Product | Tokens | Before ms | After ms | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| gate/up, 2 × 640 rows, K=2560 | 1 | 0.185 | 0.168 | 1.10× |
+| down, 2560 rows, K=640 | 1 | 0.101 | 0.085 | 1.19× |
+| gate/up | 4 | 0.452 | 0.431 | 1.05× |
+| gate/up | 8 | 0.832 | 0.807 | 1.03× |
+
+The CPU comparison found zero differing floats for gate/up and down at 1–9
+tokens. The existing CPU parity program also found zero differing floats against
+ggml on random blocks and the checkpoint's own rows, including SwiGLU. An
+exhaustive CUDA comparison found zero decoder differences over all 2^32 packed
+code words and all 256 scale bytes. The default GPU expert's worst error against
+the double-precision reference stayed 1.157% across six real experts.
+
+The opt-in QPN2 kernel now sizes its K split per stage, pairs aligned weight loads
+and avoids divergent zero-filling of unused activation rows. With ten distinct
+experts, 1,000 calls per sample and three samples on one V100:
+
+| Rows per expert | Previous QPN2 µs | Updated QPN2 µs |
+| --- | ---: | ---: |
+| 1 | 116.7 | 100.9 |
+| 4 | 110.0 | 105.5 |
+| 8 | 114.1 | 111.1 |
+
+These are kernel timings, not serving throughput. QPN2 remains opt-in and restricted
+to VRAM-resident experts. It passed the six-expert reference check at 1, 4 and 8
+rows; the eight-row worst error was 1.152%. Its FP32 reduction order changes with
+the K split. A shared-memory staging variant was tested and removed: at four rows
+it took 135.7 µs against the direct kernel's 105.5 µs. Fewer memory transactions
+did not repay its staging and synchronization cost.
+
+#### Serving result with the existing 524K configuration
+
+The serving check kept the QAD model, 524288 context, int8 KV, yarn 2, split 16,
+56 GiB resident budget, 800 MiB reserve, spec 4 and spec-min-p 0.7. Each arm
+started from a separate copy of the same expert profile. One warm-up was discarded,
+then eight greedy, at-most-400-token replies explained a hash table. Old/new arms
+were repeated after the QPN2 arms:
+
+| Arm | Median decode tok/s |
+| --- | ---: |
+| old default, first batch | 55.05 |
+| updated default, first batch | 55.30 |
+| updated QPN2 down only | 53.95 |
+| updated QPN2 gate/up only | 52.90 |
+| old default, repeated batch | 53.65 |
+| updated default, repeated batch | 53.70 |
+
+All 16 paired old/new default replies had identical content hashes. The median
+paired decode-time improvement was only 0.36%: **no meaningful serving throughput
+win is established**. The seven-token cached prompt suffix saved a median 10.9 ms.
+Three fresh 1566-token reads were also unchanged: median 8441.4 ms before and
+8457.8 ms after. The CPU and QPN2 kernel gains must not be presented as a 10–19%
+serving speedup. Neither QPN2 stage is enabled in the service.
+
+The updated default served `17` for 9 + 8, a correct Python string reversal, and
+`get_weather` with `{"city":"Paris"}`. The focused seven-test ctest group passed,
+as did the new odd-length CPU row-range check. The changed CUDA source compiled
+for sm_70 and its shared integer-kernel source compiled for HIP gfx1100; no AMD
+runtime, other GPU generation, vision or filled-524K-context test was run.

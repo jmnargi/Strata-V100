@@ -587,12 +587,35 @@ __device__ __forceinline__ float vec_dot_q8_0_q8_1(const void* __restrict__ vbq,
 // kvalues_fp4 holds the E2M1 values doubled (0, 1, 2, 3, 4, 6, 8, 12), so the scale is halved here - exactly
 // ggml's ggml_cuda_ue4m3_to_fp32, decoded in software so the GPU and ggml-cpu agree bit for bit (NaN -> 0).
 __device__ __forceinline__ float ue4m3_to_f32_half(uint8_t x) {
-    // The same value as ldexpf(1 + man/8, exp - 7) * 0.5 (ldexpf(man, -9) * 0.5 for exp 0), built from its bits: every
-    // such value is exact in FP32, so this is equal for all 256 inputs - without the ldexpf and the branches it cost
-    // in the decode experts' inner loop.  Normal: 2^(exp-8) * (1 + man/8) = exponent field exp + 119, mantissa man<<20.
-    if (x == 0 || x == 0x7F) return 0.0f;
+    // Exact FP32 construction of UE4M3 / 2: normal exponent exp+119, mantissa man<<20.
+    // Subnormals are man/1024; the NaN encoding reads as zero. Avoid the early-return
+    // branch in the expert inner loop without changing any of the 256 input values.
     const uint32_t exp = (x >> 3) & 0xF, man = x & 0x7;
-    return exp == 0 ? (float) man * 0.0009765625f : __uint_as_float(((exp + 119u) << 23) | (man << 20));
+    const float r = exp == 0 ? (float) man * 0.0009765625f : __uint_as_float(((exp + 119u) * 8u + man) << 20);
+    return x == 0x7F ? 0.0f : r;
+}
+
+// E2M1's two eight-byte table halves are magnitudes and their negations. Keep
+// them immediate and build the sign selector once for both halves of q4.
+// int2.x/y retain the generic decoder's low/high-nibble order for dp4a.
+__device__ __forceinline__ int2 get_int2_nvfp4(const uint32_t q4) {
+#if defined(STRATA_HIP_GFX906) || defined(__HIPCC__)
+    return get_int_from_table_16((int) q4, kvalues_fp4);   // keep the backend's own permute path
+#else
+    constexpr uint32_t mag_lo = 0x03020100u;   // 0, 1, 2, 3
+    constexpr uint32_t mag_hi = 0x0C080604u;   // 4, 6, 8, 12
+    constexpr uint32_t neg_lo = 0xFDFEFF00u;   // 0, -1, -2, -3
+    constexpr uint32_t neg_hi = 0xF4F8FAFCu;   // -4, -6, -8, -12
+    const uint32_t code = q4 & 0x77777777u;                        // table index: bits 2-0 of every nibble
+    const uint32_t pick = ((q4 & 0x88888888u) >> 1) | 0x32103210u; // per nibble: byte j of the half, + 4 if negative
+    const uint32_t l = __byte_perm(mag_lo, mag_hi, code);          // magnitudes of nibbles 0-3
+    const uint32_t n = __byte_perm(neg_lo, neg_hi, code);          // and the same negated
+    const uint32_t lh = __byte_perm(mag_lo, mag_hi, code >> 16);   // nibbles 4-7
+    const uint32_t nh = __byte_perm(neg_lo, neg_hi, code >> 16);
+    const uint32_t lo = __byte_perm(l, n, pick);                   // nibbles 0-3, signed, in nibble order
+    const uint32_t hi = __byte_perm(lh, nh, pick >> 16);           // nibbles 4-7
+    return make_int2(__byte_perm(lo, hi, 0x6420), __byte_perm(lo, hi, 0x7531));
+#endif
 }
 
 // One call = two sub-blocks (32 values); `bq8_1` is the block's first q8_1 block (two per 64 values).
@@ -603,8 +626,8 @@ __device__ __forceinline__ float vec_dot_nvfp4_q8_1(const void* __restrict__ vbq
 #pragma unroll
     for (int i = 0; i < 2; i++) {
         const int iqs0 = iqs + 2 * i, iqs1 = iqs0 + 1, is = iqs0 >> 1;
-        const int2 v0 = get_int_from_table_16(get_int_b4(bq4->qs, iqs0), kvalues_fp4);
-        const int2 v1 = get_int_from_table_16(get_int_b4(bq4->qs, iqs1), kvalues_fp4);
+        const int2 v0 = get_int2_nvfp4(get_int_b4(bq4->qs, iqs0));
+        const int2 v1 = get_int2_nvfp4(get_int_b4(bq4->qs, iqs1));
         const block_q8_1* bq8 = bq8_1 + (is >> 1);
         const int i8 = (is & 1) << 2;
         int sumi = ggml_cuda_dp4a(v0.x, get_int_b4(bq8->qs, i8 + 0), 0);
@@ -1427,8 +1450,8 @@ template<> struct Split<40> {   // NVFP4: vec_dot_nvfp4_q8_1's two 16-value sub-
 #pragma unroll
         for (int i = 0; i < 2; i++) {
             const int iqs0 = iqs + 2 * i, iqs1 = iqs0 + 1, is = iqs0 >> 1;
-            r.v0[i] = get_int_from_table_16(get_int_b4(bq4->qs, iqs0), kvalues_fp4);
-            r.v1[i] = get_int_from_table_16(get_int_b4(bq4->qs, iqs1), kvalues_fp4);
+            r.v0[i] = get_int2_nvfp4(get_int_b4(bq4->qs, iqs0));
+            r.v1[i] = get_int2_nvfp4(get_int_b4(bq4->qs, iqs1));
             r.sc[i] = ue4m3_to_f32_half(bq4->d[is]);
         }
         return r;
