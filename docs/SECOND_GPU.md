@@ -138,6 +138,9 @@ tier adapts while the server runs, like the primary cache. It is an
 alternative to the CUDA1-3 caches above, not a third tier beside them.
 
 - `--peer-device N` (default off): enable the tier on CUDA device N (N >= 1).
+- `--peer-prefill-primary` (default off): the opt-in mode below - every prompt row on
+  the primary card only, decode experts on both, elastic KV and lazy vision
+  allowed. `STRATA_PEER_PREFILL_PRIMARY=1` asks for it too.
 - `--peer-reserve-mib M` (default 600): leave M MiB free on the peer card; the
   cache takes what remains. The prompt-path buffers need this headroom.
   Keep a few hundred MiB free on both cards beyond this: the prompt path loads its kernels and cuBLAS on first use
@@ -262,35 +265,46 @@ decode peer-entry count. This checks routing, not speed. A peer tier has its
 own transfer and synchronization costs, so compare prompt time and sustained
 decode on the same workload before making it the daily default.
 
-Generated tokens differ slightly from the layer-split service for two reasons.
-The route tail skip (`STRATA_ROUTE_TAIL_SKIP`) is off during generation here,
-because a peer-resident expert is no miss and skipping it would discard work
-the peer can do. Prompt reads keep the engine default, since they run on the
-primary alone. The peer also computes with its own grouping, though each
-expert's rows are bit-identical to the primary's kernels.
+Generated tokens differ from the layer split: the route tail skip stays off while
+a peer tier is present (a peer-resident expert is not a miss, and the plan keeps
+the skip off for a peer), so nothing is dropped that the peer could compute; the
+peer also computes with its own grouping, though each expert's rows are
+bit-identical to the primary's kernels.
 
-**Measured on two Tesla V100-PCIE-16GB** (GPU0 on a PCIe 3.0 x4 slot, GPU1
-on x16), 94 GiB RAM, the QAD NVFP4 pack, 524288 context, int8 KV, yarn 2,
+**Measured on two Tesla V100-PCIE-16GB** (physical GPU0 on a PCIe 3.0 x4 slot,
+GPU1 on x16), 94 GiB RAM, the QAD NVFP4 pack, 524288 context, int8 KV, yarn 2,
 `--vram-reserve-mib 800`, an identical frozen expert profile copy per arm,
-greedy sampling and 512-token replies. Arms ran interleaved A-B-A-B; each
-value is the mean of four samples, one per arm and stage, and the spread
-between repeats was under 1% for prefill and under 8% for decode.
+greedy sampling, 512-token replies and a unique first token on every prompt
+(`cache_n` 0 throughout). Values are means of four samples per arm and stage,
+taken in two interleaved A-B rounds; repeats agreed within 1% for prefill and
+8% for decode.
 
 | Prompt tokens | Layer split, prefill | Primary-only, prefill | Layer split, decode | Primary-only, decode |
 |---:|---:|---:|---:|---:|
-| 2,047 | 272.5 tok/s | 389.3 tok/s (+42.9%) | 56.4 tok/s | 49.0 tok/s (-13.1%) |
-| 8,191 | 810.4 | 1,365.8 (+68.6%) | 59.4 | 52.9 (-10.9%) |
-| 32,767 | 1,295.5 | 1,415.9 (+9.3%) | 56.4 | 54.5 (-3.4%) |
+| 2,047 | 273.0 tok/s | 389.7 tok/s (+42.8%) | 56.5 tok/s | 49.0 tok/s (-13.4%) |
+| 8,191 | 810.3 | 1,366.7 (+68.7%) | 59.4 | 53.0 (-10.9%) |
+| 32,767 | 1,296.2 | 1,415.6 (+9.2%) | 56.6 | 54.6 (-3.5%) |
 
-The read itself was 7,512 / 10,110 / 25,285 ms with the layer split and
-5,254 / 5,986 / 23,128 ms with primary-only prefill. The gain is largest for
+The read itself was 7,499 / 10,109 / 25,278 ms with the layer split and
+5,253 / 5,993 / 23,148 ms with primary-only prefill. The gain is largest for
 the short and mid reads an agentic turn makes: the layer split hands every
-pipeline stage a serial turn, and this mode never does. The peer holds 5,689
-experts to the primary's 2,738 (8,427 of 24,576 on the cards); the request log
-shows `peer entries 0` during the read and about 45% of decode entries on the
-peer. Decode pays for the tier's per-window launches and host waits, so a
-workload that mostly generates should stay on the layer split, or on one card.
-This measured one model pack on one machine; measure your own before switching.
+pipeline stage a serial turn, and this mode never does. Decode is 3-13% behind
+the layer split, least at long contexts: the split keeps 89-93% of decode
+experts resident and hands the window between stages, while this mode holds
+8,427 of 24,576 experts (peer 5,689, primary 2,738) and the rest fall to the
+CPU pool. The request log shows `peer entries 0` during the read and about 45%
+of decode entries on the peer.
+
+So the mode is a prompt win and a decode trade. It suits an agentic workload
+whose turns read 0.5-1.5K new tokens on a long conversation; a workload that
+mostly generates should stay on the layer split. Two cheaper fixes were
+measured and rejected on this pair: letting the peer compute a share of each
+prompt chunk (`--peer-prefill-rows 2048`) was level at 2K and 0.4% behind at 8K
+and 32K, and a smaller prompt chunk (`--prefill 2048`, less cache lent to the
+prompt path) left decode where it was (49.0 / 50.4 / 51.5 against 49.0 / 53.0 /
+54.6 tok/s) while making the 32K read 3.4x slower - the prompt loan is not what
+limits decode. This measured one model pack on one machine; measure your own
+before switching.
 
 
 
