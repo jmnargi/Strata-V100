@@ -2,15 +2,29 @@
 // blobs with their global scales, against a double-precision expert.
 //
 //     nvfp4_expert_gpu_parity pack/experts.bin [layer expert ...]
+//     NVFP4_BENCH=<calls> nvfp4_expert_gpu_parity pack/experts.bin: time the call instead (one expert, 8 rows, its
+//     weights resident) - both decode paths, selected by STRATA_EXPERT_QPN2
 //
 // Eight tokens of N(0,1) activations through one expert: q8_1 input, gate/up with s_gate / s_up, SwiGLU, q8_1 of the
 // hidden, down with s_down on its output. Only the two activation roundings separate it from the reference (~1%).
+//
+// Knobs (all optional):
+//   STRATA_EXPERT_QPN2=1|gu|down   the W4A16 QPN2 kernel (unset/0: the default kernels)
+//   NVFP4_PARITY_ROWS=1..8         rows the parity expert serves (8; 4 is the --spec 4 window's group width)
+//   NVFP4_BENCH=1                  time one expert's 8 rows, weights resident
+//   NVFP4_BENCH_GROUPS=G           time a G-group verify window instead (the engine's per-layer shape; default rows 6)
+//   NVFP4_BENCH_ROWS=Rx            rows a group in that window serves
+//   NVFP4_BENCH_DISTINCT=1         G distinct experts from the file instead of one blob G times
+//   NVFP4_BENCH_GRAPH=1            capture that window in a CUDA graph and replay it (the engine's verify window)
+//   NVFP4_BENCH_CALLS=n            calls timed (50)
+//   NVFP4_BENCH_WARM=n             warm-up calls first (3)
 #include "strata/kernels/iq_kernels.hpp"
 
 #include "ggml.h"
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -31,6 +45,12 @@ int main(int argc, char** argv) {
     if (argc < 2) { std::fprintf(stderr, "usage: nvfp4_expert_gpu_parity pack/experts.bin [layer expert ...]\n"); return 2; }
     constexpr int64_t N = 2560, FF = 640;
     constexpr int T = 8;
+    // NVFP4_PARITY_ROWS: run the parity expert on 1..8 rows instead of 8.  A group of that many entries is the engine's
+    // narrow --spec window, where the kernel reads entry 0 for the rows the group does not have and discards their C
+    // rows; the compared rows must stay exact.
+    const int TR = std::getenv("NVFP4_PARITY_ROWS")
+                       ? std::min(T, std::max(1, std::atoi(std::getenv("NVFP4_PARITY_ROWS"))))
+                       : T;
     const k::NativeExpertLayout L = k::native_expert_layout(40, 40, N, FF);
     const size_t layer_bytes = 512 * L.bytes;          // L.bytes counts the 16-byte tail
     std::vector<int> picks;
@@ -54,7 +74,7 @@ int main(int argc, char** argv) {
         tt->to_float(blob.data() + L.down_off, wd.data(), N * FF);
         for (float& v : x) v = nd(rng);
         std::vector<double> ref((size_t) T * N);
-        for (int t = 0; t < T; ++t) {
+        for (int t = 0; t < TR; ++t) {
             std::vector<double> h(FF);
             for (int64_t r = 0; r < FF; ++r) {
                 double g = 0, u = 0;
@@ -81,16 +101,104 @@ int main(int argc, char** argv) {
         ck(cudaMalloc(&dout, (size_t) T * N * 4), "out");
         ck(cudaMalloc(&scr, k::native_expert_scratch_bytes(T, FF)), "scratch");
         const unsigned long long ptr = (unsigned long long) db;
-        const int32_t start[2] = {0, T}, ng = 1, ids[T] = {0, 1, 2, 3, 4, 5, 6, 7};
+        const int32_t start[2] = {0, TR}, ng = 1, ids[T] = {0, 1, 2, 3, 4, 5, 6, 7};
         ck(cudaMalloc(&dptr, 8), "p"); ck(cudaMemcpy(dptr, &ptr, 8, cudaMemcpyHostToDevice), "p");
         ck(cudaMalloc(&dstart, 8), "s"); ck(cudaMemcpy(dstart, start, 8, cudaMemcpyHostToDevice), "s");
         ck(cudaMalloc(&dng, 4), "n"); ck(cudaMemcpy(dng, &ng, 4, cudaMemcpyHostToDevice), "n");
         ck(cudaMalloc(&ddst, 4 * T), "d"); ck(cudaMemcpy(ddst, ids, 4 * T, cudaMemcpyHostToDevice), "d");
         ck(cudaMalloc(&dtok, 4 * T), "t"); ck(cudaMemcpy(dtok, ids, 4 * T, cudaMemcpyHostToDevice), "t");
-        k::quantize_q8_1_rows(dx, T, N, dxq, nullptr);
-        k::native_expert_grouped(L, dptr, dstart, dng, ddst, dtok, 1, T, dxq, scr, dout, nullptr);
+        k::quantize_q8_1_rows(dx, T, N, dxq, nullptr);   // all 8: the window bench may index up to its own R
+        // NVFP4_BENCH=<it>: time the call instead of comparing (one expert, T rows, weights resident)
+        if (const char* grp_env = std::getenv("NVFP4_BENCH_GROUPS")) {   // the verify window's shape: G groups x R rows
+            const int G = std::atoi(grp_env), R = std::getenv("NVFP4_BENCH_ROWS") ? std::atoi(std::getenv("NVFP4_BENCH_ROWS")) : 6;
+            // calls timed (50) and warm-up calls (3) are the engine's per-layer shape's short run; more calls shrink the
+            // clock-drift noise the doc records between batches
+            const int n = std::getenv("NVFP4_BENCH_CALLS") ? std::atoi(std::getenv("NVFP4_BENCH_CALLS")) : 50;
+            const int warm = std::getenv("NVFP4_BENCH_WARM") ? std::atoi(std::getenv("NVFP4_BENCH_WARM")) : 3;
+            std::vector<unsigned long long> ptrs(G, ptr);
+            uint8_t* dbg = nullptr;
+            if (std::getenv("NVFP4_BENCH_DISTINCT")) {   // distinct experts from the file, as the engine's plan has
+                ck(cudaMalloc(&dbg, (size_t) G * L.bytes), "dbg");
+                std::vector<uint8_t> all((size_t) G * L.bytes);
+                for (int g = 0; g < G; ++g) {
+                    const int layer = g / 8, e = g % 8;
+                    f.seekg((std::streamoff) (layer * layer_bytes + (size_t) e * L.bytes));
+                    if (!f.read((char*) all.data() + (size_t) g * L.bytes, (std::streamsize) L.bytes)) {
+                        std::printf("cannot read expert %d/%d\n", layer, e); return 2;
+                    }
+                }
+                ck(cudaMemcpy(dbg, all.data(), all.size(), cudaMemcpyHostToDevice), "dbg");
+                for (int g = 0; g < G; ++g) ptrs[g] = (unsigned long long) (dbg + (size_t) g * L.bytes);
+            }
+            std::vector<int32_t> st(G + 1), dst(G * R), tok(G * R);
+            for (int g = 0; g <= G; ++g) st[g] = g * R;
+            for (int i = 0; i < G * R; ++i) { dst[i] = i % R; tok[i] = i % R; }
+            unsigned long long* gp; int32_t *gs, *gd, *gt;
+            ck(cudaMalloc(&gp, G * 8), "gp"); ck(cudaMemcpy(gp, ptrs.data(), G * 8, cudaMemcpyHostToDevice), "gp");
+            ck(cudaMalloc(&gs, (G + 1) * 4), "gs"); ck(cudaMemcpy(gs, st.data(), (G + 1) * 4, cudaMemcpyHostToDevice), "gs");
+            ck(cudaMalloc(&gd, G * R * 4), "gd"); ck(cudaMemcpy(gd, dst.data(), G * R * 4, cudaMemcpyHostToDevice), "gd");
+            ck(cudaMalloc(&gt, G * R * 4), "gt"); ck(cudaMemcpy(gt, tok.data(), G * R * 4, cudaMemcpyHostToDevice), "gt");
+            void* scr2 = nullptr;
+            ck(cudaMalloc(&scr2, k::native_expert_scratch_bytes(G * R, FF)), "scr2");
+            const int ngv = G;
+            int32_t* dngv; ck(cudaMalloc(&dngv, 4), "dngv"); ck(cudaMemcpy(dngv, &ngv, 4, cudaMemcpyHostToDevice), "dngv");
+            if (std::getenv("NVFP4_BENCH_GRAPH")) {      // the engine's verify window: captured, then replayed
+                cudaGraph_t graph = nullptr;
+                ck(cudaStreamBeginCapture(cudaStreamPerThread, cudaStreamCaptureModeThreadLocal), "capture");
+                k::native_expert_grouped(L, gp, gs, dngv, gd, gt, G, G * R, dxq, scr2, dout, (void*) cudaStreamPerThread);
+                ck(cudaStreamEndCapture(cudaStreamPerThread, &graph), "capture end");
+                cudaGraphExec_t exec = nullptr;
+                ck(cudaGraphInstantiate(&exec, graph, 0), "instantiate");
+                ck(cudaGraphLaunch(exec, cudaStreamPerThread), "graph launch");
+                ck(cudaStreamSynchronize(cudaStreamPerThread), "graph sync");
+                std::printf("graph: 1 captured window replayed OK (%d groups x %d rows)\n", G, R);
+                return 0;
+            }
+            for (int w = 0; w < warm; ++w)
+                k::native_expert_grouped(L, gp, gs, dngv, gd, gt, G, G * R, dxq, scr2, dout, nullptr);
+            ck(cudaDeviceSynchronize(), "warm");
+            cudaEvent_t e0, e1;
+            ck(cudaEventCreate(&e0), "ev"); ck(cudaEventCreate(&e1), "ev");
+            ck(cudaEventRecord(e0), "ev");
+            for (int i = 0; i < n; ++i)
+                k::native_expert_grouped(L, gp, gs, dngv, gd, gt, G, G * R, dxq, scr2, dout, nullptr);
+            ck(cudaEventRecord(e1), "ev");
+            ck(cudaEventSynchronize(e1), "ev");
+            float ms = 0; ck(cudaEventElapsedTime(&ms, e0, e1), "ev");
+            // GB/s of the experts' own bytes, the same measure the NVFP4_BENCH line gives; a 36-byte weight block spans
+            // two 32-byte sectors, so the card moves about 1.78x this (the doc's tuning record uses the same number)
+            const char* qe = std::getenv("STRATA_EXPERT_QPN2");
+            const bool qon = qe != nullptr && qe[0] != '\0' && std::strcmp(qe, "0") != 0;
+            std::printf("window bench: %d groups x %d rows: %.1f us/call  %.1f GB/s of expert bytes (%d calls)  [%s]\n", G, R,
+                        ms / n * 1e3, (double) G * L.bytes * 1e-9 / (ms / n * 1e-3), n,
+                        qon ? (qe ? qe : "") : "default kernels");
+            return 0;
+        }
+        if (const char* iters = std::getenv("NVFP4_BENCH")) {
+            const int n = std::atoi(iters);
+            for (int w = 0; w < 5; ++w)
+                k::native_expert_grouped(L, dptr, dstart, dng, ddst, dtok, 1, T, dxq, scr, dout, nullptr);
+            ck(cudaDeviceSynchronize(), "warm");
+            cudaEvent_t e0, e1;
+            ck(cudaEventCreate(&e0), "ev"); ck(cudaEventCreate(&e1), "ev");
+            ck(cudaEventRecord(e0), "ev");
+            for (int i = 0; i < n; ++i)
+                k::native_expert_grouped(L, dptr, dstart, dng, ddst, dtok, 1, T, dxq, scr, dout, nullptr);
+            ck(cudaEventRecord(e1), "ev");
+            ck(cudaEventSynchronize(e1), "ev");
+            float ms = 0;
+            ck(cudaEventElapsedTime(&ms, e0, e1), "ev");
+            const double per = ms / n, gb = (double) L.bytes * 1e-9;
+            std::printf("bench: %.1f us/call  %.1f GB/s of expert bytes (%d calls)\n", per * 1e3, gb / (per * 1e-3), n);
+            cudaEventDestroy(e0); cudaEventDestroy(e1);
+            for (void* p2 : {(void*) db, (void*) dx, dxq, (void*) dout, scr, (void*) dptr, (void*) dstart, (void*) dng,
+                             (void*) ddst, (void*) dtok})
+                cudaFree(p2);
+            return 0;
+        }
+        k::native_expert_grouped(L, dptr, dstart, dng, ddst, dtok, 1, TR, dxq, scr, dout, nullptr);
         ck(cudaDeviceSynchronize(), "run");
-        std::vector<float> got((size_t) T * N);
+        std::vector<float> got((size_t) TR * N);
         ck(cudaMemcpy(got.data(), dout, got.size() * 4, cudaMemcpyDeviceToHost), "out");
         for (void* p : {(void*) db, (void*) dx, dxq, (void*) dout, scr, (void*) dptr, (void*) dstart, (void*) dng,
                         (void*) ddst, (void*) dtok})
@@ -99,8 +207,8 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < got.size(); ++i) { num += (got[i] - ref[i]) * (got[i] - ref[i]); den += ref[i] * ref[i]; }
         const double rel = std::sqrt(num / den);
         worst = std::fmax(worst, rel);
-        std::printf("layer %2d expert %3d: s_gate %.3g s_up %.3g s_down %.3g -> expert output rel. error %.3f%%\n", layer,
-                    e, tail[0], tail[1], tail[2], 100 * rel);
+        std::printf("layer %2d expert %3d (%d rows): s_gate %.3g s_up %.3g s_down %.3g -> expert output rel. error %.3f%%\n",
+                    layer, e, TR, tail[0], tail[1], tail[2], 100 * rel);
     }
     std::printf("RESULT: %s (worst %.3f%%)\n", worst < 0.03 ? "ok" : "TOO FAR", 100 * worst);
     return worst < 0.03 ? 0 : 1;

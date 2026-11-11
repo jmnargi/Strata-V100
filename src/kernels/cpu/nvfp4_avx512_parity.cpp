@@ -118,6 +118,16 @@ int check_rows(const Kern& k, const uint8_t* w, int n, size_t row_bytes, int row
         for (int t = 0; t < nt; ++t)
             for (int r = 0; r < rows; ++r) ref[t][r] = ref_dot(w + (size_t) r * row_bytes, n, a.p[t]);
         bad += report(mine, ref, nt, rows, worst, differ);
+        // Odd-length, nonzero-origin slices exercise paired rows and their single-row tail.
+        // Sentinels also catch writing the adjacent row owned by another pool worker.
+        constexpr float sentinel = 47.25f;
+        for (int t = 0; t < nt; ++t)
+            for (int r = 0; r < rows; ++r) {
+                mine[t][r] = sentinel;
+                if (r < 1 || r >= rows - 2) ref[t][r] = sentinel;
+            }
+        k.rows(w, row_bytes, n, a.p.data(), nt, op.data(), 1, rows - 2, 1.f);
+        bad += report(mine, ref, nt, rows, worst, differ);
     }
     return verdict(k, what, worst, rows, NT, bad, differ);
 }

@@ -228,3 +228,236 @@ decode 159 tokens/s (median of chat answers, 137-216), 4K prompt 3,981 tokens/s,
 agent session 151 tokens/s; the engine holds 69 GB of RAM beside 72 GB of VRAM. Against Unsloth's Q8_0 (set v1): top-1
 90.5%, mean KL 0.085, perplexity 3.95 (Q8_0: 4.05).
 This is a retrained model, so its distance to the original's Q8_0 includes real weight changes, not only rounding.
+
+## The QAD distillation (`local-inference-lab/Qwen3.8-Flash-Next-NVFP4`)
+
+`local-inference-lab`'s checkpoint is a quantization-aware distillation of the original: the routed experts, the n-gram
+table and the shared experts were retrained in their 4-/8-bit form against the BF16 teacher. It reads through the same
+converter and packer as NVIDIA's FP4-Local above, with three differences the tools now handle:
+
+| In the checkpoint | What differs from FP4-Local |
+| --- | --- |
+| routed experts: NVFP4, group 16 | the scales are the plain `weight_scale` matrix (F8_E4M3, `[rows, K/16]`) with one F32 `weight_scale_2` and one F32 `input_scale` per expert and projection, not the CSF stream pair |
+| n-gram (PLE) table: NVFP4, rows of 160 values | the block scales are `F8_E4M3` (FP4-Local's are U8); the row bytes are identical, and the table is written by the same `ple` step |
+| MTP head: NVFP4 experts, BF16 rest | the same triple; `tools/nvfp4_local_pack.py mtp` also reads an MXFP8 MTP head (`export-manifest.json` names one), which some revisions of this checkpoint carry |
+
+It also ships `hybrid-main-00001.safetensors` and `hybrid-main-00002.safetensors`: `HYBRID.json` lists the modules those
+files replace (the text attention projections and the MTP experts, taken from another revision of the same model). They
+carry the tensors under their ordinary names, so the reader indexes them **last** and a name present in both places is
+read from the overlay - without that the attention would be the trunk's, not the one the checkpoint means.
+
+Prepare it with the same command (it needs `torch` for the MXFP8 dequantization, which `pip install torch` provides):
+
+```
+python tools/nvfp4_local_pack.py prepare --model <checkpoint dir> --out <dir>
+strata --pack <dir>/pack --native <dir>/dense.gguf --native-dense-gguf <dir>/dense.gguf \
+       --ple-gguf <dir>/ple-nvfp4.gguf --mtp <dir>/mtp/rt --expert-cache auto --prefill auto --spec 4 ...
+```
+
+The vision tower is not converted: the checkpoint keeps it in the safetensors under `model.visual.*`, and the engine
+reads pictures with the original model's `mmproj` file, as for the other NVFP4 versions.
+
+Measured here (2x Tesla V100-PCIE-16GB, Ryzen 5 3600, 94 GiB RAM, this branch's engine, 32K context, int8 KV,
+`--layer-split 16`, `--resident-budget-gib 40`):
+
+- the prepared files: `pack/experts.bin` 67,948,118,016 B (24,576 experts, 2,764,816 B each), `ple-nvfp4.gguf` 28.8 GB
+  (320,001,536 rows), `dense.gguf` 5.6 GB, `mtp/rt` 0.9 GB; `prepare` took about 25 minutes (the n-gram table 40 s)
+- serving: both cards at 15.4 GiB of 16 GiB, 47 GiB of RAM used beside 40 GiB of page-locked experts
+- decode 35.9 tokens/s (median of three ~350-token answers: 34.9 / 39.1 / 35.9), MTP accepting 202-213 of 318-347
+  drafts; "9 + 8" answers `17`, a one-line string reverse and a `get_weather` call with `{"city":"Paris"}` are correct
+
+## Decode on Volta: `STRATA_EXPERT_QPN2`
+
+The decode experts can also run as W4A16 on Volta's `mma.sync.m8n8k4`, through a port of v100-skinny's QPN2 dataflow
+(`src/kernels/cuda/qpn2_nvfp4.cu`; upstream `kernels/skinny_kernels.cu`, Apache-2.0). One warp instruction is four
+8x8x4 products sharing one 8x4 activation tile, so a verify window of up to 8 rows is multiplied by the tensor cores
+instead of `dp4a`.
+
+- The pack's own rows are used as they are: a fragment is the 16 codes of one 16-value sub-block, which is 8 contiguous
+  bytes in `block_nvfp4`, re-paired in registers. No prepacked copy, no second `experts.bin`.
+- `STRATA_EXPERT_QPN2=1` (or `all`) runs gate/up and down; `gu` / `down` run one stage, the other staying on the default
+  kernels, for an A/B of a single stage. The switch is off by default: the default path stays byte-identical.
+- One expert serves at most 8 rows (the verify window's `kVerifyMaxT`), which is the instruction's tile; the dispatch
+  refuses anything else and the default kernels take it.
+- `nvfp4_expert_gpu_parity pack/experts.bin` (with the switch on) checks the whole expert - gate/up, the SwiGLU, the q8_1
+  hidden and down - against a double-precision expert: 1.229% worst over 8 tokens, against the W4A8 path's 1.217%. Both
+  are the two activation roundings; the weights are exact on this path.
+
+Measured on the same pair, `NVFP4_BENCH_GROUPS=60 NVFP4_BENCH_ROWS=6` in `nvfp4_expert_gpu_parity` (one expert's blob
+in every group, so VRAM-resident): 533 us a window against the W4A8 kernels' 698 us, 24% less.  With this RAM-budget
+pack the engine **stalls the verify window** with the switch on (`verify: timed out at layer 1`, before the stage
+hand-off), because a lane's 8-byte weight reads scatter across rows where the default kernels read each row coalesced,
+and the experts below the budget are streamed.  It therefore stays opt-in and is not for serving until its weight reads
+are coalesced the same way (a packed fragment order, as v100-skinny itself uses).
+
+### Throughput on the V100 pair (tuning, 2026-11-10)
+
+Decode tokens/s, median of four warm runs of the same ~350-token answer (one discarded warm-up first: the first window
+after a load is 20% cold), 2x V100-PCIE-16GB, int8 KV, `--layer-split 16`, one knob at a time from the arm above it. The
+box drifts 5-10% between batches; read the differences, not the last digit.
+
+| arm | tok/s | |
+| --- | ---: | --- |
+| first run: Gyro-M's expert profile, 750 MiB VRAM reserve, no `--adapt-async` | 35.9 | |
+| this model's own profile (`--expert-profile`, learned and saved by the engine), 1200 MiB reserve | 42.3 | +18% |
+| + `STRATA_ROUTE_TAIL_SKIP=7` | 45.7 | +8% |
+| + `--resident-budget-gib 48` / `56` | 49.1 / 49.6 | +16% |
+| + `--adapt-async 1` (at budget 40 / 48 / 56) | 49.4 / 55.1 / 58.8 | +17% |
+| + the MTP draft vocabulary (`tools/draft_vocab.py`, 106,299 of 248,320 ids) | 64.7 | +10% |
+| + `--spec-min-p 0.7` (acceptance 0.61 -> 0.74) and `--vram-reserve-mib 800` | **68.8** | **+92%** |
+| `--pipeline-windows 2` / 8K context / `--prefill 2048` / `--spec 6` | 63.6 / 62.8 / 60.5 / 41.1 | no |
+| `--layer-split 14` | 53.9 | worse |
+
+The window it produces (the engine's own `STRATA_DECODE_TIMING`): 35.6 ms at 2.35 drafts a window, of which **21.75 ms is
+the expert product on VRAM hits**, 9.86 ms the GPU-reach wait, 4.38 ms host CPU, 1.6 ms the drafter and 1.4 ms the
+commit. The expert product is therefore the whole game, and a pack layout that multiplies it on the tensor cores is the
+only large win left (see below).
+
+What each knob does: the profile decides which experts are resident, so a profile from another model is the largest
+single loss; the RAM budget decides how many experts never leave RAM (56 GiB of the 56.2 GiB the pack holds); `--adapt-async`
+advances the adaptive tier's swaps between windows instead of making a window wait; `STRATA_ROUTE_TAIL_SKIP=7` skips the 7
+rarest experts' tail work; the draft vocabulary shrinks the drafter's logits from 248k to 106k rows (so the drafter stops
+being 4 full-vocabulary passes a window); `--spec-min-p 0.7` makes the drafter fewer, surer proposals, which shortens the
+window more than it costs in tokens.
+
+#### Context: what declaring a bigger window costs
+
+The checkpoint is trained to 262,144 tokens (no rope scaling); 524,288 needs `--rope-scaling yarn --rope-scale 2`. The
+12 full-attention layers of the 48 keep a K/V row a token: 12 KB a token at int8, so the window spends VRAM that would
+otherwise hold experts, and the expert cache shrinks with it (of the 24,576 experts, the GPU cache holds):
+
+| `--max-context` | KV at int8 | experts the GPU holds | decode tok/s |
+| ---: | ---: | ---: | ---: |
+| 32,768 | 0.4 GB | 8,612 | **68.8** |
+| 131,072 | 1.6 GB | 8,090 | 63.3 |
+| 262,144 (trained length) | 3.1 GB | 7,389 | 57.8 |
+| 524,288 (yarn 2) | 6.3 GB | 5,992 | 53.1 |
+
+Declare the window the work needs: 262,144 costs 16% of decode against 32,768, and 524,288 costs 23%.
+
+#### The QPN2 kernel in the engine (measured, off)
+
+`STRATA_EXPERT_QPN2` first stalled the window (see above). The cause was the *PCIe plan*: the engine calls
+`native_expert_grouped` twice per layer, once for the experts in VRAM (`grid_groups` 0) and once for those that must be
+read from the pinned RAM arena (`grid_groups` > 0), and a lane's 8-byte reads scatter across 32 rows over PCIe. With the
+kernel gated to the VRAM plan it serves, and the stall is gone - but it is **slower end to end on this pack**: 62.2
+tokens/s against the W4A8 kernels' 68.8 (and 53.5 with each warp's K slice made contiguous). The harness's 533 vs 698 us
+on a 60-group window does not survive the engine's per-layer 10-group calls, where the W4A8 `dp4a` kernels' decode-once
+loop is the better shape. It stays opt-in and off; a faster expert product here needs a pack in the kernel's fragment
+order, not a repack of the current one.
+
+### Exact expert hot-path changes (2026-11-11)
+
+These changes keep the checkpoint, pack, activation formats and KV settings. CUDA
+uses immediate E2M1 lookup words and removes the early-return branch from UE4M3
+scale decoding. AVX2 decodes each block from one 32-byte load and shares activation
+loads between two rows at one token. Each CPU row keeps its original FMA order.
+
+On the Ryzen 5 3600, an old/new, single-thread, best-of-30 comparison measured:
+
+| Product | Tokens | Before ms | After ms | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| gate/up, 2 × 640 rows, K=2560 | 1 | 0.185 | 0.168 | 1.10× |
+| down, 2560 rows, K=640 | 1 | 0.101 | 0.085 | 1.19× |
+| gate/up | 4 | 0.452 | 0.431 | 1.05× |
+| gate/up | 8 | 0.832 | 0.807 | 1.03× |
+
+The CPU comparison found zero differing floats for gate/up and down at 1–9
+tokens. The existing CPU parity program also found zero differing floats against
+ggml on random blocks and the checkpoint's own rows, including SwiGLU. An
+exhaustive CUDA comparison found zero decoder differences over all 2^32 packed
+code words and all 256 scale bytes. The default GPU expert's worst error against
+the double-precision reference stayed 1.157% across six real experts.
+
+The opt-in QPN2 kernel now sizes its K split per stage, pairs aligned weight loads
+and avoids divergent zero-filling of unused activation rows. With ten distinct
+experts, 1,000 calls per sample and three samples on one V100:
+
+| Rows per expert | Previous QPN2 µs | Updated QPN2 µs |
+| --- | ---: | ---: |
+| 1 | 116.7 | 100.9 |
+| 4 | 110.0 | 105.5 |
+| 8 | 114.1 | 111.1 |
+
+These are kernel timings, not serving throughput. QPN2 remains opt-in and restricted
+to VRAM-resident experts. It passed the six-expert reference check at 1, 4 and 8
+rows; the eight-row worst error was 1.152%. Its FP32 reduction order changes with
+the K split. A shared-memory staging variant was tested and removed: at four rows
+it took 135.7 µs against the direct kernel's 105.5 µs. Fewer memory transactions
+did not repay its staging and synchronization cost.
+
+#### Serving result with the existing 524K configuration
+
+The serving check kept the QAD model, 524288 context, int8 KV, yarn 2, split 16,
+56 GiB resident budget, 800 MiB reserve, spec 4 and spec-min-p 0.7. Each arm
+started from a separate copy of the same expert profile. One warm-up was discarded,
+then eight greedy, at-most-400-token replies explained a hash table. Old/new arms
+were repeated after the QPN2 arms:
+
+| Arm | Median decode tok/s |
+| --- | ---: |
+| old default, first batch | 55.05 |
+| updated default, first batch | 55.30 |
+| updated QPN2 down only | 53.95 |
+| updated QPN2 gate/up only | 52.90 |
+| old default, repeated batch | 53.65 |
+| updated default, repeated batch | 53.70 |
+
+All 16 paired old/new default replies had identical content hashes. The median
+paired decode-time improvement was only 0.36%: **no meaningful serving throughput
+win is established**. The seven-token cached prompt suffix saved a median 10.9 ms.
+Three fresh 1566-token reads were also unchanged: median 8441.4 ms before and
+8457.8 ms after. The CPU and QPN2 kernel gains must not be presented as a 10–19%
+serving speedup. Neither QPN2 stage is enabled in the service.
+
+The updated default served `17` for 9 + 8, a correct Python string reversal, and
+`get_weather` with `{"city":"Paris"}`. The focused seven-test ctest group passed,
+as did the new odd-length CPU row-range check. The changed CUDA source compiled
+for sm_70 and its shared integer-kernel source compiled for HIP gfx1100; no AMD
+runtime, other GPU generation, vision or filled-524K-context test was run.
+
+### NVFP4 down launch correction (second pass, 2026-11-11)
+
+The default NVFP4 down kernel handles 32 output rows per block when the expert's
+hidden width is 640. Its launcher still divided the output width by 8. For this
+model's 2560 output rows it launched 320 blocks per expert group instead of 80.
+The excess blocks did no dot product, but still copied the hidden activations
+into shared memory and synchronized. Nsight Systems confirmed the 320-block
+launch before the fix and the 80-block launch after it.
+
+The launcher now includes NVFP4 in the existing 32-row dispatch rule. No new
+kernel, switch, allocation or numerical operation is needed. Other formats and
+the full-warp fallback keep their launch sizes.
+
+On a Tesla V100-PCIE-16GB at 175 W, ten distinct experts, fused gate/up enabled,
+1000 calls per sample, five interleaved old/new samples:
+
+| Rows per expert | Whole expert before µs | After µs |
+| --- | ---: | ---: |
+| 1 | 73.0 | 67.7 |
+| 2 | 78.3 | 73.1 |
+| 4 | 94.4 | 85.3 |
+| 8 | 164.5 | 149.1 |
+
+These are medians for the whole expert, not just down. The six-expert GPU
+reference check still reported 1.157% worst error. All five focused grouped/IQ
+regression tests passed. CUDA sm_70 and HIP gfx1100 compilation passed; no AMD
+runtime measurement was made.
+
+Serving used the unchanged 524288-context, int8-KV configuration above, with
+`STRATA_DECODE_TIMING=1` in both arms. Each start used a copy of the same expert
+profile. A-B-A-B, eight warm replies per arm, gave:
+
+| Batch | Before tok/s | After tok/s |
+| --- | ---: | ---: |
+| first | 56.35 | 56.05 |
+| repeated | 55.40 | 56.05 |
+
+All 16 paired reply hashes matched, with the same token and draft counts. The
+median paired decode-time speedup was 1.26%; 12 of 16 pairs were faster. Pooled
+throughput medians were 56.10 before and 56.05 after, so this does not establish a
+large or stable whole-service throughput increase. The repeat batch's engine
+clock measured 0.37–0.53 ms less per verify window. The robust result is removal
+of the excess blocks and 7–10% less whole-expert time in the isolated comparison.
+The model, context, KV format and size, sampling, routing and drafting settings
+were not changed.

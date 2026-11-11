@@ -5,6 +5,7 @@
 // MIT license, third_party/ggml/LICENSE).  The block structs and codebook grids come from its ggml-common.h,
 // included unchanged.
 #include "strata/kernels/iq_kernels.hpp"
+#include "strata/kernels/qpn2_nvfp4.hpp"
 #include "strata/core/sm75_series.hpp"
 #include "strata/core/sm120_series.hpp"
 #include "strata/kernels/gfx_arch.hpp"
@@ -586,12 +587,35 @@ __device__ __forceinline__ float vec_dot_q8_0_q8_1(const void* __restrict__ vbq,
 // kvalues_fp4 holds the E2M1 values doubled (0, 1, 2, 3, 4, 6, 8, 12), so the scale is halved here - exactly
 // ggml's ggml_cuda_ue4m3_to_fp32, decoded in software so the GPU and ggml-cpu agree bit for bit (NaN -> 0).
 __device__ __forceinline__ float ue4m3_to_f32_half(uint8_t x) {
-    // The same value as ldexpf(1 + man/8, exp - 7) * 0.5 (ldexpf(man, -9) * 0.5 for exp 0), built from its bits: every
-    // such value is exact in FP32, so this is equal for all 256 inputs - without the ldexpf and the branches it cost
-    // in the decode experts' inner loop.  Normal: 2^(exp-8) * (1 + man/8) = exponent field exp + 119, mantissa man<<20.
-    if (x == 0 || x == 0x7F) return 0.0f;
+    // Exact FP32 construction of UE4M3 / 2: normal exponent exp+119, mantissa man<<20.
+    // Subnormals are man/1024; the NaN encoding reads as zero. Avoid the early-return
+    // branch in the expert inner loop without changing any of the 256 input values.
     const uint32_t exp = (x >> 3) & 0xF, man = x & 0x7;
-    return exp == 0 ? (float) man * 0.0009765625f : __uint_as_float(((exp + 119u) << 23) | (man << 20));
+    const float r = exp == 0 ? (float) man * 0.0009765625f : __uint_as_float(((exp + 119u) * 8u + man) << 20);
+    return x == 0x7F ? 0.0f : r;
+}
+
+// E2M1's two eight-byte table halves are magnitudes and their negations. Keep
+// them immediate and build the sign selector once for both halves of q4.
+// int2.x/y retain the generic decoder's low/high-nibble order for dp4a.
+__device__ __forceinline__ int2 get_int2_nvfp4(const uint32_t q4) {
+#if defined(STRATA_HIP_GFX906) || defined(__HIPCC__)
+    return get_int_from_table_16((int) q4, kvalues_fp4);   // keep the backend's own permute path
+#else
+    constexpr uint32_t mag_lo = 0x03020100u;   // 0, 1, 2, 3
+    constexpr uint32_t mag_hi = 0x0C080604u;   // 4, 6, 8, 12
+    constexpr uint32_t neg_lo = 0xFDFEFF00u;   // 0, -1, -2, -3
+    constexpr uint32_t neg_hi = 0xF4F8FAFCu;   // -4, -6, -8, -12
+    const uint32_t code = q4 & 0x77777777u;                        // table index: bits 2-0 of every nibble
+    const uint32_t pick = ((q4 & 0x88888888u) >> 1) | 0x32103210u; // per nibble: byte j of the half, + 4 if negative
+    const uint32_t l = __byte_perm(mag_lo, mag_hi, code);          // magnitudes of nibbles 0-3
+    const uint32_t n = __byte_perm(neg_lo, neg_hi, code);          // and the same negated
+    const uint32_t lh = __byte_perm(mag_lo, mag_hi, code >> 16);   // nibbles 4-7
+    const uint32_t nh = __byte_perm(neg_lo, neg_hi, code >> 16);
+    const uint32_t lo = __byte_perm(l, n, pick);                   // nibbles 0-3, signed, in nibble order
+    const uint32_t hi = __byte_perm(lh, nh, pick >> 16);           // nibbles 4-7
+    return make_int2(__byte_perm(lo, hi, 0x6420), __byte_perm(lo, hi, 0x7531));
+#endif
 }
 
 // One call = two sub-blocks (32 values); `bq8_1` is the block's first q8_1 block (two per 64 values).
@@ -602,8 +626,8 @@ __device__ __forceinline__ float vec_dot_nvfp4_q8_1(const void* __restrict__ vbq
 #pragma unroll
     for (int i = 0; i < 2; i++) {
         const int iqs0 = iqs + 2 * i, iqs1 = iqs0 + 1, is = iqs0 >> 1;
-        const int2 v0 = get_int_from_table_16(get_int_b4(bq4->qs, iqs0), kvalues_fp4);
-        const int2 v1 = get_int_from_table_16(get_int_b4(bq4->qs, iqs1), kvalues_fp4);
+        const int2 v0 = get_int2_nvfp4(get_int_b4(bq4->qs, iqs0));
+        const int2 v1 = get_int2_nvfp4(get_int_b4(bq4->qs, iqs1));
         const block_q8_1* bq8 = bq8_1 + (is >> 1);
         const int i8 = (is & 1) << 2;
         int sumi = ggml_cuda_dp4a(v0.x, get_int_b4(bq8->qs, i8 + 0), 0);
@@ -1426,8 +1450,8 @@ template<> struct Split<40> {   // NVFP4: vec_dot_nvfp4_q8_1's two 16-value sub-
 #pragma unroll
         for (int i = 0; i < 2; i++) {
             const int iqs0 = iqs + 2 * i, iqs1 = iqs0 + 1, is = iqs0 >> 1;
-            r.v0[i] = get_int_from_table_16(get_int_b4(bq4->qs, iqs0), kvalues_fp4);
-            r.v1[i] = get_int_from_table_16(get_int_b4(bq4->qs, iqs1), kvalues_fp4);
+            r.v0[i] = get_int2_nvfp4(get_int_b4(bq4->qs, iqs0));
+            r.v1[i] = get_int2_nvfp4(get_int_b4(bq4->qs, iqs1));
             r.sc[i] = ue4m3_to_f32_half(bq4->d[is]);
         }
         return r;
@@ -4334,8 +4358,9 @@ void launch_down(int64_t cap_groups, cudaStream_t s, const unsigned long long* g
         native_down_pair_kernel<TD><<<pair_grid, 256, 0, s>>>(grp_ptr, grp_start, n_groups, ent_dst, hq, L, out);
     } else {
         const bool sub_down = !g_no_sub16_gu && ((TD != 144 && TD != 146) || g_tq_sub8);
+        // Match the kernel's sub-warp rows, including NVFP4's 32-row path.
         const int rows = (L.n_ff == 640 && sub_down)
-                             ? ((TD == 20 || TD == 144 || TD == 146) ? 32 : (TD == 42 ? 16 : 8)) : 8;
+                             ? ((TD == 20 || TD == 40 || TD == 144 || TD == 146) ? 32 : (TD == 42 ? 16 : 8)) : 8;
         const dim3 grid((unsigned) ((L.n_embd + rows - 1) / rows), (unsigned) cap_groups);
         if constexpr (TD == 144 || TD == 146) {
             if (!sub_down) {
@@ -5249,6 +5274,19 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
     float* h = (float*) ((uint8_t*) scratch + 2 * fa);
     block_q8_1* hq = (block_q8_1*) ((uint8_t*) scratch + 3 * fa);
     const auto* X = (const block_q8_1*) x_q8_1;
+    // NVFP4 W4A16 on Volta's mma.m8n8k4 (qpn2_nvfp4.cu): opt-in, so the default path stays byte-identical.
+    // STRATA_EXPERT_QPN2=1 (or "all") runs gate/up and down, "gu" only gate/up (the default down follows), "down"
+    // only down (the default gate/up and the engine's SwiGLU + q8_1 precede it) - the stage split is for A/B runs.
+    static const char* const qpn2_env = std::getenv("STRATA_EXPERT_QPN2");
+    static const bool qpn2_ok = qpn2_env != nullptr && qpn2_env[0] != '\0' && std::strcmp(qpn2_env, "0") != 0;
+    static const bool qpn2_gu_on = qpn2_ok && (std::strstr(qpn2_env, "down") == nullptr || std::strstr(qpn2_env, "gu") != nullptr);
+    static const bool qpn2_dn_on = qpn2_ok && (std::strstr(qpn2_env, "gu") == nullptr || std::strstr(qpn2_env, "down") != nullptr);
+    // The VRAM plan (grid_groups 0) is where the W4A16 kernel pays: its weights are already on the card.  The PCIe
+    // plan (grid_groups > 0) serves groups whose experts are NOT in the VRAM cache - those blobs come from the pinned
+    // RAM arena over PCIe, and a lane's 8-byte reads scatter across 32 rows there (the default kernels read each row
+    // coalesced), which stalls the window.  It keeps the default kernels.
+    const bool qpn2 = qpn2_ok && !g_grouped_v1 && g_exp_phase == 0 && grid_groups == 0 &&
+                      qpn2_nvfp4_supported(L, cap_entries);
     static const bool v2 = [] { const char* v = std::getenv("STRATA_EXPERT_V2"); return v && v[0] == '1'; }();
     if (v2 && L.gu_type == 21 && L.d_type == 20 && L.n_embd == 2560 && L.n_ff == 640) {   // S26: see s26_gu_l_kernel
         // S26 STRATA_TSUM=1: the sums as one transposed butterfly per warp (s26_tsum.cuh; bitwise the same values)
@@ -5341,7 +5379,8 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
 #else
     const bool gs_layout = true;
 #endif
-    if (gs_layout && g_exp_phase == 0 && !v1 && gu_swiglu_on() && !(expdec_mode() && !g_old_kernels && expdec_gu_ok(L))) {
+    if (gs_layout && g_exp_phase == 0 && !v1 && gu_swiglu_on() && !(qpn2 && qpn2_gu_on) &&
+        !(expdec_mode() && !g_old_kernels && expdec_gu_ok(L))) {
         switch (L.gu_type) {
 #define STRATA_GS(T) case T: gs_done = launch_gu_swiglu<T>(L, gy, s, grp_ptr, grp_start, n_groups, ent_tok, X, hq); break;
             STRATA_GU_FMTS(STRATA_GS)
@@ -5385,7 +5424,16 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
     } else
 #undef STRATA_GU_AMD
 #endif
-    if (!expdec_gu(L, gy, cap_groups, s, grp_ptr, grp_start, n_groups, ent_tok, X, gate, up))   // STRATA_EXPDEC=1
+    if (qpn2 && qpn2_gu_on) {                    // NVFP4 W4A16 gate/up; the engine's SwiGLU + q8_1 below stay
+        static bool said = false;
+        if (!said) {
+            said = true;
+            std::fprintf(stderr, "strata: decode experts: NVFP4 W4A16 (mma.m8n8k4, STRATA_EXPERT_QPN2)%s\n",
+                         qpn2_dn_on ? "" : " gate/up only");
+        }
+        qpn2_nvfp4_gu(L, cap_groups, cap_entries, s, grp_ptr, grp_start, n_groups, ent_tok, X, gate, up, grid_groups);
+        check("native_expert_grouped/qpn2 gu");
+    } else if (!expdec_gu(L, gy, cap_groups, s, grp_ptr, grp_start, n_groups, ent_tok, X, gate, up))   // STRATA_EXPDEC=1
     switch (L.gu_type) {
 #define STRATA_GU(T) case T: launch_gu<T>(cap_groups, s, grp_ptr, grp_start, n_groups, ent_tok, X, L, gate, up); break;
         STRATA_GU_FMTS(STRATA_GU)
@@ -5418,6 +5466,11 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
     check("native_expert_grouped/swiglu");
     }
     if (g_exp_phase == 1) return;
+    if (qpn2 && qpn2_dn_on) {                      // down by QPN2, from the q8_1 hidden just written
+        qpn2_nvfp4_down(L, cap_groups, cap_entries, s, grp_ptr, grp_start, n_groups, ent_dst, hq, out, grid_groups);
+        check("native_expert_grouped/qpn2 down");
+        return;
+    }
     const int d_rows = (!g_old_kernels && !g_no_sub16_gu && L.n_ff == 640) ? (L.d_type == 20 || L.d_type == 40 || L.d_type == 144 || L.d_type == 146 ? 32 : (L.d_type == 42 ? 16 : 8)) : 8;
     const dim3 gd((unsigned) ((L.n_embd + d_rows - 1) / d_rows), (unsigned) gy);
 #if STRATA_EXP_LAYOUTS
