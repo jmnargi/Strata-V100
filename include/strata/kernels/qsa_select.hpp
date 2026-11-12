@@ -60,6 +60,11 @@ bool qsa_block_scores_tc(const float* pooled, const float* dead, const float* q_
                          int64_t max_blocks, const QsaShapes& s, float* scores, void* stream, int64_t active_blocks);
 
 /// ids [nq, cap] (cells, ascending); `cap` >= the largest selection width.
+///
+/// STRATA_TOPK_COMPACT=1 (CUDA, opt-in; unset keeps the existing dispatch byte for byte): past the register
+/// kernel's reach, a coarse histogram over a monotone half-rounded key narrows each query to its cutoff bucket and
+/// refines that bounded candidate set with the same radix rule; a query that cannot be narrowed exactly is re-run by
+/// the wide kernel in the same call.  The ids are identical to the existing kernels'; the scores stay fp32.
 void qsa_block_topk(const float* scores, const int32_t* steps, int64_t nq, int64_t max_blocks, int64_t cap,
                     const QsaShapes& s, int32_t* ids, void* stream,
                     int64_t active_blocks = -1);   ///< > 0: no query of the call has more than this many blocks (n_bid + 1;

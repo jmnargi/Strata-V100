@@ -8,6 +8,9 @@
 #include "strata/kernels/gfx_arch.hpp"
 
 #include <cuda_runtime.h>
+#if !defined(__HIPCC__)
+#include <cuda_fp16.h>   // tc_coarse_key (STRATA_TOPK_COMPACT): the monotone half-rounded bucket key, CUDA only
+#endif
 
 #include <atomic>
 #include <cfloat>
@@ -1088,6 +1091,284 @@ __global__ void __launch_bounds__(TK_T) block_topk_wide_kernel(const float* __re
         run_sel += __shfl_sync(0xffffffffu, ps, 31);
     }
 }
+
+#if !defined(__HIPCC__)
+// ---- STRATA_TOPK_COMPACT=1: the exact long-row top-k over a bounded candidate set instead of repeated full rescans.
+// block_topk_wide_kernel reads a query's scores six times (four radix passes, a count, the emit).  Here a 1,024-sample
+// probe first declines visibly concentrated and NaN rows, one weighted histogram over a monotone 12-bit key picks the
+// coarse bucket that holds the width-th cell (the scores themselves stay fp32), only that bucket is refined with
+// block_topk_kernel's byte-radix rule, and the final pass emits with block_topk_wide_kernel's per-warp ascending
+// layout.  Four passes over the row instead of the wide kernel's six, and the refinement starts from at most TC_CAP
+// blocks.
+//
+// The coarse key is the top 12 bits of the HALF-rounded score (its order-preserving 16-bit mapping): rounding is
+// monotone and every bucket is a contiguous range of exact keys, so refinement over the bucket finds the exact 32-bit
+// pivot.  Twelve bits (64 sub-buckets per octave) are this geometry's choice: the widest selection is
+// idx_top_k + idx_block - 1 = 2,051 cells and TC_CAP is 5,120 blocks (2.5x the width, and 41 KiB of the 48 KiB static
+// shared budget with the double buffer); at the 524,288-cell capacity a typical bucket stays inside that bound, where
+// the upstream 8-bit key (4 sub-buckets per octave) would decline far more often.  The upstream 512-wide operator's
+// 2,304-candidate constant is NOT reused: this width is four times larger, so the buffer is sized from this geometry's
+// own bound below.
+//
+// The emit keeps block_topk_kernel's tie rule exactly: every cell above the pivot, plus the first `width - above`
+// cells AT the pivot in ascending cell order (a block at the pivot may be cut).  That is the wide kernel's warp-run
+// emit, so a pivot inside a block, or shared by several blocks, needs no extra fallback.  A query declines and is
+// re-run by block_topk_wide_kernel<true> (g_tk_fail, the sample kernel's contract) only when the probe sees one bin or
+// a NaN, a bucket holds more than TC_CAP cells (hence more blocks than the buffer), or any live score is NaN.  The
+// exact path then produces the ids, so narrowing can only cost a scan, never change a selection. Signed zeros
+// share both the coarse key and the exact order_key, matching the reference's normalization to +0.0.
+constexpr int TC_CBINS = 4096;  // 12 bits of the half key: four bins per thread, one block scan
+constexpr int TC_CAP = 5120;    // candidate blocks per bucket; 2.5x the 2,051-cell widest selection
+constexpr int64_t TC_MIN_CELLS = 32768;   // below this the probe/histogram's fixed cost is not worth it; decline
+static_assert(TC_CBINS == 4 * TK_T, "tc_choose_coarse scans four bins per thread");
+static_assert(TC_CAP >= 2048 + 3, "the candidate buffer must hold the widest selection");
+
+__device__ __forceinline__ uint32_t tc_coarse_key(float v) {
+    if (v == 0.0f) v = 0.0f;    // fold -0.0 into +0.0, matching the exact pass
+    const uint16_t h = __half_as_ushort(__float2half_rn(v));
+    const uint32_t ordered = (h & 0x8000u) ? (uint32_t) (uint16_t) ~h : (uint32_t) (uint16_t) (h | 0x8000u);
+    return ordered >> 4;        // 12 bits: sign, 5 exponent bits, 6 mantissa bits
+}
+
+struct TcShared {
+    // The coarse histogram is dead by the time the candidates are gathered, so coarse storage and the candidate
+    // double buffer share one union.
+    union {
+        uint32_t coarse[TC_CBINS];
+        int32_t cand[2][TC_CAP];   // the cutoff bucket, compacted by each refinement pass
+    } u;
+    uint32_t hist[256];            // the refinement passes' byte histogram
+    int s_warp[33];
+    int s_pmin[TK_T / 32], s_pmax[TK_T / 32];
+    uint32_t prefix, remaining, sel, above, bucket, count, next;
+    int invalid;
+};
+static_assert(sizeof(TcShared) <= 48 * 1024, "the compact selector must fit the default static shared budget");
+
+// block_topk_kernel's digit rule as a suffix scan: the largest digit d whose cells at or above it reach `rem` (bin 0
+// when none does), with the cells strictly above it and the digit's own cell count.  `coarse` is consumed.
+__device__ __forceinline__ void tc_choose_coarse(const uint32_t* coarse, int* s_warp, uint32_t rem, uint32_t& sel,
+                                                 uint32_t& above, uint32_t& count) {
+    const int t = threadIdx.x;
+    uint32_t v[4];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) v[i] = coarse[TC_CBINS - 1 - 4 * t - i];
+    const uint32_t sum = v[0] + v[1] + v[2] + v[3];
+    int total = 0;
+    const uint32_t before = (uint32_t) block_excl_scan((int) sum, s_warp, total);
+    (void) total;
+    __syncthreads();
+    if (before < rem && before + sum >= rem) {
+        uint32_t cum = before;
+#pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            if (cum + v[i] >= rem) {
+                sel = (uint32_t) (TC_CBINS - 1 - 4 * t - i);
+                above = cum;
+                count = v[i];
+                break;
+            }
+            cum += v[i];
+        }
+    }
+}
+
+// the same digit rule over the refinement's 256 byte bins (threads 256..1023 contribute an empty zero bin)
+__device__ __forceinline__ void tc_choose_byte(const uint32_t* hist, int* s_warp, uint32_t rem, uint32_t& sel,
+                                               uint32_t& above, uint32_t& count) {
+    const int t = threadIdx.x;
+    const uint32_t v = t < 256 ? hist[255 - t] : 0u;
+    int total = 0;
+    const uint32_t before = (uint32_t) block_excl_scan((int) v, s_warp, total);
+    (void) total;
+    __syncthreads();
+    if (v != 0u && before < rem && before + v >= rem) {
+        sel = (uint32_t) (255 - t);
+        above = before;
+        count = v;
+    }
+}
+
+__global__ void __launch_bounds__(TK_T) block_topk_compact_kernel(const float* __restrict__ scores,
+                                                                  const int32_t* __restrict__ steps, int64_t max_blocks,
+                                                                  int64_t cap, int32_t* __restrict__ ids) {
+    __shared__ TcShared sh;
+    const int64_t qi = blockIdx.x;
+    const int32_t* st = steps + qi * kStepCount;
+    const int64_t n_kv = st[kStepNKv], n_bid = st[kStepNBid], width = st[kStepWidth];
+    int32_t* out = ids + qi * cap;
+    const int t = threadIdx.x, lane = t & 31, warp = t >> 5;
+    auto fail = [&] { if (t == 0) g_tk_fail[qi] = 1; };
+    if (n_kv <= width) {                               // everything is selected: the identity, ascending
+        for (int64_t j = t; j < n_kv; j += TK_T) out[j] = (int32_t) j;
+        if (t == 0) g_tk_fail[qi] = 0;
+        return;
+    }
+    const float* sc = scores + qi * max_blocks;
+    const int64_t nb = n_bid + 1;                      // blocks 0..n_bid, the last possibly empty
+    auto weight = [&](int64_t b) -> int { return b < n_bid ? R : (int) (n_kv - n_bid * R); };
+    if (n_bid < 1024 || n_kv < TC_MIN_CELLS) { fail(); return; }
+    // 1. bounded probe: 32 samples per warp at stride n_bid / 32 (n_bid >= 1024 keeps every index inside the
+    // completed row; the tail block's +1e9 score is not probed).  A single coarse bin means the row is concentrated
+    // and the refinement would decline; the probe can only forgo the narrowing, never a candidate.
+    if (t == 0) sh.invalid = 0;
+    __syncthreads();
+    const int64_t pb = (int64_t) warp * (n_bid >> 5) + lane;
+    const float probe = sc[pb];
+    if (!(probe == probe)) atomicExch(&sh.invalid, 1);
+    const uint32_t pk = tc_coarse_key(probe);
+    uint32_t pmin = pk, pmax = pk;
+#pragma unroll
+    for (int o = 16; o > 0; o >>= 1) {
+        pmin = min(pmin, __shfl_xor_sync(0xffffffffu, pmin, o));
+        pmax = max(pmax, __shfl_xor_sync(0xffffffffu, pmax, o));
+    }
+    if (lane == 0) {
+        sh.s_pmin[warp] = (int) pmin;
+        sh.s_pmax[warp] = (int) pmax;
+    }
+    __syncthreads();
+    if (t == 0) {
+        int mn = 0x7fffffff, mx = 0;
+        for (int w2 = 0; w2 < TK_T / 32; ++w2) {
+            mn = sh.s_pmin[w2] < mn ? sh.s_pmin[w2] : mn;
+            mx = sh.s_pmax[w2] > mx ? sh.s_pmax[w2] : mx;
+        }
+        if (mn == mx) sh.invalid |= 2;                 // every probe in one coarse bin
+    }
+    __syncthreads();
+    if (sh.invalid) { fail(); return; }
+    // 2. one weighted histogram of the coarse key over every live block
+    for (int i = t; i < TC_CBINS; i += TK_T) sh.u.coarse[i] = 0;
+    if (t == 0) { sh.invalid = 0; sh.prefix = 0; sh.count = 0; sh.sel = 0; sh.above = 0; sh.bucket = 0; }
+    __syncthreads();
+    for (int64_t b = t; b < nb; b += TK_T) {
+        const int w = weight(b);
+        if (w == 0) continue;
+        const float s = sc[b];
+        if (!(s == s)) atomicExch(&sh.invalid, 1);
+        atomicAdd(&sh.u.coarse[tc_coarse_key(s)], (unsigned) w);
+    }
+    __syncthreads();
+    if (sh.invalid) { fail(); return; }
+    tc_choose_coarse(sh.u.coarse, sh.s_warp, (uint32_t) width, sh.sel, sh.above, sh.bucket);
+    __syncthreads();
+    if (sh.bucket > TC_CAP) { fail(); return; }        // never truncate a bucket: the exact selector takes it
+    const uint32_t coarse_bin = sh.sel;
+    if (t == 0) sh.remaining = (uint32_t) width - sh.above;
+    __syncthreads();
+    // 3. the cutoff bucket's blocks (cells are weighted, so a partial tail block contributes only its own cells)
+    for (int64_t b = t; b < nb; b += TK_T) {
+        const int w = weight(b);
+        if (w == 0) continue;
+        if (tc_coarse_key(sc[b]) == coarse_bin) {
+            const uint32_t slot = atomicAdd(&sh.count, 1u);
+            sh.u.cand[0][slot] = (int32_t) b;
+        }
+    }
+    __syncthreads();
+    if (sh.count > TC_CAP) { fail(); return; }          // defensive: the bucket-cell bound above implies it cannot
+    // 4. block_topk_kernel's byte radix over the candidates only, compacting on every pass
+#pragma unroll
+    for (int pass = 0; pass < 4; ++pass) {
+        const int shift = 24 - 8 * pass;
+        const int source = pass & 1;
+        for (int i = t; i < 256; i += TK_T) sh.hist[i] = 0;
+        __syncthreads();
+        const uint32_t count = sh.count;
+        for (uint32_t i = t; i < count; i += TK_T) {
+            const int64_t b = sh.u.cand[source][i];
+            atomicAdd(&sh.hist[(order_key(sc[b]) >> shift) & 255u], (unsigned) weight(b));
+        }
+        __syncthreads();
+        tc_choose_byte(sh.hist, sh.s_warp, sh.remaining, sh.sel, sh.above, sh.bucket);
+        __syncthreads();
+        if (t == 0) {
+            sh.prefix |= sh.sel << shift;
+            sh.remaining -= sh.above;
+        }
+        __syncthreads();
+        if (shift == 0) break;   // pivot = sh.prefix; sh.remaining is the cells-at-pivot budget (width - above)
+        const uint32_t count2 = sh.count;
+        if (t == 0) sh.next = 0;
+        __syncthreads();
+        for (uint32_t i = t; i < count2; i += TK_T) {
+            const int32_t b = sh.u.cand[source][i];
+            if (((order_key(sc[b]) >> shift) & 255u) == sh.sel) {
+                const uint32_t slot = atomicAdd(&sh.next, 1u);
+                sh.u.cand[source ^ 1][slot] = b;
+            }
+        }
+        __syncthreads();
+        if (t == 0) sh.count = sh.next;
+        __syncthreads();
+    }
+    // 5. block_topk_wide_kernel's emit over the whole row: every cell above the pivot, plus the first
+    // `sh.remaining` cells AT it in ascending cell order (a block at the pivot may be cut).  The warp-run layout
+    // writes the ids ascending without a sort, and the refinement's residual is exactly width - above.
+    const uint32_t pivot = sh.prefix;
+    const int eq_budget = (int) sh.remaining;
+    const int64_t per = (nb + TK_T - 1) / TK_T;
+    const int64_t w0 = (int64_t) warp * 32 * per;
+    int gt = 0, eq = 0;
+    for (int64_t b = w0 + lane; b < nb && b < w0 + 32 * per; b += 32) {
+        const int w = weight(b);
+        if (w == 0) continue;
+        const uint32_t k = order_key(sc[b]);
+        if (k > pivot) gt += w;
+        else if (k == pivot) eq += w;
+    }
+#pragma unroll
+    for (int o = 16; o > 0; o >>= 1) {
+        gt += __shfl_xor_sync(0xffffffffu, gt, o);
+        eq += __shfl_xor_sync(0xffffffffu, eq, o);
+    }
+    if (lane == 0) { sh.s_pmin[warp] = gt; sh.s_pmax[warp] = eq; }   // the probe buffers are dead: reuse them
+    __syncthreads();
+    if (t == 0) {                                     // per warp: the selected cells and the tied cells before it
+        int eb = 0, sb = 0;
+        for (int w2 = 0; w2 < TK_T / 32; ++w2) {
+            const int g2 = sh.s_pmin[w2], e2 = sh.s_pmax[w2];
+            const int take = eq_budget - eb < 0 ? 0 : (eq_budget - eb > e2 ? e2 : eq_budget - eb);
+            sh.s_pmin[w2] = sb;
+            sh.s_pmax[w2] = eb;
+            sb += g2 + take;
+            eb += e2;
+        }
+        sh.count = (uint32_t) sb;
+    }
+    __syncthreads();
+    if (sh.count != (uint32_t) width) { fail(); return; }   // the refinement and threshold disagree: exact path takes it
+    int run_sel = sh.s_pmin[warp], run_eq = sh.s_pmax[warp];
+    for (int64_t r0 = w0; r0 < nb && r0 < w0 + 32 * per; r0 += 32) {
+        const int64_t b = r0 + lane;
+        const int w = b < nb ? weight(b) : 0;
+        const uint32_t k = w ? order_key(sc[b]) : 0u;
+        const int my_gt = (w && k > pivot) ? w : 0, my_eq = (w && k == pivot) ? w : 0;
+        if (__ballot_sync(0xffffffffu, (my_gt | my_eq) != 0) == 0u) continue;   // a row without a selected block
+        int pe = my_eq;                               // tied cells up to and with this lane
+#pragma unroll
+        for (int o = 1; o < 32; o <<= 1) {
+            const int y = __shfl_up_sync(0xffffffffu, pe, o);
+            if (lane >= o) pe += y;
+        }
+        const int left = eq_budget - (run_eq + pe - my_eq);
+        const int take = left < 0 ? 0 : (left > my_eq ? my_eq : left);
+        const int my_sel = my_gt + take;
+        int ps = my_sel;
+#pragma unroll
+        for (int o = 1; o < 32; o <<= 1) {
+            const int y = __shfl_up_sync(0xffffffffu, ps, o);
+            if (lane >= o) ps += y;
+        }
+        int32_t* dst = out + run_sel + ps - my_sel;
+        for (int c = 0; c < my_sel; ++c) dst[c] = (int32_t) (b * R + c);
+        run_eq += __shfl_sync(0xffffffffu, pe, 31);
+        run_sel += __shfl_sync(0xffffffffu, ps, 31);
+    }
+    if (t == 0) g_tk_fail[qi] = 0;
+}
+#endif  // !__HIPCC__
 
 
 // Block scores with every key block read ONCE for all of a call's queries (block_scores_kernel's grid is
@@ -2627,6 +2908,34 @@ void qsa_block_topk(const float* scores, const int32_t* steps, int64_t nq, int64
     // reading them from memory; the same ids. STRATA_TOPK_OLD=1: the original kernel
     static const bool old = std::getenv("STRATA_TOPK_OLD") != nullptr;
     if (nq <= 0) return;
+#if !defined(__HIPCC__)
+    // STRATA_TOPK_COMPACT=1 (opt-in): narrow each long row to its cutoff bucket and refine exactly, then emit once
+    // (block_topk_compact_kernel).  Launched only past the register kernel's reach, where the wide kernel's six passes
+    // are the cost being removed; a query that declines is re-run by block_topk_wide_kernel<true> in this call.
+    // Unset: nothing below changes.  HIP keeps its existing exact dispatch.
+    static const bool compact_on = [] {
+        const char* v = std::getenv("STRATA_TOPK_COMPACT");
+        return v != nullptr && std::atoi(v) != 0;
+    }();
+    if (compact_on && !old && nq <= TS_MAXQ && s.idx_block == R &&
+        cap >= qsa_selection_width(kTopkMaxCells, s)) {
+        const int64_t bound = active_blocks > 0 && active_blocks < max_blocks ? active_blocks : max_blocks;
+        // Past the register kernel's reach, or in the counted prompt band the streaming kernel takes (22,528 blocks);
+        // below that the register kernel is the dispatch and is left alone.
+        if (bound > (int64_t) TK_T * TK_PER || (active_blocks > 0 && bound > 22528)) {
+            block_topk_compact_kernel<<<(unsigned) nq, TK_T, 0, (cudaStream_t) stream>>>(scores, steps, max_blocks, cap,
+                                                                                        ids);
+            block_topk_wide_kernel<true><<<(unsigned) nq, TK_T, 0, (cudaStream_t) stream>>>(scores, steps, max_blocks,
+                                                                                           cap, ids);
+            const cudaError_t e = cudaGetLastError();
+            if (e != cudaSuccess) {
+                std::fprintf(stderr, "qsa_block_topk (compact): %s\n", cudaGetErrorString(e));
+                std::exit(1);
+            }
+            return;
+        }
+    }
+#endif
 #if !defined(__HIPCC__)
     // sm_90+: a cluster of CL_N CTAs per query for the calls of a few queries (decode windows); the same ids.
     // STRATA_QSA_CLUSTER=0: the one-CTA kernels below

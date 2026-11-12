@@ -4,6 +4,59 @@ Strata's ready-made engine and the support matrix start at compute capability 7.
 engine compiled for it, through the experimental build that issue #236 added. It is **community-tested, not part of the
 supported cards**: no ready-made engine is published for it and the numbers below come from one machine.
 
+## Exact long-context QSA selection (2026-11-12)
+
+`STRATA_TOPK_COMPACT=1` enables an optional CUDA selector inspired by
+[1Cat-vLLM #1171](https://github.com/1CatAI/1Cat-vLLM/pull/1171), shipped in
+[v1.5.2](https://github.com/1CatAI/1Cat-vLLM/releases/tag/v1.5.2).
+The fork selects up to 2,051 cells, with four cells sharing a score,
+instead of 1Cat's 512 individual entries. This is an adaptation, not a
+copy of its candidate limits.
+
+A coarse histogram finds the cutoff bucket. Exact FP32 radix selection
+then reads only that bucket before emitting cell IDs in ascending order.
+The output rule is unchanged, including ties and partial blocks. NaNs,
+concentrated rows and oversized buckets use the existing exact selector.
+The default path and HIP dispatch are unchanged.
+
+Measured with CUDA 12.8 on the two V100-PCIE-16GB cards at 175 W, Ryzen
+5 3600 and 94 GiB RAM. Each value below is the median of three interleaved
+off/on pairs. Times cover selection only, not scoring or the whole model.
+
+| Live cells / rows | GPU0 off / on | GPU1 off / on |
+| --- | ---: | ---: |
+| 151,309 / 5 | 0.117 / 0.082 ms | 0.131 / 0.091 ms |
+| 524,288 / 5 | 0.302 / 0.215 ms | 0.303 / 0.216 ms |
+| 524,288 / 256, counted prompt | 1.519 / 0.917 ms | 1.523 / 0.920 ms |
+
+The kernel is about 29–40% faster in these continuous-score cases.
+Selected IDs matched the exact reference for continuous scores, ties,
+equal scores, signed zeros, infinities, NaNs and partial tail blocks.
+The 20 active-bound cases also passed.
+
+The live NVFP4 sweep used three paired prompts at each length, 512-token
+greedy replies, thinking off, no reused prefix, and the PR #102 profile:
+HC_Q8, split 16, int8 elastic KV, 524288 logical context, MTP 4/min-p 0.7,
+800 MiB reserve, whole-expert RAM arena and lazy vision.
+
+| Actual prompt tokens | Baseline prefill / decode | Compact prefill / decode |
+| --- | ---: | ---: |
+| 4,247 | 509.6 / 62.1 tok/s | 509.6 / 64.6 tok/s |
+| 33,740 | 1197.2 / 59.2 tok/s | 1197.2 / 61.3 tok/s |
+| 151,309 | 1383.8 / 55.6 tok/s | 1336.6 / 56.7 tok/s |
+
+These are batched-arm medians, not an established end-to-end speed gain.
+Long-prefill times drifted from about 103 to 133 seconds across rounds.
+Full replies were not generally identical between service arms; selector
+parity is not a model-quality benchmark. All runs are retained in
+[`v100-cat-topk-2026-11-12.json`](../benchmarks/v100-cat-topk-2026-11-12.json).
+
+The other proposed port, [1Cat #1172](https://github.com/1CatAI/1Cat-vLLM/pull/1172),
+already exists here: both the Volta BF16 and daily Q8 HC paths compute
+the squared-norm work inside the down projection. The existing HC
+benchmark passed, with matching Q8 hashes across its normal and TSUM
+implementations. No duplicate fusion or new HC flag was added.
+
 ## Split HC_Q8 memory saving (2026-11-11)
 
 Ported [upstream PR #2427](https://github.com/Niko1221/Strata/pull/2427),

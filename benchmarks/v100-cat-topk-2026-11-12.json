@@ -1,0 +1,1488 @@
+{
+  "date": "2026-11-12",
+  "baseline_commit": "f11a3b3f7",
+  "port_commit": "53a36c9b0",
+  "source": {
+    "release": "https://github.com/1CatAI/1Cat-vLLM/releases/tag/v1.5.2",
+    "idea": "https://github.com/1CatAI/1Cat-vLLM/pull/1171",
+    "previous_release": "https://github.com/1CatAI/1Cat-vLLM/releases/tag/v1.5.1"
+  },
+  "hardware": "Two Tesla V100-PCIE-16GB, 175W; Ryzen5 3600;94GiB RAM;GPU0PCIe3x4 GPU1x16",
+  "settings": {
+    "model": "local-inference-lab/Qwen3.8-Flash-Next-NVFP4",
+    "HC_Q8": 1,
+    "layer_split": 16,
+    "kv": "int8 elastic",
+    "context": 524288,
+    "spec": 4,
+    "spec_min_p": 0.7,
+    "reserve_mib": 800,
+    "vision": "lazy",
+    "experts": "whole RAM arena"
+  },
+  "method": {
+    "service": "Three sequential rounds per arm; unique paired prefixes, uncached, greedy512tokens,thinkingoff,64tokenwarmups excluded. Batchednotinterleaved; no overall speed significance claim; longprefill thermal/run drift retained. Full replies generally differ, not a model-quality benchmark.",
+    "micro": "Three interleaved off/on pairs per shape and per GPU; real dispatched selector compared, not slow reference; six score distributions verified in each invocation."
+  },
+  "micro_runs": [
+    {
+      "gpu": 0,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 0,
+      "compact": 0,
+      "ms": 0.117,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.206 ms, dispatched 0.117 ms (1.8x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 0,
+      "compact": 1,
+      "ms": 0.082,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.206 ms, dispatched 0.082 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 1,
+      "compact": 0,
+      "ms": 0.118,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.206 ms, dispatched 0.118 ms (1.7x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 1,
+      "compact": 1,
+      "ms": 0.082,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.206 ms, dispatched 0.082 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 2,
+      "compact": 0,
+      "ms": 0.117,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.206 ms, dispatched 0.117 ms (1.8x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 2,
+      "compact": 1,
+      "ms": 0.082,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.206 ms, dispatched 0.082 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 0,
+      "compact": 0,
+      "ms": 0.302,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.768 ms, dispatched 0.302 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 0,
+      "compact": 1,
+      "ms": 0.215,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.768 ms, dispatched 0.215 ms (3.6x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 1,
+      "compact": 0,
+      "ms": 0.302,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.768 ms, dispatched 0.302 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 1,
+      "compact": 1,
+      "ms": 0.215,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.768 ms, dispatched 0.215 ms (3.6x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 2,
+      "compact": 0,
+      "ms": 0.301,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.768 ms, dispatched 0.301 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 2,
+      "compact": 1,
+      "ms": 0.215,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.768 ms, dispatched 0.215 ms (3.6x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 0,
+      "compact": 0,
+      "ms": 1.518,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 8.155 ms, dispatched 1.518 ms (5.4x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 0,
+      "compact": 1,
+      "ms": 0.917,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 8.318 ms, dispatched 0.917 ms (9.1x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 1,
+      "compact": 0,
+      "ms": 1.52,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 8.107 ms, dispatched 1.520 ms (5.3x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 1,
+      "compact": 1,
+      "ms": 0.917,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 8.133 ms, dispatched 0.917 ms (8.9x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 2,
+      "compact": 0,
+      "ms": 1.519,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 8.074 ms, dispatched 1.519 ms (5.3x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    },
+    {
+      "gpu": 0,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 2,
+      "compact": 1,
+      "ms": 0.915,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 8.282 ms, dispatched 0.915 ms (9.0x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    },
+    {
+      "gpu": 1,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 0,
+      "compact": 0,
+      "ms": 0.131,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.227 ms, dispatched 0.131 ms (1.7x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 0,
+      "compact": 1,
+      "ms": 0.091,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.227 ms, dispatched 0.091 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 1,
+      "compact": 0,
+      "ms": 0.131,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.227 ms, dispatched 0.131 ms (1.7x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 1,
+      "compact": 1,
+      "ms": 0.091,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.227 ms, dispatched 0.091 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 2,
+      "compact": 0,
+      "ms": 0.131,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.227 ms, dispatched 0.131 ms (1.7x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 151309,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 2,
+      "compact": 1,
+      "ms": 0.091,
+      "stdout": "PASS context 151309 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.227 ms, dispatched 0.091 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 0,
+      "compact": 0,
+      "ms": 0.334,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.850 ms, dispatched 0.334 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 0,
+      "compact": 1,
+      "ms": 0.217,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.775 ms, dispatched 0.217 ms (3.6x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 1,
+      "compact": 0,
+      "ms": 0.303,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.771 ms, dispatched 0.303 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 1,
+      "compact": 1,
+      "ms": 0.216,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.771 ms, dispatched 0.216 ms (3.6x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 2,
+      "compact": 0,
+      "ms": 0.303,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.771 ms, dispatched 0.303 ms (2.5x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 5,
+      "counted": 0,
+      "repeat": 2,
+      "compact": 1,
+      "ms": 0.216,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 5 queries without a block count: reference 0.771 ms, dispatched 0.216 ms (3.6x); identical ids: continuous 5/5, 64 levels 5/5, equal scores 5/5, signed-zero/infinities 5/5, NaN rows 5/5, spread ties 5/5\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 0,
+      "compact": 0,
+      "ms": 1.525,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 7.561 ms, dispatched 1.525 ms (5.0x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 0,
+      "compact": 1,
+      "ms": 0.921,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 7.494 ms, dispatched 0.921 ms (8.1x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 1,
+      "compact": 0,
+      "ms": 1.523,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 7.565 ms, dispatched 1.523 ms (5.0x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 1,
+      "compact": 1,
+      "ms": 0.92,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 7.596 ms, dispatched 0.920 ms (8.3x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 2,
+      "compact": 0,
+      "ms": 1.521,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 7.645 ms, dispatched 1.521 ms (5.0x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    },
+    {
+      "gpu": 1,
+      "context": 524288,
+      "nq": 256,
+      "counted": 1,
+      "repeat": 2,
+      "compact": 1,
+      "ms": 0.92,
+      "stdout": "PASS context 524288 under a capacity of 524288 (131074 blocks), 256 queries with their block count: reference 7.599 ms, dispatched 0.920 ms (8.3x); identical ids: continuous 256/256, 64 levels 256/256, equal scores 256/256, signed-zero/infinities 256/256, NaN rows 256/256, spread ties 256/256\n"
+    }
+  ],
+  "service_runs": {
+    "baseline": [
+      {
+        "arm": "baseline",
+        "round": 1101,
+        "label": "warmup",
+        "wall_s": 5.036657810211182,
+        "prompt_sha256": "57f77cefaa712207e55b5369fec01c1ef607671004c243c2228f9173644c6931",
+        "response": {
+          "id": "chatcmpl-11ce30d33cd045e1b6979e45",
+          "object": "chat.completion",
+          "created": 1794468208,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Orchestrating High-Performance Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nThe deployment of large language models (LLMs) on consumer-grade hardware has historically been constrained by the memory bandwidth and capacity limitations of single-GPU systems. However, recent architectural innovations have shifted"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 405,
+            "completion_tokens": 64,
+            "total_tokens": 469,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 405,
+            "prompt_ms": 3427.4,
+            "prompt_per_token_ms": 8.463,
+            "prompt_per_second": 118.2,
+            "predicted_n": 64,
+            "predicted_ms": 1522.0,
+            "predicted_per_token_ms": 23.781,
+            "predicted_per_second": 42.0,
+            "draft_n": 35,
+            "draft_n_accepted": 28
+          }
+        }
+      },
+      {
+        "arm": "baseline",
+        "round": 1101,
+        "label": "4k",
+        "wall_s": 16.558861017227173,
+        "prompt_sha256": "40786e77b90890ca7d1d271af222430aadbc0857d50ee32e4498eb220bca16cd",
+        "response": {
+          "id": "chatcmpl-12e7da39dc18410b8f7553cb",
+          "object": "chat.completion",
+          "created": 1794468213,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Orchestrating the Edge: A Deep Dive into High-Performance LLM Inference Scheduling\n\nThe deployment of Large Language Models (LLMs) on consumer-grade hardware has historically been constrained by a fundamental mismatch between model size and available memory bandwidth. However, recent architectural innovations have shifted the paradigm from brute-force server clusters to sophisticated, heterogeneous computing environments. By leveraging a combination of advanced inference scheduling, expert caching strategies, optimized PCIe transfers, and speculative decoding, it is now possible to run models that previously required dedicated data center infrastructure on a single workstation. This tutorial explores the technical underpinnings of this transformation, dissecting how these four pillars interact to maximize throughput and minimize latency.\n\n## The Dual-Pass Inference Architecture\n\nAt the heart of modern efficient inference lies the distinction between two distinct operational phases: the **prompt pass** (prefill) and the **token pass** (decode). Understanding the divergent computational characteristics of these passes is critical for effective scheduling.\n\nThe prompt pass is characterized by high parallelism and compute-bound operations. When a user submits a request, the model must process the entire input sequence simultaneously to generate Key-Value (KV) cache entries for every token in the prompt. This phase benefits from large chunk buffers that allow the GPU to saturate its floating-point units. During this stage, the system borrows cache slots aggressively to store intermediate activations and KV pairs. The primary bottleneck here is not memory bandwidth but rather the sheer volume of matrix multiplications required to process thousands of tokens in a single forward pass.\n\nIn contrast, the token pass is inherently sequential and memory-bound. Once the prompt is processed, the model generates one answer token at a time. For each new token, the model must attend to all previous tokens (stored in the KV cache) and perform a full forward pass through the network layers. Because only one token is generated per step, the arithmetic intensity drops significantly. The GPU spends most of its time waiting for data to move from memory to compute units rather than performing calculations. This asymmetry necessitates a scheduling strategy that treats these two passes differently, ensuring that neither phase starves the other of resources.\n\n## Expert Caching and Mixture-of-Experts (MoE) Optimization\n\nTo scale model capacity without proportionally increasing computational cost per token, modern architectures often employ Mixture-of-Experts (MoE). In an MoE setup, not all parameters are active for every token; instead, a gating network routes each token to a subset of \"expert\" feed-forward"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 4247,
+            "completion_tokens": 512,
+            "total_tokens": 4759,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 4247,
+            "prompt_ms": 8227.3,
+            "prompt_per_token_ms": 1.937,
+            "prompt_per_second": 516.2,
+            "predicted_n": 512,
+            "predicted_ms": 8241.2,
+            "predicted_per_token_ms": 16.096,
+            "predicted_per_second": 62.1,
+            "draft_n": 354,
+            "draft_n_accepted": 243
+          }
+        }
+      },
+      {
+        "arm": "baseline",
+        "round": 1101,
+        "label": "32k",
+        "wall_s": 36.67378091812134,
+        "prompt_sha256": "d20cc8dd3974e6e0632cc5e7c5836aa9f752e05e35d073d62e56dc6d18eacb09",
+        "response": {
+          "id": "chatcmpl-31cc66273a094743a47f10c2",
+          "object": "chat.completion",
+          "created": 1794468230,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "The deployment of large language models (LLMs) on consumer-grade hardware represents one of the most significant engineering challenges in modern artificial intelligence. Traditionally, running a model with hundreds of billions of parameters required a cluster of high-end data center GPUs connected via NVLink or InfiniBand, costing tens of thousands of dollars and consuming kilowatts of power. However, recent architectural innovations have democratized this capability, allowing a single workstation equipped with a consumer GPU (such as an NVIDIA RTX 4090) and a standard CPU to run models that previously demanded server-class infrastructure. This achievement is not due to a single magic bullet but rather a sophisticated orchestration of inference scheduling, expert caching, PCIe bandwidth optimization, and speculative decoding. This tutorial provides a detailed technical breakdown of these mechanisms, explaining how they interlock to maximize throughput and minimize latency on heterogeneous hardware systems.\n\n### The Fundamental Bottleneck: Memory Bandwidth vs. Compute\n\nTo understand the necessity of these optimizations, one must first grasp the fundamental bottleneck in LLM inference. Large models are memory-bound during the token generation phase. For every single token generated, the model must read its entire weight matrix from memory to perform the necessary matrix multiplications. If a model has 70 billion parameters stored in 16-bit floating point (FP16), that is approximately 140 GB of data. Even if only half the weights are active due to sparsity or quantization, the bandwidth requirement remains immense.\n\nConsumer GPUs typically have high compute throughput but limited VRAM (Video RAM). For instance, an RTX 4090 has 24 GB of GDDR6X memory with a bandwidth of roughly 1 TB/s. A 70B model cannot fit entirely into this VRAM. Conversely, the system CPU and main system RAM (DDR5) offer massive capacity but significantly lower bandwidth compared to GPU VRAM. The PCIe interface connecting the CPU and GPU acts as a narrow bridge between these two domains. The core challenge of local inference is therefore not just fitting the model into memory, but orchestrating data movement across this bottleneck so that neither the GPU nor the CPU sits idle waiting for data.\n\n### Inference Scheduling: The Two-Pass Architecture\n\nThe solution begins with a distinct separation of concerns in the inference pipeline, known as the two-pass architecture. This approach divides the generation process into a \"prompt pass\" (prefill) and a \"token pass\" (decode). These two phases have vastly different computational characteristics and thus require"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 33740,
+            "completion_tokens": 512,
+            "total_tokens": 34252,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 33740,
+            "prompt_ms": 27962.2,
+            "prompt_per_token_ms": 0.829,
+            "prompt_per_second": 1206.6,
+            "predicted_n": 512,
+            "predicted_ms": 8603.3,
+            "predicted_per_token_ms": 16.803,
+            "predicted_per_second": 59.5,
+            "draft_n": 345,
+            "draft_n_accepted": 250
+          }
+        }
+      },
+      {
+        "arm": "baseline",
+        "round": 1101,
+        "label": "144k",
+        "wall_s": 112.01318597793579,
+        "prompt_sha256": "338d480886773fead81aab9c2ab62b2c9fe874399ce433c11d9709b2e9fd2423",
+        "response": {
+          "id": "chatcmpl-d67fbcbebf4c43048728d772",
+          "object": "chat.completion",
+          "created": 1794468266,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Optimizing Large Language Model Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nRunning large language models (LLMs) on consumer-grade hardware has historically been a bottlenecked endeavor, constrained by the limited video memory (VRAM) of graphics cards. However, recent architectural innovations have shifted this paradigm, allowing massive models to run efficiently on single-machine setups by orchestrating a complex dance between the CPU, GPU, SSD, and RAM. This tutorial explores the four pillars of this optimization strategy: dual-pass inference scheduling, expert caching with quantization, PCIe bandwidth management, and speculative decoding. By understanding how these components interleave, developers can maximize throughput and minimize latency without requiring server-grade infrastructure.\n\n## 1. The Dual-Pass Inference Architecture\n\nThe core efficiency gain in modern local LLM runners comes from separating the inference process into two distinct computational phases: the **Prompt Pass** (also known as Prefill) and the **Token Pass** (also known as Decode). These two passes have fundamentally different computational characteristics, memory access patterns, and hardware requirements. Treating them identically leads to severe inefficiencies; treating them separately allows for specialized optimization.\n\n### The Prompt Pass: Compute-Bound Parallelism\nThe prompt pass occurs when the model first ingests the user\u2019s input context. This phase is characterized by high parallelism. The model processes all tokens in the prompt simultaneously, performing matrix multipations across the entire sequence length at once. This makes the prompt pass **compute-bound**, meaning the speed is limited by the raw floating-point operations per second (FLOPS) of the GPU rather than memory bandwidth.\n\nTo optimize this, the system employs a technique called **chunked prefilling**. Instead of loading the entire context into VRAM at once\u2014which might exceed available memory\u2014the prompt is broken into large chunks. The system borrows cache slots from the KV-cache (Key-Value cache) to store these intermediate chunk buffers. During this phase, the GPU is fully utilized for matrix multiplication. Crucially, the architecture overlaps computation with data movement. While the current layer\u2019s attention mechanism is running on the GPU, the system simultaneously streams the weights for the *next* layer from storage into memory. This pipelining ensures that the GPU never sits idle waiting for the next set of weights to arrive, effectively hiding the latency of data transfer behind the computation time.\n\n### The Token Pass: Memory-Bound Serialism\nOnce the prompt is processed, the model enters the token pass"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 151309,
+            "completion_tokens": 512,
+            "total_tokens": 151821,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 151309,
+            "prompt_ms": 102673.8,
+            "prompt_per_token_ms": 0.679,
+            "prompt_per_second": 1473.7,
+            "predicted_n": 512,
+            "predicted_ms": 9109.3,
+            "predicted_per_token_ms": 17.792,
+            "predicted_per_second": 56.2,
+            "draft_n": 372,
+            "draft_n_accepted": 247
+          }
+        }
+      },
+      {
+        "arm": "baseline",
+        "round": 1102,
+        "label": "warmup",
+        "wall_s": 4.745716094970703,
+        "prompt_sha256": "3f137b3b36e0987a3c8ca6c33d3e50876b855dd3c2eb5d277fdbb94db1bd57c5",
+        "response": {
+          "id": "chatcmpl-f70e616b3721430680138eb7",
+          "object": "chat.completion",
+          "created": 1794468379,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Orchestrating the Edge: A Deep Dive into Hybrid Inference Scheduling for Large Language Models\n\nThe deployment of large language models (LLMs) on consumer-grade hardware has historically been constrained by a fundamental bottleneck: memory bandwidth and capacity. Traditional server-class inference relies on massive HBM (High Bandwidth Memory)"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 405,
+            "completion_tokens": 64,
+            "total_tokens": 469,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 405,
+            "prompt_ms": 3417.9,
+            "prompt_per_token_ms": 8.439,
+            "prompt_per_second": 118.5,
+            "predicted_n": 64,
+            "predicted_ms": 1244.1,
+            "predicted_per_token_ms": 19.439,
+            "predicted_per_second": 51.4,
+            "draft_n": 36,
+            "draft_n_accepted": 27
+          }
+        }
+      },
+      {
+        "arm": "baseline",
+        "round": 1102,
+        "label": "4k",
+        "wall_s": 16.733307361602783,
+        "prompt_sha256": "b0d6865c54724e18d9d49ddd71d21dbfb5ae4cdc82cf52ca7d09896f4d825444",
+        "response": {
+          "id": "chatcmpl-a6c4cd2ba94f450e997f1939",
+          "object": "chat.completion",
+          "created": 1794468383,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Orchestrating the Edge: A Deep Dive into High-Performance Local LLM Inference\n\nThe landscape of Large Language Model (LLM) deployment has shifted dramatically from centralized server farms to distributed, heterogeneous local hardware. Running a model that traditionally required a multi-GPU data center on a single consumer-grade workstation is no longer a theoretical exercise; it is an engineering reality achieved through rigorous optimization of memory bandwidth, compute scheduling, and algorithmic speculation. This tutorial explores the four pillars of this modern inference stack: advanced scheduling strategies, expert caching mechanisms for Mixture-of-Experts (MoE) architectures, PCIe transfer optimization, and speculative decoding techniques. By understanding how these components interact, developers can unlock significant performance gains on constrained hardware.\n\n## 1. The Dual-Pass Compute Layer: Prompt vs. Token Scheduling\n\nAt the heart of efficient LLM inference lies a fundamental distinction between two operational modes: the **prompt pass** (prefill) and the **token pass** (decode). These phases have vastly different computational characteristics, memory access patterns, and latency requirements. A naive scheduler treats them identically, leading to severe bottlenecks. An optimized compute layer interleaves these passes intelligently to maximize hardware utilization.\n\n### The Prompt Pass: Throughput-Oriented Chunking\nThe prompt pass processes the entire input sequence in parallel. This phase is compute-bound, dominated by matrix-matrix multiplications (GEMMs) that saturate the GPU\u2019s floating-point units. To handle large contexts without exhausting VRAM, the system reads the request in large chunks. However, loading all weights for these chunks simultaneously is often impossible on consumer hardware.\n\nThe solution involves borrowing cache slots for chunk buffers. Instead of keeping all intermediate activations resident in high-bandwidth memory (HBM), the scheduler dynamically allocates temporary buffer spaces within the L2 cache or shared memory pools. As the prompt pass progresses, it multiplies the experts using quantized kernels\u2014typically INT4 or INT8\u2014to reduce memory footprint and increase arithmetic intensity. Crucially, this phase employs **software pipelining**: while the current layer\u2019s attention mechanism is executing on the GPU, the system streams the weights for the next layer\u2019s experts from main memory (RAM) to the GPU. This overlap hides the latency of data movement behind the compute time of the current operation, ensuring the GPU never sits idle waiting for data.\n\n### The Token Pass: Latency-Oriented Hybrid Execution\nIn contrast, the token pass generates one answer token at a time."
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 4247,
+            "completion_tokens": 512,
+            "total_tokens": 4759,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 4247,
+            "prompt_ms": 8333.7,
+            "prompt_per_token_ms": 1.962,
+            "prompt_per_second": 509.6,
+            "predicted_n": 512,
+            "predicted_ms": 8309.9,
+            "predicted_per_token_ms": 16.23,
+            "predicted_per_second": 61.6,
+            "draft_n": 371,
+            "draft_n_accepted": 242
+          }
+        }
+      },
+      {
+        "arm": "baseline",
+        "round": 1102,
+        "label": "32k",
+        "wall_s": 37.127803802490234,
+        "prompt_sha256": "b7af79f63c41e9b7d8e34b601baa30548a61e349d8f7d992a28b47cb58abda1e",
+        "response": {
+          "id": "chatcmpl-ecf605ce80334e40a0614065",
+          "object": "chat.completion",
+          "created": 1794468400,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# The Architecture of Efficiency: A Deep Dive into Local LLM Inference Scheduling\n\nThe democratization of large language models (LLMs) has shifted the paradigm from centralized server farms to local hardware execution. Running a model that traditionally requires a multi-GPU server on a single consumer-grade workstation is no longer a theoretical possibility but a practical reality, achieved through sophisticated engineering in the compute layer. This tutorial explores the intricate mechanics behind this achievement, focusing on four critical pillars: dual-pass inference scheduling, expert caching strategies, PCIe bandwidth optimization, and speculative decoding. By understanding how these components interleave, we can appreciate how modern inference engines maximize throughput and minimize latency without waiting for idle hardware cycles.\n\n## The Dual-Pass Inference Model\n\nAt the heart of efficient local inference lies a fundamental distinction between two operational modes: the **Prompt Pass** (also known as Prefill) and the **Token Pass** (also known as Decode). These passes have vastly different computational characteristics, memory access patterns, and bottlenecks. Treating them identically leads to severe inefficiencies; therefore, modern schedulers interleave these passes to keep both the CPU and GPU utilized simultaneously.\n\n### The Prompt Pass: Throughput-Oriented Chunking\n\nThe prompt pass occurs when the model processes the initial user input. This phase is compute-bound rather than memory-bound because it involves processing a large sequence of tokens in parallel. To handle this efficiently, the system reads the request in large chunks. Instead of loading the entire context window into high-bandwidth memory (HBM) at once\u2014which might exceed available VRAM\u2014the scheduler borrows cache slots for its chunk buffers.\n\nDuring this phase, the model multiplies the experts using quantized kernels. Quantization reduces the precision of the weights (e.g., from 16-bit floating point to 4-bit integers), significantly lowering memory bandwidth requirements and increasing arithmetic intensity. A key optimization here is **layer-wise streaming**. While the current layer\u2019s attention mechanism is running on the GPU, the system simultaneously streams the next layer\u2019s expert weights from storage or main memory into the cache. This overlap hides the latency of data movement behind the computation time of the current layer. If the scheduler waited for all weights to be loaded before starting computation, the GPU would sit idle during the I/O phase. By interleaving streaming and computing, the pipeline remains saturated.\n\n### The Token Pass: Latency-Oriented Generation\n\nOnce the prompt is processed, the model enters the token pass, generating one answer token at a"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 33740,
+            "completion_tokens": 512,
+            "total_tokens": 34252,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 33740,
+            "prompt_ms": 28181.5,
+            "prompt_per_token_ms": 0.835,
+            "prompt_per_second": 1197.2,
+            "predicted_n": 512,
+            "predicted_ms": 8838.2,
+            "predicted_per_token_ms": 17.262,
+            "predicted_per_second": 57.9,
+            "draft_n": 368,
+            "draft_n_accepted": 243
+          }
+        }
+      },
+      {
+        "arm": "baseline",
+        "round": 1102,
+        "label": "144k",
+        "wall_s": 118.7809705734253,
+        "prompt_sha256": "931ec6713197d2e2bfb84165f5bff3588d4a73f33f7930f549aa7ba3d49b0e9d",
+        "response": {
+          "id": "chatcmpl-164023f22544463fb5fc7ef2",
+          "object": "chat.completion",
+          "created": 1794468437,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Optimizing Large Language Model Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nRunning large language models (LLMs) on consumer-grade hardware has historically been a bottlenecked endeavor, often requiring multi-GPU server clusters to handle the sheer volume of parameters. However, recent architectural innovations have democratized access to these powerful tools by shifting the computational burden from pure GPU memory capacity to a sophisticated orchestration of CPU, GPU, SSD, and RAM resources. This tutorial explores the four pillars of this optimization strategy: dual-pass inference scheduling, expert caching for Mixture-of-Experts (MoE) models, PCIe transfer optimization, and speculative decoding. By understanding how these components interlock, developers can achieve server-class performance on single-node hardware.\n\n## 1. The Dual-Pass Inference Architecture\n\nThe fundamental challenge in LLM inference lies in the disparity between processing input prompts and generating output tokens. These two phases have vastly different computational characteristics, necessitating a dual-pass architecture that interleaves them to maximize hardware utilization.\n\n### The Prompt Pass: Throughput-Oriented Processing\nThe prompt pass is designed for high-throughput parallelism. When a user submits a request, the model must process the entire input sequence simultaneously to build the Key-Value (KV) cache and compute the initial hidden states. This phase is compute-bound and benefits from large batch sizes.\n\nIn this pass, the system borrows cache slots for chunk buffers. Instead of loading the entire model into VRAM at once, which is impossible for models exceeding GPU memory, the system streams weights in large chunks. The prompt pass utilizes quantized kernels to multiply expert weights efficiently. Crucially, it employs a technique known as \"look-ahead streaming.\" While the current layer\u2019s attention mechanism is executing on the GPU, the system simultaneously streams the experts required for the *next* layer from storage (SSD or RAM) into the GPU memory. This overlap hides the latency of data transfer behind the computation time of the current layer, ensuring that the GPU is never idle waiting for weights to arrive.\n\n### The Token Pass: Latency-Oriented Generation\nOnce the prompt is processed, the model enters the token generation phase. Here, the goal shifts from throughput to low-latency sequential generation. Each new token depends on all previous tokens, making parallelism difficult. However, this phase is memory-bandwidth-bound rather than compute-bound.\n\nTo optimize this, the system employs a hybrid CPU-GPU execution strategy. The \"busiest"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 151309,
+            "completion_tokens": 512,
+            "total_tokens": 151821,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 151309,
+            "prompt_ms": 109340.9,
+            "prompt_per_token_ms": 0.723,
+            "prompt_per_second": 1383.8,
+            "predicted_n": 512,
+            "predicted_ms": 9208.1,
+            "predicted_per_token_ms": 17.985,
+            "predicted_per_second": 55.6,
+            "draft_n": 362,
+            "draft_n_accepted": 243
+          }
+        }
+      },
+      {
+        "arm": "baseline",
+        "round": 1103,
+        "label": "warmup",
+        "wall_s": 4.684607028961182,
+        "prompt_sha256": "1ed58d6d0a480d2dc4c63229a0eebda239a9eae248d3526d0e098289ad33184e",
+        "response": {
+          "id": "chatcmpl-748b5e5e706a4b918f194d47",
+          "object": "chat.completion",
+          "created": 1794468556,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Optimizing Large Language Model Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nThe deployment of large language models (LLMs) on consumer-grade hardware has historically been constrained by the memory bandwidth and capacity limitations of single-GPU systems. However, recent architectural innovations have shifted the"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 405,
+            "completion_tokens": 64,
+            "total_tokens": 469,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 405,
+            "prompt_ms": 3415.8,
+            "prompt_per_token_ms": 8.434,
+            "prompt_per_second": 118.6,
+            "predicted_n": 64,
+            "predicted_ms": 1185.5,
+            "predicted_per_token_ms": 18.523,
+            "predicted_per_second": 54.0,
+            "draft_n": 40,
+            "draft_n_accepted": 29
+          }
+        }
+      },
+      {
+        "arm": "baseline",
+        "round": 1103,
+        "label": "4k",
+        "wall_s": 16.548762321472168,
+        "prompt_sha256": "24ac34b9edfcbf0da4982898d37e96f967a6f858b8dfbc4a7138ca2ef301db22",
+        "response": {
+          "id": "chatcmpl-4d7e7d34d563417ca08dc466",
+          "object": "chat.completion",
+          "created": 1794468561,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Optimizing Large Language Model Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nThe deployment of large language models (LLMs) on consumer-grade hardware has historically been constrained by the memory bandwidth and capacity limitations of single graphics processing units (GPUs). However, recent architectural innovations have demonstrated that sophisticated orchestration of system resources can allow a single workstation to run models that previously required multi-GPU server clusters. This tutorial explores the four pillars of this optimization strategy: dual-pass inference scheduling, hybrid expert caching, optimized PCIe data transfers, and speculative decoding. By understanding how these components interact, developers and researchers can maximize throughput and minimize latency in local LLM deployments.\n\n## The Dual-Pass Inference Architecture\n\nAt the heart of efficient LLM inference is the distinction between two distinct operational phases: the prompt pass (also known as prefill) and the token pass (also known as decode). These phases have fundamentally different computational characteristics, and treating them identically leads to significant hardware inefficiencies.\n\nThe **prompt pass** occurs when the model processes the initial input sequence. This phase is compute-bound because it involves processing a large number of tokens simultaneously through the transformer layers. The primary bottleneck here is the matrix multiplication operations required for attention mechanisms and feed-forward networks. To handle this, the system employs a chunked processing strategy. Instead of loading the entire prompt into memory at once, which could exceed available VRAM, the request is read in large chunks. These chunks utilize cache slots specifically allocated for buffer management. During this phase, the system aggressively streams data from storage to compute units. Specifically, while the current layer\u2019s attention mechanism is executing on the GPU, the system simultaneously streams the expert weights for the next layer from slower storage (such as an SSD) into faster memory buffers. This pipelining ensures that the GPU never sits idle waiting for data; by the time the current computation finishes, the next set of weights is ready for processing.\n\nIn contrast, the **token pass** generates the output one token at a time. This phase is memory-bandwidth-bound rather than compute-bound. For every single token generated, the model must access the entire weight matrix of the active experts to perform the necessary dot products. If all weights were stored on the GPU, this would be fast but impossible for large models due to VRAM limits. If all weights were on the CPU or SSD, the latency per token would be prohibitive. The solution lies in a hybrid approach where the busiest experts\u2014those most"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 4247,
+            "completion_tokens": 512,
+            "total_tokens": 4759,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 4247,
+            "prompt_ms": 8334.8,
+            "prompt_per_token_ms": 1.963,
+            "prompt_per_second": 509.6,
+            "predicted_n": 512,
+            "predicted_ms": 8123.7,
+            "predicted_per_token_ms": 15.867,
+            "predicted_per_second": 63.0,
+            "draft_n": 369,
+            "draft_n_accepted": 247
+          }
+        }
+      },
+      {
+        "arm": "baseline",
+        "round": 1103,
+        "label": "32k",
+        "wall_s": 37.95131754875183,
+        "prompt_sha256": "5fb3e0db9d2360f473672d8ae6a89c11ffb88110e7e298cf970a986a0dc2238a",
+        "response": {
+          "id": "chatcmpl-adc93ae06b6143b7a355ea8c",
+          "object": "chat.completion",
+          "created": 1794468577,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Architecting Local Inference: A Deep Dive into Hybrid Compute Scheduling, Expert Caching, and Speculative Decoding\n\nThe landscape of large language model (LLM) inference has undergone a radical transformation in recent years. Historically, running models with hundreds of billions of parameters required massive server racks equipped with high-bandwidth memory (HBM) and specialized interconnects like NVLink. However, the emergence of sophisticated software stacks has democratized this capability, allowing consumer-grade hardware\u2014specifically single-GPU workstations paired with high-speed NVMe SSDs\u2014to run models that were previously confined to data centers. This achievement is not due to a single breakthrough but rather a symphony of architectural optimizations involving hybrid compute scheduling, intelligent expert caching, optimized PCIe transfers, and speculative decoding. This tutorial provides a detailed technical exposition of these mechanisms, explaining how they interleave to maximize throughput and minimize latency on constrained hardware.\n\n## The Dual-Pass Architecture: Prompt vs. Token Processing\n\nTo understand the optimization strategies, one must first distinguish between the two distinct phases of LLM inference: the **prompt pass** (also known as prefill) and the **token pass** (also known as decode). These phases have fundamentally different computational characteristics, memory access patterns, and bottlenecks. Treating them identically leads to severe inefficiencies.\n\n### The Prompt Pass: Compute-Bound Parallelism\n\nThe prompt pass processes the entire input sequence simultaneously. If a user submits a 2,000-token prompt, the model must compute the attention matrices and feed-forward networks for all 2,000 tokens in parallel. This phase is **compute-bound**. The GPU\u2019s tensor cores are saturated with matrix multiplications (GEMMs), and the primary bottleneck is floating-point operations per second (FLOPS).\n\nIn a hybrid system, the prompt pass leverages the full capacity of the GPU. However, because the input sequence can be arbitrarily long, it may exceed the available VRAM if all intermediate activations are stored simultaneously. To mitigate this, modern schedulers employ **chunked prefilling**. Instead of processing the entire prompt in one go, the scheduler breaks the prompt into smaller chunks (e.g., 512 or 1024 tokens). These chunks are processed sequentially, allowing the system to reuse memory buffers for activations. This \"borrowing\" of cache slots ensures that even long contexts do not cause out-of-memory errors, while still maintaining high GPU utilization during the compute-heavy prefill phase."
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 33740,
+            "completion_tokens": 512,
+            "total_tokens": 34252,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 33740,
+            "prompt_ms": 29199.7,
+            "prompt_per_token_ms": 0.865,
+            "prompt_per_second": 1155.5,
+            "predicted_n": 512,
+            "predicted_ms": 8644.2,
+            "predicted_per_token_ms": 16.883,
+            "predicted_per_second": 59.2,
+            "draft_n": 362,
+            "draft_n_accepted": 252
+          }
+        }
+      },
+      {
+        "arm": "baseline",
+        "round": 1103,
+        "label": "144k",
+        "wall_s": 141.02800297737122,
+        "prompt_sha256": "c29202d756ec62b2edcc4b2c54a0352123b62f29904241a90ca7f9ce9eac1f44",
+        "response": {
+          "id": "chatcmpl-0ffbeeda217d4a358a9d9dcd",
+          "object": "chat.completion",
+          "created": 1794468615,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# The Architecture of Local LLM Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nRunning large language models (LLMs) on consumer-grade hardware has historically been a bottlenecked endeavor, constrained by the limited video RAM (VRAM) of graphics cards. However, recent architectural innovations have democratized access to massive parameter counts, allowing models that previously required server-class infrastructure to run efficiently on desktops and laptops. This tutorial explores the four pillars of this optimization: dual-pass inference scheduling, expert caching for Mixture-of-Experts (MoE) architectures, PCIe bandwidth management, and speculative decoding. By understanding how these components interleave, developers can appreciate why modern local inference engines achieve such high throughput despite hardware limitations.\n\n## 1. The Dual-Pass Inference Model: Prompt vs. Token\n\nThe fundamental challenge in LLM inference lies in the asymmetry between processing input (the prompt) and generating output (the tokens). These two phases have vastly different computational characteristics, requiring distinct scheduling strategies to maximize hardware utilization.\n\n### The Prompt Pass: Compute-Bound Parallelism\nWhen a user submits a request, the model must process the entire context window simultaneously. This is known as the **prompt pass** or prefill phase. Because all tokens in the prompt are available at once, the computation is highly parallelizable. The primary bottleneck here is not memory bandwidth but raw compute power (FLOPS).\n\nTo handle this efficiently, modern inference engines utilize **chunked prefilling**. Instead of loading the entire prompt into VRAM at once\u2014which could cause out-of-memory errors for long contexts\u2014the engine breaks the prompt into smaller chunks. These chunks are processed sequentially or in parallel batches. During this phase, the system borrows cache slots from the KV (Key-Value) cache allocator to store intermediate activations. The goal is to saturate the GPU\u2019s compute units by keeping the matrix multiplication kernels busy. Since the attention mechanism requires access to all previous keys and values, the engine streams expert weights for the next layer while the current layer\u2019s attention operations are still executing. This overlap hides latency, ensuring that the GPU is never idle waiting for data to arrive from system memory or storage.\n\n### The Token Pass: Memory-Bound Serialism\nOnce the prompt is processed, the model enters the **token pass** (or decode phase), where it generates one token at a time. This process is inherently serial; you cannot generate token $N+1$ without first generating token $N$. Consequently"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 151309,
+            "completion_tokens": 512,
+            "total_tokens": 151821,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 151309,
+            "prompt_ms": 131198.2,
+            "prompt_per_token_ms": 0.867,
+            "prompt_per_second": 1153.3,
+            "predicted_n": 512,
+            "predicted_ms": 9604.4,
+            "predicted_per_token_ms": 18.759,
+            "predicted_per_second": 53.3,
+            "draft_n": 356,
+            "draft_n_accepted": 235
+          }
+        }
+      }
+    ],
+    "compact": [
+      {
+        "arm": "compact",
+        "round": 1101,
+        "label": "warmup",
+        "wall_s": 4.916766405105591,
+        "prompt_sha256": "57f77cefaa712207e55b5369fec01c1ef607671004c243c2228f9173644c6931",
+        "response": {
+          "id": "chatcmpl-62b337dd259f43fab8ae7db7",
+          "object": "chat.completion",
+          "created": 1794470380,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Orchestrating High-Performance Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nThe deployment of large language models (LLMs) on consumer-grade hardware has historically been constrained by the memory bandwidth and capacity limitations of single-GPU systems. However, recent architectural innovations have shifted"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 405,
+            "completion_tokens": 64,
+            "total_tokens": 469,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 405,
+            "prompt_ms": 3355.3,
+            "prompt_per_token_ms": 8.285,
+            "prompt_per_second": 120.7,
+            "predicted_n": 64,
+            "predicted_ms": 1477.8,
+            "predicted_per_token_ms": 23.091,
+            "predicted_per_second": 43.3,
+            "draft_n": 35,
+            "draft_n_accepted": 28
+          }
+        }
+      },
+      {
+        "arm": "compact",
+        "round": 1101,
+        "label": "4k",
+        "wall_s": 16.69845151901245,
+        "prompt_sha256": "40786e77b90890ca7d1d271af222430aadbc0857d50ee32e4498eb220bca16cd",
+        "response": {
+          "id": "chatcmpl-c0f97014040c4705929afa16",
+          "object": "chat.completion",
+          "created": 1794470385,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Orchestrating the Edge: A Deep Dive into High-Performance Local LLM Inference\n\nThe paradigm of Large Language Model (LLM) deployment has shifted dramatically in recent years. While early iterations required massive data center clusters with dedicated high-bandwidth interconnects, modern inference engines have unlocked the ability to run state-of-the-art models on consumer-grade hardware. This achievement is not due to a single magic bullet but rather a sophisticated orchestration of memory management, compute scheduling, and speculative execution. To understand how a model that traditionally requires a server rack can run efficiently on a desktop GPU, we must dissect the four pillars of modern local inference: dual-pass scheduling, expert caching strategies, PCIe bandwidth optimization, and speculative decoding.\n\n## The Dual-Pass Architecture: Prompt vs. Token Generation\n\nAt the heart of efficient LLM inference lies the distinction between two fundamentally different computational phases: the **Prompt Pass** (also known as Prefill) and the **Token Pass** (also known as Decode). These phases have opposing bottlenecks, and treating them identically leads to severe performance degradation.\n\n### The Prompt Pass: Compute-Bound Efficiency\nThe prompt pass occurs when the model first ingests the user\u2019s input context. This phase is characterized by high parallelism. The model processes all tokens in the prompt simultaneously through the attention mechanism and feed-forward networks. Because the entire sequence is available at once, the operation is **compute-bound**. The GPU\u2019s Tensor Cores are fully utilized to perform massive matrix multiplications.\n\nTo optimize this, modern engines employ chunked prefilling. Instead of loading the entire context into VRAM at once\u2014which might exceed memory limits for long contexts\u2014the system breaks the prompt into large chunks. These chunks borrow cache slots from the KV (Key-Value) cache allocator. By streaming the next layer\u2019s expert weights while the current layer\u2019s attention mechanisms are still running, the system hides latency. This pipelining ensures that the GPU is never idle waiting for data; it is always either computing or preparing to compute.\n\n### The Token Pass: Memory-Bound Latency\nOnce the prompt is processed, the model enters the token pass, generating one token at a time. This phase is **memory-bound**. For every single token generated, the model must read the entire KV cache from memory and multiply it against the weight matrices of the model. Since only one token is being processed, the arithmetic intensity (the ratio of operations to bytes transferred) is extremely low. The GPU spends most of its time"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 4247,
+            "completion_tokens": 512,
+            "total_tokens": 4759,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 4247,
+            "prompt_ms": 8233.8,
+            "prompt_per_token_ms": 1.939,
+            "prompt_per_second": 515.8,
+            "predicted_n": 512,
+            "predicted_ms": 8379.0,
+            "predicted_per_token_ms": 16.365,
+            "predicted_per_second": 61.1,
+            "draft_n": 349,
+            "draft_n_accepted": 233
+          }
+        }
+      },
+      {
+        "arm": "compact",
+        "round": 1101,
+        "label": "32k",
+        "wall_s": 36.392298460006714,
+        "prompt_sha256": "d20cc8dd3974e6e0632cc5e7c5836aa9f752e05e35d073d62e56dc6d18eacb09",
+        "response": {
+          "id": "chatcmpl-335ee0a3e6b64c4a97d08397",
+          "object": "chat.completion",
+          "created": 1794470401,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# The Art of Local Inference: A Deep Dive into Hybrid Scheduling, Expert Caching, and Speculative Decoding\n\nThe democratization of large language models (LLMs) has shifted the paradigm from centralized server farms to local hardware execution. Running a model that traditionally requires a multi-GPU server on a single consumer-grade workstation is no longer a theoretical possibility but a practical engineering reality. This achievement is not due to magic, nor is it simply a result of raw computational power increasing over time. Rather, it is the product of sophisticated software-hardware co-design, specifically within the \"compute layer\" of inference engines. This tutorial explores the intricate mechanics that make this possible, focusing on four critical pillars: dual-pass scheduling (prompt vs. token), Mixture-of-Experts (MoE) caching strategies, PCIe bandwidth optimization, and speculative decoding. By understanding how these components interleave, we can appreciate why modern local inference is a symphony of overlapping operations rather than a linear sequence of calculations.\n\n## 1. The Dual-Pass Architecture: Prompt vs. Token Execution\n\nAt the heart of efficient LLM inference lies the distinction between two fundamentally different computational phases: the **Prompt Pass** (also known as Prefill) and the **Token Pass** (also known as Decode). These two phases have vastly different computational characteristics, memory access patterns, and latency requirements. Treating them identically leads to severe inefficiencies; treating them separately allows for specialized optimization.\n\n### The Prompt Pass: Throughput-Oriented Chunking\n\nThe prompt pass occurs when the user submits a request containing a context window (the prompt). The model must process all tokens in this prompt simultaneously to generate the Key-Value (KV) cache, which is essential for subsequent token generation. This phase is **compute-bound**. It involves massive matrix multiplications where the batch size is effectively equal to the sequence length of the prompt.\n\nTo optimize this, modern inference engines read the request in large chunks. Instead of processing one token at a time, the engine loads substantial blocks of data into high-bandwidth memory (HBM) on the GPU. This maximizes arithmetic intensity, ensuring that the GPU\u2019s tensor cores are fully utilized. However, this creates a memory pressure challenge. The KV cache for long prompts can be enormous. To mitigate this, the system \"borrows\" cache slots from other parts of the memory hierarchy or utilizes paged attention mechanisms. Paged attention allows the KV cache to be stored in non-contiguous blocks, similar to how virtual"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 33740,
+            "completion_tokens": 512,
+            "total_tokens": 34252,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 33740,
+            "prompt_ms": 27933.2,
+            "prompt_per_token_ms": 0.828,
+            "prompt_per_second": 1207.9,
+            "predicted_n": 512,
+            "predicted_ms": 8350.3,
+            "predicted_per_token_ms": 16.309,
+            "predicted_per_second": 61.3,
+            "draft_n": 355,
+            "draft_n_accepted": 252
+          }
+        }
+      },
+      {
+        "arm": "compact",
+        "round": 1101,
+        "label": "144k",
+        "wall_s": 111.73239779472351,
+        "prompt_sha256": "338d480886773fead81aab9c2ab62b2c9fe874399ce433c11d9709b2e9fd2423",
+        "response": {
+          "id": "chatcmpl-2a6db9ec49e8462aa27bc016",
+          "object": "chat.completion",
+          "created": 1794470438,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Optimizing Large Language Model Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nRunning large language models (LLMs) on consumer-grade hardware has historically been a bottlenecked endeavor, constrained by the limited video memory (VRAM) of graphics cards. However, recent architectural innovations have shifted this paradigm, allowing massive models to run efficiently on single-machine setups by orchestrating a complex dance between the CPU, GPU, SSD, and RAM. This tutorial explores the four pillars of this optimization strategy: dual-pass inference scheduling, expert caching with quantization, PCIe bandwidth management, and speculative decoding. By understanding how these components interlock, developers can maximize throughput and minimize latency for Mixture-of-Experts (MoE) models.\n\n## 1. The Dual-Pass Inference Architecture\n\nThe core of modern high-efficiency LLM inference lies in separating the processing of the input prompt from the generation of output tokens. These two phases have vastly different computational characteristics, requiring distinct scheduling strategies to avoid idle hardware cycles.\n\n### The Prompt Pass: Prefilling\nWhen a user submits a request, the model must first process the entire input sequence (the prompt) to generate the Key-Value (KV) cache for attention layers. This is known as the \"prompt pass\" or prefill phase. Because this involves processing many tokens simultaneously, it is highly parallelizable and compute-bound.\n\nTo optimize this, the system employs **chunked prefilling**. Instead of loading the entire prompt into memory at once\u2014which could cause out-of-memory errors for long contexts\u2014the input is divided into large chunks. The scheduler borrows cache slots from the KV cache pool to store these intermediate chunk buffers. During this phase, the GPU focuses on matrix multiplications using quantized kernels. Quantization reduces the precision of weights (e.g., from 16-bit floating point to 4-bit integers), significantly lowering memory bandwidth requirements and increasing arithmetic intensity.\n\nCrucially, the prompt pass utilizes **layer-wise streaming**. While the current layer\u2019s attention mechanism is executing on the GPU, the system simultaneously streams the expert weights for the *next* layer from storage (SSD or RAM) into the GPU\u2019s VRAM. This overlap hides the latency of data transfer behind the computation time of the current layer, ensuring the GPU remains saturated with work.\n\n### The Token Pass: Decoding\nOnce the prompt is processed, the model enters the token pass, where it generates one answer token at a time. This phase is memory"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 151309,
+            "completion_tokens": 512,
+            "total_tokens": 151821,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 151309,
+            "prompt_ms": 102541.7,
+            "prompt_per_token_ms": 0.678,
+            "prompt_per_second": 1475.6,
+            "predicted_n": 512,
+            "predicted_ms": 8963.5,
+            "predicted_per_token_ms": 17.507,
+            "predicted_per_second": 57.1,
+            "draft_n": 371,
+            "draft_n_accepted": 251
+          }
+        }
+      },
+      {
+        "arm": "compact",
+        "round": 1102,
+        "label": "warmup",
+        "wall_s": 4.766583204269409,
+        "prompt_sha256": "3f137b3b36e0987a3c8ca6c33d3e50876b855dd3c2eb5d277fdbb94db1bd57c5",
+        "response": {
+          "id": "chatcmpl-2aec0995c7d3446db0dc73c1",
+          "object": "chat.completion",
+          "created": 1794470550,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Orchestrating the Edge: A Deep Dive into Hybrid Inference Scheduling for Large Language Models\n\nThe deployment of large language models (LLMs) on consumer-grade hardware has historically been constrained by a fundamental bottleneck: memory bandwidth and capacity. Traditional server-class inference relies on massive HBM (High Bandwidth Memory)"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 405,
+            "completion_tokens": 64,
+            "total_tokens": 469,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 405,
+            "prompt_ms": 3436.0,
+            "prompt_per_token_ms": 8.484,
+            "prompt_per_second": 117.9,
+            "predicted_n": 64,
+            "predicted_ms": 1249.3,
+            "predicted_per_token_ms": 19.52,
+            "predicted_per_second": 51.2,
+            "draft_n": 35,
+            "draft_n_accepted": 27
+          }
+        }
+      },
+      {
+        "arm": "compact",
+        "round": 1102,
+        "label": "4k",
+        "wall_s": 16.24150776863098,
+        "prompt_sha256": "b0d6865c54724e18d9d49ddd71d21dbfb5ae4cdc82cf52ca7d09896f4d825444",
+        "response": {
+          "id": "chatcmpl-0f8d101dcd434252a8473417",
+          "object": "chat.completion",
+          "created": 1794470554,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Orchestrating the Edge: A Deep Dive into High-Performance Local LLM Inference\n\nThe landscape of Large Language Model (LLM) deployment has shifted dramatically from centralized server farms to distributed, heterogeneous local hardware. Running a model that traditionally requires a multi-GPU server on a single consumer-grade workstation is no longer a theoretical exercise; it is an engineering reality achieved through sophisticated orchestration of memory hierarchies, compute pipelines, and speculative execution strategies. This tutorial explores the four pillars of this modern inference stack: advanced scheduling, expert caching for Mixture-of-Experts (MoE) architectures, optimized PCIe data transfers, and speculative decoding. By understanding how these components interact, developers can maximize throughput and minimize latency on constrained hardware.\n\n## 1. The Dual-Pass Compute Layer: Prompt vs. Token Scheduling\n\nAt the heart of efficient LLM inference lies a fundamental asymmetry in computational requirements between two distinct phases: the **Prompt Pass** (prefill) and the **Token Pass** (decode). A naive scheduler treats these identically, leading to severe hardware underutilization. An optimized compute layer interleaves these passes with specific strategies tailored to their unique bottlenecks.\n\n### The Prompt Pass: Throughput-Oriented Chunking\nThe prompt pass processes the entire input sequence in parallel. This phase is compute-bound and memory-bandwidth intensive but benefits significantly from high arithmetic intensity. To manage this, the scheduler reads the request in large chunks rather than processing the entire context window at once if it exceeds VRAM capacity.\n\nCrucially, the prompt pass \"borrows\" cache slots for its chunk buffers. In a typical MoE architecture, not all experts are active for every token. During the prefill phase, the system identifies which experts are required for the current chunk of tokens. Instead of loading all expert weights into GPU memory\u2014which would cause an Out-Of-Memory (OOM) error\u2014the scheduler dynamically allocates temporary cache slots. These slots hold the quantized kernels necessary for the active experts.\n\nFurthermore, the prompt pass employs a technique known as **layer-wise streaming**. While the current layer\u2019s attention mechanism is executing on the GPU, the system simultaneously streams the expert weights for the *next* layer from storage (SSD or CPU RAM) into the GPU memory. This overlap hides the latency of data movement behind the compute time of the attention operations. By pipelining the loading of future layers with the computation of current ones, the scheduler ensures that the GPU never sits idle waiting for"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 4247,
+            "completion_tokens": 512,
+            "total_tokens": 4759,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 4247,
+            "prompt_ms": 8336.6,
+            "prompt_per_token_ms": 1.963,
+            "prompt_per_second": 509.4,
+            "predicted_n": 512,
+            "predicted_ms": 7819.4,
+            "predicted_per_token_ms": 15.272,
+            "predicted_per_second": 65.5,
+            "draft_n": 358,
+            "draft_n_accepted": 259
+          }
+        }
+      },
+      {
+        "arm": "compact",
+        "round": 1102,
+        "label": "32k",
+        "wall_s": 37.00693106651306,
+        "prompt_sha256": "b7af79f63c41e9b7d8e34b601baa30548a61e349d8f7d992a28b47cb58abda1e",
+        "response": {
+          "id": "chatcmpl-34bc3ede39644e6996764764",
+          "object": "chat.completion",
+          "created": 1794470571,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# The Architecture of Efficiency: A Deep Dive into Local LLM Inference Optimization\n\nThe democratization of large language models (LLMs) has shifted from a theoretical possibility to a practical reality, driven not by the invention of new model architectures, but by rigorous engineering in the systems layer. While the transformer architecture remains the dominant paradigm for natural language processing, the ability to run multi-billion parameter models on consumer-grade hardware\u2014such as a single desktop GPU paired with a high-speed SSD and a modern CPU\u2014is a testament to sophisticated inference scheduling, memory management, and speculative execution techniques. This tutorial provides a detailed technical exposition of these mechanisms, focusing specifically on how compute layers interleave prompt and token passes, manage expert caching in Mixture-of-Experts (MoE) models, optimize PCIe transfers, and leverage speculative decoding to achieve server-class performance on local hardware.\n\n## 1. The Dual-Pass Compute Model: Prompt vs. Token Generation\n\nAt the heart of efficient LLM inference lies the distinction between two fundamentally different computational phases: the **prompt pass** (also known as prefill) and the **token pass** (also known as decode or generation). Understanding the divergence in their computational characteristics is the first step toward optimizing them.\n\n### The Prompt Pass: Compute-Bound Parallelism\n\nThe prompt pass occurs when the model processes the initial input sequence provided by the user. This phase is characterized by high parallelism and compute-bound operations. When a user submits a 2,000-token prompt, the model does not process these tokens sequentially. Instead, it processes them in large chunks simultaneously. This allows the GPU to fully utilize its massive parallel processing units (CUDA cores or Tensor Cores) because the matrix multiplications involved in attention and feed-forward layers are dense and large.\n\nIn this phase, the primary bottleneck is often the arithmetic intensity of the operations rather than memory bandwidth. The model reads the request in large chunks, loading weights into registers and performing massive General Matrix Multiplications (GEMMs). To optimize this, modern inference engines employ **chunked prefilling**. Rather than attempting to load the entire prompt context into VRAM at once\u2014which could cause Out-Of-Memory (OOM) errors for long contexts\u2014the system breaks the prompt into manageable chunks. These chunks are processed sequentially but with high internal parallelism.\n\nA critical optimization during the prompt pass is the handling of **Key-Value (KV) Cache**. As the model processes each token in the prompt, it computes key and value vectors for the attention"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 33740,
+            "completion_tokens": 512,
+            "total_tokens": 34252,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 33740,
+            "prompt_ms": 28182.5,
+            "prompt_per_token_ms": 0.835,
+            "prompt_per_second": 1197.2,
+            "predicted_n": 512,
+            "predicted_ms": 8717.7,
+            "predicted_per_token_ms": 17.027,
+            "predicted_per_second": 58.7,
+            "draft_n": 336,
+            "draft_n_accepted": 233
+          }
+        }
+      },
+      {
+        "arm": "compact",
+        "round": 1102,
+        "label": "144k",
+        "wall_s": 122.46665358543396,
+        "prompt_sha256": "931ec6713197d2e2bfb84165f5bff3588d4a73f33f7930f549aa7ba3d49b0e9d",
+        "response": {
+          "id": "chatcmpl-4f379e1434694101bd82d87f",
+          "object": "chat.completion",
+          "created": 1794470608,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Optimizing Large Language Model Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nRunning large language models (LLMs) on consumer-grade hardware has historically been a bottlenecked endeavor, often requiring massive server clusters with high-bandwidth memory. However, recent architectural innovations have democratized access to these powerful tools by optimizing how data moves between storage, CPU, and GPU. This tutorial explores the four pillars of this optimization: inference scheduling, expert caching, PCIe transfer management, and speculative decoding. By understanding how these components interleave, we can see how a single machine can efficiently serve models that previously required dedicated server infrastructure.\n\n## 1. The Dual-Pass Inference Architecture\n\nThe foundation of efficient LLM inference lies in recognizing that the generation process is not monolithic. It consists of two distinct phases with vastly different computational characteristics: the **Prompt Pass** (also known as prefill) and the **Token Pass** (also known as decode).\n\n### The Prompt Pass\nWhen a user submits a request, the model must first process the entire input sequence to build its internal context. This is the prompt pass. It is characterized by high parallelism; the model reads the request in large chunks. Because all tokens in the prompt are known simultaneously, the matrix multiplications required for attention and feed-forward layers can be batched efficiently.\n\nDuring this phase, the system borrows cache slots for its chunk buffers. This is critical because the intermediate activations generated during prefill are massive compared to those in the token pass. The system utilizes quantized kernels to multiply the experts (in Mixture-of-Experts models) or standard layers, ensuring that the high-throughput nature of the GPU is fully utilized. A key optimization here is **layer streaming**: while the current layer\u2019s attention mechanism is running on the GPU, the system simultaneously streams the weights for the next layer from storage to memory. This overlap hides latency, ensuring the compute units are never idle waiting for data.\n\n### The Token Pass\nOnce the prompt is processed, the model enters the token pass, where it generates one answer token at a time. This phase is memory-bound rather than compute-bound. For every single token generated, the model must access the Key-Value (KV) cache and perform matrix-vector multiplications. Because only one token is being processed at a time, GPU utilization drops significantly if not managed correctly.\n\nTo combat this, the system employs a hybrid execution strategy. The \"busiest\" experts\u2014those most frequently"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 151309,
+            "completion_tokens": 512,
+            "total_tokens": 151821,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 151309,
+            "prompt_ms": 113208.3,
+            "prompt_per_token_ms": 0.748,
+            "prompt_per_second": 1336.6,
+            "predicted_n": 512,
+            "predicted_ms": 9031.9,
+            "predicted_per_token_ms": 17.64,
+            "predicted_per_second": 56.7,
+            "draft_n": 354,
+            "draft_n_accepted": 247
+          }
+        }
+      },
+      {
+        "arm": "compact",
+        "round": 1103,
+        "label": "warmup",
+        "wall_s": 4.718708515167236,
+        "prompt_sha256": "1ed58d6d0a480d2dc4c63229a0eebda239a9eae248d3526d0e098289ad33184e",
+        "response": {
+          "id": "chatcmpl-72c1be54163f4937b5b312ba",
+          "object": "chat.completion",
+          "created": 1794470730,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Orchestrating Large-Scale Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nThe deployment of large language models (LLMs) on consumer-grade hardware has historically been constrained by the memory bandwidth and capacity limitations of single-GPU systems. However, recent architectural innovations have demonstrated"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 405,
+            "completion_tokens": 64,
+            "total_tokens": 469,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 405,
+            "prompt_ms": 3412.3,
+            "prompt_per_token_ms": 8.425,
+            "prompt_per_second": 118.7,
+            "predicted_n": 64,
+            "predicted_ms": 1221.4,
+            "predicted_per_token_ms": 19.084,
+            "predicted_per_second": 52.4,
+            "draft_n": 38,
+            "draft_n_accepted": 28
+          }
+        }
+      },
+      {
+        "arm": "compact",
+        "round": 1103,
+        "label": "4k",
+        "wall_s": 16.34989643096924,
+        "prompt_sha256": "24ac34b9edfcbf0da4982898d37e96f967a6f858b8dfbc4a7138ca2ef301db22",
+        "response": {
+          "id": "chatcmpl-019dbea9c9d246faa2cd27b6",
+          "object": "chat.completion",
+          "created": 1794470735,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# Optimizing Large Language Model Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nThe deployment of large language models (LLMs) on consumer-grade hardware has historically been constrained by the memory bandwidth and capacity limitations of single graphics processing units (GPUs). However, recent architectural innovations have demonstrated that sophisticated orchestration of system resources can allow a single workstation to serve models that previously required multi-GPU server clusters. This tutorial explores the four pillars of this optimization strategy: dual-pass inference scheduling, hybrid expert caching, optimized PCIe data transfers, and speculative decoding. By understanding how these components interact, developers and researchers can maximize throughput and minimize latency in local LLM deployments.\n\n## 1. The Dual-Pass Inference Architecture\n\nThe fundamental bottleneck in LLM inference is the disparity between the computational demands of processing a prompt versus generating individual tokens. To address this, modern inference engines implement a dual-pass architecture that interleaves two distinct execution modes: the **Prompt Pass** and the **Token Pass**.\n\n### The Prompt Pass: Throughput-Oriented Processing\nThe prompt pass occurs when the model ingests the user\u2019s input context. This phase is characterized by high parallelism and large matrix multiplications. Because the entire sequence of tokens in the prompt is known upfront, the system can process them in large chunks rather than sequentially.\n\nDuring this pass, the compute layer borrows cache slots for its chunk buffers. This is a critical optimization because it allows the system to pre-fetch weights and intermediate activations into high-speed memory (VRAM or CPU RAM) before they are strictly needed by the arithmetic logic units. The prompt pass utilizes quantized kernels to multiply the experts\u2014specialized sub-networks within Mixture-of-Experts (MoE) architectures. Quantization reduces the precision of the weights (e.g., from 16-bit floating point to 4-bit integers), significantly lowering memory bandwidth requirements and increasing arithmetic intensity.\n\nFurthermore, the prompt pass employs a technique known as **layer-wise streaming**. While the current layer\u2019s attention mechanism is executing on the GPU, the system simultaneously streams the expert weights for the *next* layer from storage (SSD or CPU RAM) into the compute buffers. This overlap of I/O and computation hides latency, ensuring that the GPU does not sit idle waiting for data to arrive from slower storage tiers.\n\n### The Token Pass: Latency-Oriented Generation\nOnce the prompt is processed, the model enters the token pass, where it generates one answer token at"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 4247,
+            "completion_tokens": 512,
+            "total_tokens": 4759,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 4247,
+            "prompt_ms": 8333.6,
+            "prompt_per_token_ms": 1.962,
+            "prompt_per_second": 509.6,
+            "predicted_n": 512,
+            "predicted_ms": 7929.8,
+            "predicted_per_token_ms": 15.488,
+            "predicted_per_second": 64.6,
+            "draft_n": 364,
+            "draft_n_accepted": 259
+          }
+        }
+      },
+      {
+        "arm": "compact",
+        "round": 1103,
+        "label": "32k",
+        "wall_s": 37.63959264755249,
+        "prompt_sha256": "5fb3e0db9d2360f473672d8ae6a89c11ffb88110e7e298cf970a986a0dc2238a",
+        "response": {
+          "id": "chatcmpl-51501aa61dee49719e206809",
+          "object": "chat.completion",
+          "created": 1794470751,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# The Architecture of Efficiency: A Deep Dive into Local LLM Inference Optimization\n\nThe democratization of large language models (LLMs) has shifted the paradigm from centralized server farms to local execution on consumer-grade hardware. This transition is not merely a matter of downloading weights; it requires a fundamental re-engineering of how inference is scheduled, how memory hierarchies are managed, and how computational resources are synchronized. Running a model that traditionally demands multi-GPU server clusters on a single workstation with limited VRAM is an exercise in extreme optimization. This tutorial explores the four pillars of this architectural shift: advanced inference scheduling, expert caching strategies, PCIe transfer optimization, and speculative decoding. By understanding these mechanisms, developers can unlock high-throughput, low-latency performance for massive models on constrained hardware.\n\n## 1. Inference Scheduling: The Dual-Pass Paradigm\n\nThe core challenge in local LLM inference is the disparity between the computational demands of processing a prompt (prefill) and generating tokens (decode). Traditional monolithic schedulers often fail to optimize both phases simultaneously, leading to either high latency during generation or poor throughput during prompt ingestion. The solution lies in a dual-pass scheduling architecture that interleaves two distinct operational modes: the **Prompt Pass** and the **Token Pass**.\n\n### The Prompt Pass: Chunked Prefill and Cache Borrowing\n\nThe Prompt Pass is responsible for ingesting the user\u2019s input context. This phase is compute-bound, requiring massive matrix multiplications to generate Key-Value (KV) cache entries for every token in the prompt. On consumer hardware with limited VRAM, loading the entire KV cache for a long context into GPU memory is often impossible. To address this, modern schedulers employ **chunked prefilling**. Instead of processing the entire prompt at once, the scheduler breaks the input into manageable chunks.\n\nDuring this process, the system \"borrows\" cache slots from the main VRAM pool. These borrowed slots act as temporary buffers for the chunk data. The scheduler orchestrates a pipeline where the computation of one chunk overlaps with the memory transfer of the next. Crucially, while the current layer\u2019s attention mechanism is executing on the GPU, the scheduler proactively streams the expert weights for the *next* layer from system RAM or SSD into the GPU\u2019s staging area. This overlap hides the latency of data movement behind the compute time of the current operation, a technique known as **compute-memory overlap**.\n\n### The Token Pass: Asynchronous Expert Execution\n\nOnce the prompt is processed,"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 33740,
+            "completion_tokens": 512,
+            "total_tokens": 34252,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 33740,
+            "prompt_ms": 29245.6,
+            "prompt_per_token_ms": 0.867,
+            "prompt_per_second": 1153.7,
+            "predicted_n": 512,
+            "predicted_ms": 8286.8,
+            "predicted_per_token_ms": 16.185,
+            "predicted_per_second": 61.8,
+            "draft_n": 341,
+            "draft_n_accepted": 249
+          }
+        }
+      },
+      {
+        "arm": "compact",
+        "round": 1103,
+        "label": "144k",
+        "wall_s": 142.73652291297913,
+        "prompt_sha256": "c29202d756ec62b2edcc4b2c54a0352123b62f29904241a90ca7f9ce9eac1f44",
+        "response": {
+          "id": "chatcmpl-b6bbe0074eec456d8334c72e",
+          "object": "chat.completion",
+          "created": 1794470789,
+          "model": "qwen3.8-flash-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "# The Architecture of Local LLM Inference: A Deep Dive into Scheduling, Caching, and Speculative Decoding\n\nRunning large language models (LLMs) on consumer hardware has historically been a bottlenecked endeavor, constrained by the limited video memory (VRAM) of graphics cards. However, recent architectural innovations have shifted this paradigm, allowing massive Mixture-of-Experts (MoE) models to run efficiently on single-GPU systems. This tutorial explores the four pillars of this optimization: dual-pass inference scheduling, expert caching strategies, PCIe bandwidth management, and speculative decoding. By understanding how these components interleave, we can demystify how a model that traditionally requires server-grade infrastructure can now operate on a desktop machine.\n\n## 1. The Dual-Pass Inference Model\n\nThe fundamental challenge in LLM inference is the disparity between processing input prompts and generating output tokens. These two phases have vastly different computational characteristics, requiring distinct scheduling strategies. Modern local inference engines address this by interleaving two specific passes: the **Prompt Pass** and the **Token Pass**.\n\n### The Prompt Pass: Throughput Optimization\nThe prompt pass occurs when the user submits a request. This phase is compute-bound and benefits from parallelism. The system reads the request in large chunks, leveraging the high throughput of GPU cores to process multiple tokens simultaneously. During this phase, the engine borrows cache slots for its chunk buffers. Because the entire context window needs to be processed at once, memory bandwidth becomes a critical resource.\n\nTo maximize efficiency, the prompt pass utilizes quantized kernels to multiply the experts. Quantization reduces the precision of the weights (e.g., from 16-bit floating point to 4-bit integers), significantly lowering memory footprint and increasing arithmetic throughput. Crucially, the system employs a technique known as **layer prefetching**. While the current layer\u2019s attention mechanism is running on the GPU, the engine streams the experts for the *next* layer from storage into memory. This overlap hides latency; by the time the current layer finishes, the data for the next layer is ready, preventing the GPU from idling while waiting for data transfers.\n\n### The Token Pass: Latency Optimization\nOnce the prompt is processed, the model enters the token pass, where it generates one answer token at a time. This phase is memory-bound rather than compute-bound. For every single token generated, the model must access the entire weight matrix of the active experts. If these weights reside on slower storage (like an SSD), the GPU would spend"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 151309,
+            "completion_tokens": 512,
+            "total_tokens": 151821,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          },
+          "timings": {
+            "cache_n": 0,
+            "prompt_n": 151309,
+            "prompt_ms": 133333.6,
+            "prompt_per_token_ms": 0.881,
+            "prompt_per_second": 1134.8,
+            "predicted_n": 512,
+            "predicted_ms": 9181.2,
+            "predicted_per_token_ms": 17.932,
+            "predicted_per_second": 55.8,
+            "draft_n": 375,
+            "draft_n_accepted": 252
+          }
+        }
+      }
+    ]
+  },
+  "parity": {
+    "selftest": "PASS:continuous,ties,equal,signedzero/infinity,NaN,spreadties,partialtail",
+    "active_bound": "PASS20cases identicalIDs"
+  },
+  "HC_fusion": {
+    "status": "Already present on BF16sm70 andHC_Q8 paths; no duplicate implementation",
+    "fused_gr_bench": "300iterations,4streams,6cases,coldsets1;0differing;TSUM Q8 hashes identical",
+    "observed_t5_q8_mixed_rel_rms": "0.0008..0.0009",
+    "observed_max_dR": "9.54e-7",
+    "initial_coldsets8": "OOM with live151kcontext;not retained as a working configuration"
+  },
+  "builds": {
+    "CUDA_sm70": "passed full final candidate build",
+    "HIP_gfx1100": "passed full strata build",
+    "SYCL": "not run: no compiler"
+  },
+  "validation": {
+    "registered_compact_parity": "passed 1/1 with service stopped (2.03s)",
+    "initial_registered_test_live": "failed CUDA malloc out-of-memory while text+vision service held VRAM; isolated GPU resources and passed",
+    "long_smoke": {
+      "answer": "READY",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 33824,
+        "prompt_ms": 29085.6,
+        "prompt_per_token_ms": 0.86,
+        "prompt_per_second": 1162.9,
+        "predicted_n": 2,
+        "predicted_ms": 205.3,
+        "predicted_per_token_ms": 102.65,
+        "predicted_per_second": 9.7,
+        "draft_n": 3,
+        "draft_n_accepted": 0
+      }
+    },
+    "vision_smoke": "Blue"
+  }
+}
