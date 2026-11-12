@@ -1591,10 +1591,18 @@
     "api_key_preserved": true
   },
   "build_validation": {
-    "cuda_sm70": "passed",
+    "cuda_sm70": "passed after assembly guard fix",
     "hip_gfx1100_changed_translation_units": "passed",
-    "hip_full": "failed: unchanged qpn2_nvfp4.cu:111 invalid +f asm output constraint",
-    "sycl": "not run: no compiler"
+    "hip_full": "passed after CUDA-only mma.sync helper guard and HIP capability exclusion",
+    "sycl": "not run: no compiler",
+    "qpn2_capability_smoke": {
+      "cuda_v100": true,
+      "hip": false
+    },
+    "rebuilt_service_smoke": {
+      "health": 200,
+      "answer": "17"
+    }
   },
   "dp_prefill_evaluation": {
     "upstream_pr": "https://github.com/Niko1221/Strata/pull/5002",

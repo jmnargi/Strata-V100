@@ -103,6 +103,7 @@ __device__ __forceinline__ void qpn2_b(unsigned w0, unsigned w1, half2 sc2, half
     b[7] = __hmul2(e2m1_pair(n6 >> 4, n7 >> 4), sc2);
 }
 
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
 __device__ __forceinline__ void mma8n8k4(float c[8], unsigned a0, unsigned a1, unsigned b0, unsigned b1) {
     asm volatile(
         "mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 "
@@ -111,6 +112,7 @@ __device__ __forceinline__ void mma8n8k4(float c[8], unsigned a0, unsigned a1, u
         : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3]), "+f"(c[4]), "+f"(c[5]), "+f"(c[6]), "+f"(c[7])
         : "r"(a0), "r"(a1), "r"(b0), "r"(b1));
 }
+#endif
 
 // q8_1's 16 int8 values at `qs` (4-byte aligned; block_q8_1 is 36 bytes) -> 8 half2 in natural k order, times its d
 __device__ __forceinline__ void q8_1_16_to_half(const int8_t* qs, half d, half2 out[8]) {
@@ -247,6 +249,12 @@ __global__ void __launch_bounds__(32 * QPN2_MAXWARPS) qpn2_nvfp4_kernel(
 }  // namespace
 
 bool qpn2_nvfp4_supported(const NativeExpertLayout& L, int64_t cap_entries) noexcept {
+#if defined(__HIPCC__)
+    // QPN2 uses NVIDIA's mma.sync instruction; HIP must use the native expert kernels instead.
+    (void) L;
+    (void) cap_entries;
+    return false;
+#else
     if (L.gu_type != 40 || L.d_type != 40 || L.tail_off == 0) return false;
     if (cap_entries <= 0) return false;
     // The 8-row bound is on ENTRIES PER GROUP, not on cap_entries: a group is one expert, an entry one (window row,
@@ -262,6 +270,7 @@ bool qpn2_nvfp4_supported(const NativeExpertLayout& L, int64_t cap_entries) noex
         return false;
     }
     return maj >= 7;
+#endif
 }
 
 void qpn2_nvfp4_gu(const NativeExpertLayout& L, int64_t cap_groups, int64_t cap_entries, void* stream,

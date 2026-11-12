@@ -54,9 +54,12 @@ lengths. Both GPUs grew KV from 16384 to 40960 cells. A following red
 image answered `Red`; a `get_weather` call requested Paris and its
 tool-result follow-up answered `17°C`. The private API key was preserved.
 The daily service keeps HC_Q8 enabled in its private configuration.
-CUDA sm_70 builds. Both changed files also compile for HIP gfx1100;
-the full HIP build fails in the unchanged `qpn2_nvfp4.cu:111` inline
-assembly (`+f` output constraint). SYCL and AMD runtime were not tested.
+CUDA sm_70 and the full HIP gfx1100 engine now build. QPN2's NVIDIA-only
+`mma.sync` helper is guarded by the same CUDA device check as its caller;
+HIP reports QPN2 unsupported and uses the native expert path. Linked
+capability smokes returned supported on CUDA/V100 and unsupported on HIP.
+The rebuilt CUDA service answered `17`. SYCL and AMD GPU inference were
+not tested.
 
 All requests, full replies, timings, prompt hashes and settings are in
 [`v100-hc-q8-split-2026-11-11.json`](../benchmarks/v100-hc-q8-split-2026-11-11.json).
