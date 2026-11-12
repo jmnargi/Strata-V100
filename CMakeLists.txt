@@ -753,6 +753,15 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
   target_link_libraries(prefill_gemm_parity PRIVATE strata_prefill ${_strata_gpu_runtime_target})
   add_test(NAME prefill_gemm_parity COMMAND prefill_gemm_parity)
 
+  if(STRATA_BUILD_TESTS)
+    # FP16 fallback expert slices, including out-of-order nonzero offsets; no model required (#100).
+    add_executable(prefill_fp16_expert_test tests/prefill/prefill_fp16_expert_test.cpp)
+    target_include_directories(prefill_fp16_expert_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/prefill")
+    target_link_libraries(prefill_fp16_expert_test PRIVATE strata_prefill ${_strata_gpu_runtime_target})
+    add_test(NAME prefill_fp16_expert_test COMMAND prefill_fp16_expert_test)
+    set_tests_properties(prefill_fp16_expert_test PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+  endif()
+
   if(STRATA_BUILD_TESTS AND STRATA_ENABLE_CUDA)
     # the GDN prompt recurrence: the fast four-accumulator chain split (STRATA_GDN_REC_FAST=1) against the baseline
     # pipelined kernel on the same bounded inputs (exit 77 without a CUDA device)
