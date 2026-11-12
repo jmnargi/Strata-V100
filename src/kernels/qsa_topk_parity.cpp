@@ -53,6 +53,25 @@ bool run_case(int64_t ctx, int64_t nq, int reps, int64_t capacity, bool counted)
         for (int64_t b = 0; b < max_blocks; ++b)
             tied[(size_t) (i * max_blocks + b)] = row[b] > 1e8f ? row[b] : std::floor(row[b] * 8.0f) / 8.0f;   // ~64 levels
     }
+    // Edge rows for STRATA_TOPK_COMPACT: signed zeros, both infinities, tiny denormals and exact ties in one set, and
+    // NaN mixed into otherwise continuous scores in another.  Both selectors read the same score buffer, so the ids
+    // must match: the compact path either refines exactly or declines to the exact kernel on a NaN/concentrated row.
+    std::vector<float> edges(scores.size()), nanrow(scores.size()), spread(scores.size());
+    const float special[8] = {0.0f, -0.0f, INFINITY, -INFINITY, 1e-30f, -1e-30f, 0.25f, 0.5f};
+    for (int64_t i = 0; i < nq; ++i) {
+        for (int64_t b = 0; b < max_blocks; ++b) {
+            const size_t j = (size_t) (i * max_blocks + b);
+            edges[j] = special[(size_t) ((i * 7 + b) & 7)];
+            // 4,096 distinct values spread over [0, 256), each shared by ~nb/4096 blocks: the cutoff bucket is small
+            // (the compact path narrows), the pivot ties span many blocks and often cut one (the ascending tie rule).
+            spread[j] = (float) ((b * 37) & 4095) * 0.0625f;
+            nanrow[j] = scores[j];
+            if (b % 97 == 0) nanrow[j] = NAN;
+            else if (b % 89 == 0) nanrow[j] = INFINITY;
+            else if (b % 83 == 0) nanrow[j] = -0.0f;
+            else if (b % 79 == 0) nanrow[j] = -INFINITY;
+        }
+    }
     int32_t *d_steps = nullptr, *ids_ref = nullptr, *ids_new = nullptr;
     float* d_scores = nullptr;
     ck(cudaMalloc(&d_steps, steps.size() * 4), "malloc");
@@ -79,6 +98,8 @@ bool run_case(int64_t ctx, int64_t nq, int reps, int64_t capacity, bool counted)
         return n;
     };
     const int64_t same_tied = same(tied), same_equal = same(equal), same_cont = same(scores);   // d_scores: continuous
+    const int64_t same_edges = same(edges), same_nan = same(nanrow), same_spread = same(spread);
+    ck(cudaMemcpy(d_scores, scores.data(), scores.size() * 4, cudaMemcpyHostToDevice), "upload");
     cudaEvent_t e0, e1;
     ck(cudaEventCreate(&e0), "event");
     ck(cudaEventCreate(&e1), "event");
@@ -95,13 +116,16 @@ bool run_case(int64_t ctx, int64_t nq, int reps, int64_t capacity, bool counted)
     const float t_new = timed([&] { k::qsa_block_topk(d_scores, d_steps, nq, max_blocks, cap, s, ids_new, nullptr, active); });
     cudaEventDestroy(e0); cudaEventDestroy(e1);
     cudaFree(d_steps); cudaFree(d_scores); cudaFree(ids_ref); cudaFree(ids_new);
-    const bool ok = same_cont == nq && same_tied == nq && same_equal == nq;
+    const bool ok = same_cont == nq && same_tied == nq && same_equal == nq && same_edges == nq && same_nan == nq &&
+                    same_spread == nq;
     std::printf("%s context %lld under a capacity of %lld (%lld blocks), %lld queries %s: reference %.3f ms, "
                 "dispatched %.3f ms (%.1fx); identical ids: continuous %lld/%lld, 64 levels %lld/%lld, equal scores "
-                "%lld/%lld\n", ok ? "PASS" : "FAIL", (long long) ctx, (long long) capacity, (long long) max_blocks,
-                (long long) nq, counted ? "with their block count" : "without a block count", t_ref, t_new, t_ref / t_new,
-                (long long) same_cont, (long long) nq, (long long) same_tied,
-                (long long) nq, (long long) same_equal, (long long) nq);
+                "%lld/%lld, signed-zero/infinities %lld/%lld, NaN rows %lld/%lld, spread ties %lld/%lld\n",
+                ok ? "PASS" : "FAIL", (long long) ctx, (long long) capacity, (long long) max_blocks, (long long) nq,
+                counted ? "with their block count" : "without a block count", t_ref, t_new, t_ref / t_new,
+                (long long) same_cont, (long long) nq, (long long) same_tied, (long long) nq,
+                (long long) same_equal, (long long) nq, (long long) same_edges, (long long) nq,
+                (long long) same_nan, (long long) nq, (long long) same_spread, (long long) nq);
     return ok;
 }
 }  // namespace
