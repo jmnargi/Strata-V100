@@ -4,6 +4,30 @@ Strata's ready-made engine and the support matrix start at compute capability 7.
 engine compiled for it, through the experimental build that issue #236 added. It is **community-tested, not part of the
 supported cards**: no ready-made engine is published for it and the numbers below come from one machine.
 
+## FP16 expert prefill row-offset fix (2026-11-11)
+
+[Issue #100](https://github.com/jmnargi/Strata-V100/issues/100) reports NaN
+logits with UD-Q4_K_XL on two V100-SXM2-32GB cards. The FP16 fallback wrote
+each expert's hidden rows at its own offset but read from row zero for
+the down projection. The down projection now reads the same expert's rows.
+The reporter tested that correction with the model. We do not have that
+quant locally, so we have not repeated the model run or the performance-switch sweep.
+
+The model-free `prefill_fp16_expert_test` runs the production FP16 sequence
+with three unequal expert slices, two execution orders, and finite or NaN
+scratch contents. It checks finite outputs against a scalar reference and
+checks that writes stay within the routed rows. On each of two
+V100-PCIE-16GB cards with CUDA 12.8, all 51,200 output checks passed
+(maximum absolute error zero). With the missing offset, 40,960 checks failed.
+These are synthetic correctness checks, not model-quality or speed measurements.
+
+Build with `STRATA_BUILD_TESTS=ON`, then run:
+
+```sh
+cmake --build build --target prefill_fp16_expert_test -j2
+ctest --test-dir build -R '^prefill_fp16_expert_test$' --output-on-failure
+```
+
 ## Selected upstream 0.2.11 ports: Gyro-M (2026-11-05)
 
 The latest upstream release checked was
