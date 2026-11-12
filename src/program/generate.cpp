@@ -3956,9 +3956,9 @@ int main(int argc, char** argv) {
         // after keep_unquantized_ple_key so a --compat-bf16 pack's arena copy does not undo it.
         if (o.no_ple) skip.insert("blk.1.ple_key.weight");
         if (native_pack) skip.insert("token_embd.weight");
-        // STRATA_HC_Q8=1 (single GPU): the layers' hyper-connection down / up projections live only as Q8_0 (NativeDense
-        // quantizes them from the pack file), so their bf16 copy is not loaded
-        if (!o.native_dense_gguf.empty() && !multi_gpu && strata::core::NativeDense::hc_q8_requested())
+        // STRATA_HC_Q8=1: the layers' hyper-connection down / up projections live only as Q8_0 (NativeDense
+        // quantizes them from the pack file), so their bf16 copy is not loaded, including on a layer split.
+        if (!o.native_dense_gguf.empty() && strata::core::NativeDense::hc_q8_requested())
             strata::core::NativeDense::add_hc_skip(o.pack, skip);
     }
     // Layer split with explicit split points: every GPU holds only the dense weights of ITS layers (the PLE tensors

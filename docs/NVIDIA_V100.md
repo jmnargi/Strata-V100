@@ -4,6 +4,137 @@ Strata's ready-made engine and the support matrix start at compute capability 7.
 engine compiled for it, through the experimental build that issue #236 added. It is **community-tested, not part of the
 supported cards**: no ready-made engine is published for it and the numbers below come from one machine.
 
+## Exact long-context QSA selection (2026-11-12)
+
+`STRATA_TOPK_COMPACT=1` enables an optional CUDA selector inspired by
+[1Cat-vLLM #1171](https://github.com/1CatAI/1Cat-vLLM/pull/1171), shipped in
+[v1.5.2](https://github.com/1CatAI/1Cat-vLLM/releases/tag/v1.5.2).
+The fork selects up to 2,051 cells, with four cells sharing a score,
+instead of 1Cat's 512 individual entries. This is an adaptation, not a
+copy of its candidate limits.
+
+A coarse histogram finds the cutoff bucket. Exact FP32 radix selection
+then reads only that bucket before emitting cell IDs in ascending order.
+The output rule is unchanged, including ties and partial blocks. NaNs,
+concentrated rows and oversized buckets use the existing exact selector.
+The default path and HIP dispatch are unchanged.
+
+Measured with CUDA 12.8 on the two V100-PCIE-16GB cards at 175 W, Ryzen
+5 3600 and 94 GiB RAM. Each value below is the median of three interleaved
+off/on pairs. Times cover selection only, not scoring or the whole model.
+
+| Live cells / rows | GPU0 off / on | GPU1 off / on |
+| --- | ---: | ---: |
+| 151,309 / 5 | 0.117 / 0.082 ms | 0.131 / 0.091 ms |
+| 524,288 / 5 | 0.302 / 0.215 ms | 0.303 / 0.216 ms |
+| 524,288 / 256, counted prompt | 1.519 / 0.917 ms | 1.523 / 0.920 ms |
+
+The kernel is about 29–40% faster in these continuous-score cases.
+Selected IDs matched the exact reference for continuous scores, ties,
+equal scores, signed zeros, infinities, NaNs and partial tail blocks.
+The 20 active-bound cases also passed.
+
+The live NVFP4 sweep used three paired prompts at each length, 512-token
+greedy replies, thinking off, no reused prefix, and the PR #102 profile:
+HC_Q8, split 16, int8 elastic KV, 524288 logical context, MTP 4/min-p 0.7,
+800 MiB reserve, whole-expert RAM arena and lazy vision.
+
+| Actual prompt tokens | Baseline prefill / decode | Compact prefill / decode |
+| --- | ---: | ---: |
+| 4,247 | 509.6 / 62.1 tok/s | 509.6 / 64.6 tok/s |
+| 33,740 | 1197.2 / 59.2 tok/s | 1197.2 / 61.3 tok/s |
+| 151,309 | 1383.8 / 55.6 tok/s | 1336.6 / 56.7 tok/s |
+
+These are batched-arm medians, not an established end-to-end speed gain.
+Long-prefill times drifted from about 103 to 133 seconds across rounds.
+Full replies were not generally identical between service arms; selector
+parity is not a model-quality benchmark. All runs are retained in
+[`v100-cat-topk-2026-11-12.json`](../benchmarks/v100-cat-topk-2026-11-12.json).
+
+The other proposed port, [1Cat #1172](https://github.com/1CatAI/1Cat-vLLM/pull/1172),
+already exists here: both the Volta BF16 and daily Q8 HC paths compute
+the squared-norm work inside the down projection. The existing HC
+benchmark passed, with matching Q8 hashes across its normal and TSUM
+implementations. No duplicate fusion or new HC flag was added.
+
+## Split HC_Q8 memory saving (2026-11-11)
+
+Ported [upstream PR #2427](https://github.com/Niko1221/Strata/pull/2427),
+head `f7f4f61c1a6eb7730a597468b22d7d79919c8114`. It was updated November 9;
+it is not a newly opened November PR. With `STRATA_HC_Q8=1`, a layer split
+now skips the canonical BF16 hyper-connection down/up rows, just as one
+GPU already did. Each card also uploads only its own layers' Q8_0 rows.
+The switch remains opt-in. Its unset path is unchanged.
+
+Measured on two V100-PCIE-16GB cards at 175 W, Ryzen 5 3600 and 94 GiB RAM.
+GPU0 uses PCIe Gen3 x4; GPU1 uses x16. The model was
+`local-inference-lab/Qwen3.8-Flash-Next-NVFP4`, with split 16, MTP 4,
+minimum acceptance probability 0.7, 800 MiB reserve, int8 elastic KV,
+524288 logical context, the whole-expert RAM arena and lazy vision.
+This is not the earlier resident-budget, text-only benchmark.
+
+| Startup expert slots | GPU0 | GPU1 | Total |
+| --- | ---: | ---: | ---: |
+| Daily configuration, HC_Q8 unset | 4822 | 3410 | 8232 |
+| Before port, HC_Q8 enabled | 4725 | 3216 | 7941 |
+| After port, HC_Q8 enabled | 4864 | 3507 | 8371 |
+
+The port recovers 430 slots, about 1.1 GiB across both cards, compared
+with the old HC_Q8 path. Against the daily BF16 path, enabling the corrected
+option adds 139 slots, about 0.36 GiB. These are startup capacities;
+elastic KV takes slots back as the context grows.
+
+The HTTP sweep used uncached prompts of 2084, 16281 and 32505 tokens,
+512-token greedy replies, thinking off, and three rounds per arm.
+The table gives medians in tokens/s:
+
+| Prompt | Daily prefill / decode | Old HC_Q8 | Corrected HC_Q8 |
+| --- | ---: | ---: | ---: |
+| 2K | 275.1 / 61.8 | 268.4 / 60.3 | 275.7 / 62.7 |
+| 16K | 1073.1 / 59.6 | 1055.8 / 58.5 | 1074.7 / 60.3 |
+| 32K | 1289.5 / 57.8 | 1268.3 / 57.4 | 1295.2 / 60.2 |
+
+The arms ran in batches, not interleaved. One corrected-HC_Q8 16K decode
+run fell to 41.4 tokens/s; it is retained in the evidence. A HIP CMake
+configuration also overlapped that arm. These small median differences
+are not proof of a speed gain. The retained result is the memory saving.
+Replies were not byte-identical between arms. HC_Q8 changes precision;
+these requests are not a model-quality benchmark. Arithmetic answered `17`,
+and passage extraction answered `1887; 14; 22`.
+
+The standalone PR build was then restarted and exercised at all three
+lengths. Both GPUs grew KV from 16384 to 40960 cells. A following red
+image answered `Red`; a `get_weather` call requested Paris and its
+tool-result follow-up answered `17°C`. The private API key was preserved.
+The daily service keeps HC_Q8 enabled in its private configuration.
+CUDA sm_70 and the full HIP gfx1100 engine now build. QPN2's NVIDIA-only
+`mma.sync` helper is guarded by the same CUDA device check as its caller;
+HIP reports QPN2 unsupported and uses the native expert path. Linked
+capability smokes returned supported on CUDA/V100 and unsupported on HIP.
+The rebuilt CUDA service answered `17`. SYCL and AMD GPU inference were
+not tested.
+
+All requests, full replies, timings, prompt hashes and settings are in
+[`v100-hc-q8-split-2026-11-11.json`](../benchmarks/v100-hc-q8-split-2026-11-11.json).
+
+The [PR search inventory](../benchmarks/v100-upstream-pr-inventory-2026-11-11.json)
+records 108 PRs created since November 8 and 99 older PRs updated in the
+same window, fetched late November 11 local time. Most target other
+hardware or engines. In particular, #4382 and #4302 target DeepSeek,
+#5119 targets the separate all-cards engine, #5593 helps file-backed
+expert reads rather than this RAM arena, and #5623 requires host-streamed
+KV instead of elastic GPU KV. #3648 improves the peer tier, not split 16.
+#5475 needs a CUDA persistent-HC prerequisite absent from this fork.
+These were not measured as improvements on this deployment.
+
+[Upstream #5002](https://github.com/Niko1221/Strata/pull/5002), dual
+data-parallel prefill, was ported to a separate experimental branch and
+compiled for CUDA. With the daily profile it reported
+`STRATA_DP_PREFILL is off`: it requires streamed host KV, not elastic
+GPU KV. The port also lacked conversation checkpoint saving on that path.
+It was not published or enabled. No DP speed comparison is claimed.
+The service was restored to this HC_Q8 PR branch and answered `17`.
+
 ## FP16 expert prefill row-offset fix (2026-11-11)
 
 [Issue #100](https://github.com/jmnargi/Strata-V100/issues/100) reports NaN

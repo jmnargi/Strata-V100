@@ -1,0 +1,2077 @@
+{
+  "fetched_at": "2026-11-12T03:22:24.847602+00:00",
+  "query": "repo:Niko1221/Strata is:pr updated:2026-11-08..2026-11-12",
+  "total_count": 207,
+  "items": [
+    {
+      "number": 5739,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5739",
+      "title": "[Engine] let gfx906 build and run the DeepSeek V4.1 engine",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T20:22:03Z",
+      "updated_at": "2026-11-12T03:14:29Z",
+      "closed_at": null
+    },
+    {
+      "number": 5826,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5826",
+      "title": "[Engine] add a CPU-only reader to Windows CUDA packages",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-12T01:05:54Z",
+      "updated_at": "2026-11-12T03:03:47Z",
+      "closed_at": null
+    },
+    {
+      "number": 5829,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5829",
+      "title": "[Engine] Linux gfx1100: setup keeps W7900D; DS4_FAST_ATTN on (+14.5% 4K prompt)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-12T02:32:39Z",
+      "updated_at": "2026-11-12T02:32:39Z",
+      "closed_at": null
+    },
+    {
+      "number": 3800,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3800",
+      "title": "[Engine] Token mask for JSON response formats: MTP drafts survive constrained decoding",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-10-23T07:25:44Z",
+      "updated_at": "2026-11-11T23:48:26Z",
+      "closed_at": null
+    },
+    {
+      "number": 4222,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4222",
+      "title": "[Engine] Chat takes tools and a JSON format while the masks are live: the grammar answers with the call, the schema binds the answer",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-10-26T12:20:00Z",
+      "updated_at": "2026-11-11T23:43:50Z",
+      "closed_at": null
+    },
+    {
+      "number": 4625,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4625",
+      "title": "[Engine] STRATA_POOL_SPIN_US=0 means zero: a parked worker sleeps at once instead of after 1,024 pauses",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-10-29T15:58:01Z",
+      "updated_at": "2026-11-11T23:39:43Z",
+      "closed_at": null
+    },
+    {
+      "number": 5638,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5638",
+      "title": "[Other] Training: fine-tune Qwen3.8-Flash-Next for just +0.40 GiB of extra VRAM (zero-order)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T06:50:50Z",
+      "updated_at": "2026-11-12T00:19:01Z",
+      "closed_at": null
+    },
+    {
+      "number": 5820,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5820",
+      "title": "[Engine] Multiple API keys with per-key concurrency limits and reserved capacity",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-11T21:55:09Z",
+      "updated_at": "2026-11-11T22:43:31Z",
+      "closed_at": null
+    },
+    {
+      "number": 5821,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5821",
+      "title": "[Benchmark] DeepSeek V4.1 Flash IST-DAS 1.75bpw, 2x RTX 4060 Ti 16 GB (WSL2), 110 GB RAM (non-standard measurement)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T22:10:11Z",
+      "updated_at": "2026-11-11T22:10:11Z",
+      "closed_at": null
+    },
+    {
+      "number": 4382,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4382",
+      "title": "[Engine] DeepSeek-V4.1: the hyper-connection split off the decode path, +1.4% decode, bit-exact",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-28T00:35:55Z",
+      "updated_at": "2026-11-11T22:02:03Z",
+      "closed_at": null
+    },
+    {
+      "number": 5813,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5813",
+      "title": "[Engine] STRATA_ADAPT_FETCH beside helper GPUs: the PCIe share's pick leaves out what a helper holds",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T19:52:57Z",
+      "updated_at": "2026-11-11T21:28:35Z",
+      "closed_at": null
+    },
+    {
+      "number": 4302,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4302",
+      "title": "[Engine] implement cache card logic for DeepSeek-V4.1, up to 30% faster decode",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-27T11:19:30Z",
+      "updated_at": "2026-11-11T21:54:21Z",
+      "closed_at": null
+    },
+    {
+      "number": 2804,
+      "html_url": "https://github.com/Niko1221/Strata/pull/2804",
+      "title": "[Engine] sycl: KREG small-batch mmvq kernels for Q4_K/Q5_K/Q6_K/IQ4_XS at 1-8 columns (opt-in STRATA_MMVQ_KREG=1)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-16T19:28:29Z",
+      "updated_at": "2026-11-11T21:04:43Z",
+      "closed_at": null
+    },
+    {
+      "number": 3472,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3472",
+      "title": "[Engine] Zen 1/2: build ggml-cpu without BMI2 pdep (IQ1_S/IQ1_M CPU dots 16-19x faster, same results)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-20T16:00:31Z",
+      "updated_at": "2026-11-11T22:02:05Z",
+      "closed_at": null
+    },
+    {
+      "number": 4367,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4367",
+      "title": "[Engine] DeepSeek-V4.1: stream the model load, 3x faster start, up to 7x faster restart",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-27T21:12:28Z",
+      "updated_at": "2026-11-11T22:02:01Z",
+      "closed_at": null
+    },
+    {
+      "number": 5179,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5179",
+      "title": "[GUI] add true same-turn coding-agent steering with a reproducible Harness patch",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-04T04:42:58Z",
+      "updated_at": "2026-11-11T20:10:04Z",
+      "closed_at": null
+    },
+    {
+      "number": 3941,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3941",
+      "title": "[Engine] sycl: QSA block scores on XMX (joint_matrix) - 128K prefill -10.5% TTFT on a B70",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-24T09:24:21Z",
+      "updated_at": "2026-11-11T20:05:35Z",
+      "closed_at": null
+    },
+    {
+      "number": 3517,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3517",
+      "title": "[Engine] conversation cache: the retention pin follows the system-prompt root, not chain item 0",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-20T22:50:06Z",
+      "updated_at": "2026-11-11T20:05:33Z",
+      "closed_at": null
+    },
+    {
+      "number": 5817,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5817",
+      "title": "[Benchmark] 2x RTX 4060 Ti 16 GB (WSL2), Qwen3.8-Flash-Next Q2_0, engine 0.1.59, protocol strata-qwen38-thinking-v1-draft.1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T20:03:48Z",
+      "updated_at": "2026-11-11T20:03:48Z",
+      "closed_at": null
+    },
+    {
+      "number": 3761,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3761",
+      "title": "[Engine] sycl: opt-in STRATA_MIRROR_DROP_CACHE=before for the --stream-experts mirror (#3681)",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-10-22T19:24:29Z",
+      "updated_at": "2026-11-11T20:03:03Z",
+      "closed_at": null
+    },
+    {
+      "number": 3153,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3153",
+      "title": "[Engine] [SYCL] Qwen3.8-Flash-Next IQ2_XS single-B70 E2E preview",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-10-19T09:22:49Z",
+      "updated_at": "2026-11-11T20:03:02Z",
+      "closed_at": null
+    },
+    {
+      "number": 5815,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5815",
+      "title": "[Engine] sycl: --batch-mtp across a layer split (two requests at once +13-21% on 2x Arc Pro B70)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T19:59:44Z",
+      "updated_at": "2026-11-11T19:59:44Z",
+      "closed_at": null
+    },
+    {
+      "number": 3266,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3266",
+      "title": "[Engine] logit_bias: accept it with --batch (one bias table per slot)",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-10-19T21:04:11Z",
+      "updated_at": "2026-11-11T19:57:52Z",
+      "closed_at": "2026-11-11T19:57:52Z"
+    },
+    {
+      "number": 5811,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5811",
+      "title": "[Engine] sycl: STRATA_PW_WITH_BATCH=1 keeps --pipeline-windows for a lone request beside --batch slots",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T19:36:30Z",
+      "updated_at": "2026-11-11T19:36:30Z",
+      "closed_at": null
+    },
+    {
+      "number": 1937,
+      "html_url": "https://github.com/Niko1221/Strata/pull/1937",
+      "title": "[Engine] serve: parked conversations on the disk, optionally across restarts (--conversation-disk-dir, --conversation-disk-persist)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-11T08:12:52Z",
+      "updated_at": "2026-11-11T19:30:07Z",
+      "closed_at": null
+    },
+    {
+      "number": 5805,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5805",
+      "title": "[Engine] serve: read a tool call written without its wrapper inside the reasoning, and unwrap a lone <parameter=arguments>",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T18:37:08Z",
+      "updated_at": "2026-11-11T19:20:39Z",
+      "closed_at": null
+    },
+    {
+      "number": 5809,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5809",
+      "title": "[GUI] give a damaged chat file a surface, and clear the row when it is deleted (#5421)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T19:09:36Z",
+      "updated_at": "2026-11-11T19:19:16Z",
+      "closed_at": null
+    },
+    {
+      "number": 3367,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3367",
+      "title": "[Engine] sycl: the hyper-connection read's reduce keeps 8 loads in flight, its up step writes lo once",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-10-20T05:28:45Z",
+      "updated_at": "2026-11-11T18:55:27Z",
+      "closed_at": "2026-11-11T18:55:27Z"
+    },
+    {
+      "number": 2437,
+      "html_url": "https://github.com/Niko1221/Strata/pull/2437",
+      "title": "[Engine] sycl: the IQ4_XS expert dot reads its codebook from registers",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-10-14T13:31:05Z",
+      "updated_at": "2026-11-11T18:55:24Z",
+      "closed_at": "2026-11-11T18:55:24Z"
+    },
+    {
+      "number": 2436,
+      "html_url": "https://github.com/Niko1221/Strata/pull/2436",
+      "title": "[Engine] sycl: defer pipelined one-token commits to the host verdict (port of c81f9984)",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-10-14T13:28:02Z",
+      "updated_at": "2026-11-11T18:55:21Z",
+      "closed_at": "2026-11-11T18:55:21Z"
+    },
+    {
+      "number": 2433,
+      "html_url": "https://github.com/Niko1221/Strata/pull/2433",
+      "title": "[Engine] sycl: a pipelined window still on the GPU is polled again, not failed",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-10-14T13:25:12Z",
+      "updated_at": "2026-11-11T18:55:18Z",
+      "closed_at": "2026-11-11T18:55:18Z"
+    },
+    {
+      "number": 5691,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5691",
+      "title": "[Engine] opt-in STRATA_VRAM_CALIB: size each card's VRAM reserve from what this binary and config were measured to allocate",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T23:24:01Z",
+      "updated_at": "2026-11-11T18:50:34Z",
+      "closed_at": null
+    },
+    {
+      "number": 4753,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4753",
+      "title": "[GUI] Import a saved chat back from its Markdown export",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-30T22:24:10Z",
+      "updated_at": "2026-11-11T18:43:49Z",
+      "closed_at": null
+    },
+    {
+      "number": 5803,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5803",
+      "title": "[Engine] gfx1152: opt-in thread-per-block long-prompt scorer (STRATA_SCORES_THREAD=1)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T18:32:08Z",
+      "updated_at": "2026-11-11T18:32:08Z",
+      "closed_at": null
+    },
+    {
+      "number": 5802,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5802",
+      "title": "[GUI] Keep inference running when saving native job history fails",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T18:00:49Z",
+      "updated_at": "2026-11-11T18:15:11Z",
+      "closed_at": null
+    },
+    {
+      "number": 5801,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5801",
+      "title": "[TUI] Monitor: each card names its own PCIe ceiling and power limit",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T17:38:37Z",
+      "updated_at": "2026-11-11T17:38:37Z",
+      "closed_at": null
+    },
+    {
+      "number": 3607,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3607",
+      "title": "[Engine] native Windows support for the Intel Arc SYCL port",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-21T15:17:09Z",
+      "updated_at": "2026-11-11T17:16:42Z",
+      "closed_at": null
+    },
+    {
+      "number": 4886,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4886",
+      "title": "[Engine] Metal: IQ1_M expert gate/up in the GSQ packs (the missing type-29 instantiations, #2537)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-01T09:25:44Z",
+      "updated_at": "2026-11-11T16:39:41Z",
+      "closed_at": null
+    },
+    {
+      "number": 5798,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5798",
+      "title": "[Benchmark] RTX 5080 DeepSeek-V4.1-Flash IST-DAS 1.75 bpw, community suite",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T16:29:42Z",
+      "updated_at": "2026-11-11T16:29:42Z",
+      "closed_at": null
+    },
+    {
+      "number": 5399,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5399",
+      "title": "[Serve] Parked conversations spill to a disk tier instead of being dropped",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-06T11:42:43Z",
+      "updated_at": "2026-11-11T15:43:57Z",
+      "closed_at": null
+    },
+    {
+      "number": 4884,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4884",
+      "title": "[Other] Telemetry: Windows AMD ADL2 readings, per-card tiles, PCIe link",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-01T09:10:23Z",
+      "updated_at": "2026-11-11T15:23:36Z",
+      "closed_at": null
+    },
+    {
+      "number": 5790,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5790",
+      "title": "[GUI] forward MCP server timeout to dsh-mcp-client as toolCallTimeoutMs",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T13:34:10Z",
+      "updated_at": "2026-11-11T15:09:47Z",
+      "closed_at": null
+    },
+    {
+      "number": 4600,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4600",
+      "title": "[Engine] iq_kernels.cu: drop redundant `alignas` to fix hip build",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-29T11:51:10Z",
+      "updated_at": "2026-11-11T15:03:57Z",
+      "closed_at": null
+    },
+    {
+      "number": 5794,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5794",
+      "title": "[Benchmark] add community benchmark report for 192.168.2.211",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T14:43:34Z",
+      "updated_at": "2026-11-11T14:59:03Z",
+      "closed_at": null
+    },
+    {
+      "number": 5793,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5793",
+      "title": "[GUI] Monitor: Apple Silicon GPU temperature and power without root (opt-in)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T14:28:29Z",
+      "updated_at": "2026-11-11T14:31:29Z",
+      "closed_at": null
+    },
+    {
+      "number": 5792,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5792",
+      "title": "[Other] ignore the engine stores beside engine/ so they stop showing as untracked",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T14:28:05Z",
+      "updated_at": "2026-11-11T14:28:05Z",
+      "closed_at": null
+    },
+    {
+      "number": 5791,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5791",
+      "title": "[Benchmark] RX 6750 GRE 12GB (Windows, native gfx1031) \u2014 IQ3_S",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T14:19:55Z",
+      "updated_at": "2026-11-11T14:19:55Z",
+      "closed_at": null
+    },
+    {
+      "number": 5786,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5786",
+      "title": "[TUI] expose the draft vocabulary in strata launch and the Docker image",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T12:48:48Z",
+      "updated_at": "2026-11-11T12:48:48Z",
+      "closed_at": null
+    },
+    {
+      "number": 5765,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5765",
+      "title": "[Engine] Faster one-token IQ2_XXS / IQ2_XS / IQ1_M rows on AVX2.",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T04:47:16Z",
+      "updated_at": "2026-11-11T11:39:50Z",
+      "closed_at": null
+    },
+    {
+      "number": 5775,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5775",
+      "title": "[GUI] isolate agent tests from personal home and Strata data",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T09:52:48Z",
+      "updated_at": "2026-11-11T10:58:32Z",
+      "closed_at": null
+    },
+    {
+      "number": 5777,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5777",
+      "title": "[GUI] keep the overflow recovery fixture within its retry window",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T10:11:31Z",
+      "updated_at": "2026-11-11T10:58:30Z",
+      "closed_at": null
+    },
+    {
+      "number": 5779,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5779",
+      "title": "[Benchmark] RX 7900 XTX, Flash-Next IQ3_S, engine 0.1.59 (Windows)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T10:24:55Z",
+      "updated_at": "2026-11-11T10:24:55Z",
+      "closed_at": null
+    },
+    {
+      "number": 5776,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5776",
+      "title": "[Other] POST /tokenize: the prompt a request would read, without running it",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T10:11:07Z",
+      "updated_at": "2026-11-11T10:23:49Z",
+      "closed_at": null
+    },
+    {
+      "number": 3500,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3500",
+      "title": "[Engine] add GET /v1/models/{id} so Visual Studio can use Strata",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-20T19:49:31Z",
+      "updated_at": "2026-11-11T09:35:43Z",
+      "closed_at": null
+    },
+    {
+      "number": 5119,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5119",
+      "title": "[Engine] split: the all-cards engine builds and runs on sm_70 (V100), opt-in",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-03T13:42:06Z",
+      "updated_at": "2026-11-11T09:14:08Z",
+      "closed_at": null
+    },
+    {
+      "number": 5773,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5773",
+      "title": "[Benchmark] RTX 5080: DeepSeek-V4.1-Flash ISTA-DAS Coder, experts 5 vs 6",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T08:05:14Z",
+      "updated_at": "2026-11-11T08:05:14Z",
+      "closed_at": null
+    },
+    {
+      "number": 5476,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5476",
+      "title": "[Engine] gfx103x decode: opt-in one-warp MMVQ for K <= 4096 and a per-format expert layout table (STRATA_MMVQ_NW1, STRATA_EXP_TABLE)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T11:37:34Z",
+      "updated_at": "2026-11-11T08:01:28Z",
+      "closed_at": null
+    },
+    {
+      "number": 5146,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5146",
+      "title": "[Engine] DFlash2: opt-in Q4_0 GEMM variant table for gfx103x (STRATA_DF2_Q4_RDNA2=1)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-03T19:09:16Z",
+      "updated_at": "2026-11-11T07:55:31Z",
+      "closed_at": null
+    },
+    {
+      "number": 5713,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5713",
+      "title": "[Engine] support Pascal for deepseek v41",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T12:11:15Z",
+      "updated_at": "2026-11-11T07:28:09Z",
+      "closed_at": null
+    },
+    {
+      "number": 4549,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4549",
+      "title": "[Engine] layer split: keep the draft head's room out of the last card's cache (from Strata-DualGPU, #642)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-28T22:47:30Z",
+      "updated_at": "2026-11-11T07:03:55Z",
+      "closed_at": null
+    },
+    {
+      "number": 4522,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4522",
+      "title": "[Engine] layer split: trim every card's dense weights on --layer-split auto too (from Strata-DualGPU, #642)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-28T17:45:36Z",
+      "updated_at": "2026-11-11T07:03:55Z",
+      "closed_at": null
+    },
+    {
+      "number": 4534,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4534",
+      "title": "[Engine] split search: price a pipelined two-stage split by its slower stage (from Strata-DualGPU, #642)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-28T20:18:13Z",
+      "updated_at": "2026-11-11T07:03:55Z",
+      "closed_at": null
+    },
+    {
+      "number": 598,
+      "html_url": "https://github.com/Niko1221/Strata/pull/598",
+      "title": " refill: improve multi-GPU processing speed ~119% PP improvement on 4\u00d7 RTX 3060",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-10-03T07:01:13Z",
+      "updated_at": "2026-11-11T07:01:39Z",
+      "closed_at": "2026-10-04T12:34:26Z"
+    },
+    {
+      "number": 5768,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5768",
+      "title": "[Engine] DeepSeek-V4.1: end the reasoning at the `</think>` token, not at the same text spelled out",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T06:01:13Z",
+      "updated_at": "2026-11-11T06:01:13Z",
+      "closed_at": null
+    },
+    {
+      "number": 5500,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5500",
+      "title": "[Engine] L2 session cache: cut prefill time by ~95% on returning conversations",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T15:36:31Z",
+      "updated_at": "2026-11-11T05:41:39Z",
+      "closed_at": null
+    },
+    {
+      "number": 5766,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5766",
+      "title": "[Engine] Place the expert arena per NUMA node",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T04:50:12Z",
+      "updated_at": "2026-11-11T05:02:30Z",
+      "closed_at": null
+    },
+    {
+      "number": 5313,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5313",
+      "title": "Codex/ascend910 qwen38 iq3 xxs squashed",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-05T14:50:33Z",
+      "updated_at": "2026-11-11T04:24:23Z",
+      "closed_at": "2026-11-11T04:24:23Z"
+    },
+    {
+      "number": 5314,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5314",
+      "title": "Codex/ascend910 qwen38 iq3 xxs",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-05T14:53:23Z",
+      "updated_at": "2026-11-11T04:24:22Z",
+      "closed_at": "2026-11-11T04:24:22Z"
+    },
+    {
+      "number": 5350,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5350",
+      "title": "Codex/ascend910 npu monitor live",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-05T21:28:29Z",
+      "updated_at": "2026-11-11T04:24:16Z",
+      "closed_at": "2026-11-11T04:24:16Z"
+    },
+    {
+      "number": 5367,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5367",
+      "title": "benchmark: 2x Tesla V100-SXM2-16GB (PCIe carriers) / Huihui abliterated-v2 / UD-Q4_K_XL / strata-qwen38-thinking-v1-draft.1",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-06T02:01:13Z",
+      "updated_at": "2026-11-11T04:24:12Z",
+      "closed_at": "2026-11-11T04:24:12Z"
+    },
+    {
+      "number": 5761,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5761",
+      "title": "[Benchmark] add community RX 6800 XT benchmarks for Qwen3.8 Flash-Next 256k quants",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T03:21:32Z",
+      "updated_at": "2026-11-11T03:21:32Z",
+      "closed_at": null
+    },
+    {
+      "number": 5760,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5760",
+      "title": "Community benchmark: RTX 4070 Ti SUPER 16 GB, Sage-A1.5 Q4_K_M (q36-r2 engine)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T03:14:02Z",
+      "updated_at": "2026-11-11T03:14:14Z",
+      "closed_at": null
+    },
+    {
+      "number": 5757,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5757",
+      "title": "[Engine] DeepSeek V4.1-Flash: Support Unsloth's UD-Q2_K_XL set",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-11T03:01:03Z",
+      "updated_at": "2026-11-11T03:01:03Z",
+      "closed_at": null
+    },
+    {
+      "number": 5474,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5474",
+      "title": "[Engine] HIP prompt path: opt-in FP16 reads of the hc up projection and attn_qkv (STRATA_F16_NOWIDEN) and the fused SwiGLU + Q8 pass on HIP (STRATA_SWIGLU_Q8)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T11:37:30Z",
+      "updated_at": "2026-11-11T01:47:36Z",
+      "closed_at": null
+    },
+    {
+      "number": 5503,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5503",
+      "title": "[Engine] Allow session snapshots without a draft layer",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T16:00:28Z",
+      "updated_at": "2026-11-11T01:03:32Z",
+      "closed_at": null
+    },
+    {
+      "number": 3957,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3957",
+      "title": "[Engine] serve: a long conversation survives an engine restart - parked conversations saved at a graceful stop and loaded at the next start, to files or (Windows) kept in RAM with no disk writes (opt-in STRATA_PARK_DIR, STRATA_PARK_RAMLIKE=1; layer split included)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-24T12:34:16Z",
+      "updated_at": "2026-11-10T23:59:34Z",
+      "closed_at": null
+    },
+    {
+      "number": 5746,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5746",
+      "title": "[Benchmark] RTX PRO 4000 Blackwell / Qwen3.8-Flash-Next / NVFP4 GPTQ / strata-qwen38-thinking-v1-draft.1: 64 GB (simulated) vs 128 GB RAM",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T22:14:23Z",
+      "updated_at": "2026-11-10T22:37:08Z",
+      "closed_at": null
+    },
+    {
+      "number": 5750,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5750",
+      "title": "[GUI] keep the API model when New chat opens a chat",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T22:35:22Z",
+      "updated_at": "2026-11-10T22:35:22Z",
+      "closed_at": null
+    },
+    {
+      "number": 5748,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5748",
+      "title": "[Engine] verify: STRATA_TAP_FILE works on a layer split",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T22:26:17Z",
+      "updated_at": "2026-11-10T22:26:17Z",
+      "closed_at": null
+    },
+    {
+      "number": 5745,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5745",
+      "title": "[Engine] serve drafting: Intel starts lose DFlash2 because the check reads strata-sycl.sh, not its binary (#5138)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T22:07:57Z",
+      "updated_at": "2026-11-10T22:07:57Z",
+      "closed_at": null
+    },
+    {
+      "number": 5725,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5725",
+      "title": "[Engine] gfx1152: enable the matrix-core prompt path (runtime gates + WMMA device guards)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T16:25:59Z",
+      "updated_at": "2026-11-10T22:07:24Z",
+      "closed_at": null
+    },
+    {
+      "number": 5593,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5593",
+      "title": "[Engine] Linux: STRATA_PROMPT_DIRECT=1 also without a RAM budget (experts.bin, --resident-experts)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T15:07:08Z",
+      "updated_at": "2026-11-10T21:25:09Z",
+      "closed_at": null
+    },
+    {
+      "number": 5595,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5595",
+      "title": "[Engine] q36: instantiate the grouped down-expert kernel for Q4_K (fmt 12)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T15:50:11Z",
+      "updated_at": "2026-11-10T20:50:00Z",
+      "closed_at": null
+    },
+    {
+      "number": 5644,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5644",
+      "title": "[Engine] Metal: reserve the K/V pools instead of allocating them up front",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T07:48:49Z",
+      "updated_at": "2026-11-10T20:27:07Z",
+      "closed_at": null
+    },
+    {
+      "number": 5647,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5647",
+      "title": "[Engine] Metal: expert arena that follows free memory",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T08:23:05Z",
+      "updated_at": "2026-11-10T20:27:05Z",
+      "closed_at": null
+    },
+    {
+      "number": 1609,
+      "html_url": "https://github.com/Niko1221/Strata/pull/1609",
+      "title": "[Engine] Video input: `video_url` parts through strata-vision, in the Qwen3-VL layout",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-08T18:21:28Z",
+      "updated_at": "2026-11-10T19:26:54Z",
+      "closed_at": null
+    },
+    {
+      "number": 5736,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5736",
+      "title": "[Benchmark] 0.2.13.1 DeepSeek-V4.1-Flash 2.00bpw on an RTX 5060 Ti 16 GB / 64 GB (Atlas)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T19:13:32Z",
+      "updated_at": "2026-11-10T19:13:46Z",
+      "closed_at": null
+    },
+    {
+      "number": 5735,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5735",
+      "title": "[Benchmark] Qwen3.8-Flash-Next IQ2_XS on one RTX 5080",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T19:06:01Z",
+      "updated_at": "2026-11-10T19:06:01Z",
+      "closed_at": null
+    },
+    {
+      "number": 3648,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3648",
+      "title": "[Engine] --peer-device host route: STRATA_PF_PEER_PIECES=1 (opt-in) moves the activations and the sums in 8 pieces (+7 % prompt on 2x V100)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-21T20:39:11Z",
+      "updated_at": "2026-11-10T19:03:45Z",
+      "closed_at": null
+    },
+    {
+      "number": 5733,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5733",
+      "title": "[Benchmark] RTX 5080 / Qwen3.8-Flash-Next / UD-Q4_K_XL on 0.2.13.1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T18:13:32Z",
+      "updated_at": "2026-11-10T18:13:32Z",
+      "closed_at": null
+    },
+    {
+      "number": 5732,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5732",
+      "title": "[Benchmark] RTX 5080 / Qwen3.8-Flash-Next / IQ3_XXS on 0.2.13.1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T18:13:27Z",
+      "updated_at": "2026-11-10T18:13:27Z",
+      "closed_at": null
+    },
+    {
+      "number": 2399,
+      "html_url": "https://github.com/Niko1221/Strata/pull/2399",
+      "title": "[Engine] allow elastic expert cache and growing K/V on Linux HIP",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-10-14T09:14:07Z",
+      "updated_at": "2026-11-10T18:12:28Z",
+      "closed_at": null
+    },
+    {
+      "number": 5731,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5731",
+      "title": "[Benchmark] 0.2.13.1 DeepSeek-V4.1-Flash 2.00bpw on two mismatched Blackwell cards (HP Z820, AVX1)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T18:00:17Z",
+      "updated_at": "2026-11-10T18:00:17Z",
+      "closed_at": null
+    },
+    {
+      "number": 5728,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5728",
+      "title": "[Benchmark] RTX 5080 / Qwen3.8-Flash-Next / IQ3_S on 0.2.13.1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T17:14:36Z",
+      "updated_at": "2026-11-10T17:14:36Z",
+      "closed_at": null
+    },
+    {
+      "number": 5726,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5726",
+      "title": "[Engine] enable multi-step MTP across concurrent fixed slots",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T16:26:04Z",
+      "updated_at": "2026-11-10T16:26:04Z",
+      "closed_at": null
+    },
+    {
+      "number": 2522,
+      "html_url": "https://github.com/Niko1221/Strata/pull/2522",
+      "title": "[Engine] #533: elastic VRAM per GPU of a layer split (VRAM <reserve_mib> [device])",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-15T01:36:46Z",
+      "updated_at": "2026-11-10T16:02:31Z",
+      "closed_at": null
+    },
+    {
+      "number": 5517,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5517",
+      "title": "[Engine] qwen3next family: geometry-derived trunk + GDN grouped-head support (Groot lane byte-identical)",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-07T19:02:04Z",
+      "updated_at": "2026-11-10T15:45:26Z",
+      "closed_at": null
+    },
+    {
+      "number": 5721,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5721",
+      "title": "[GUI] Fix MCP tool forwarding in Desktop Serving API",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T15:32:03Z",
+      "updated_at": "2026-11-10T15:32:03Z",
+      "closed_at": null
+    },
+    {
+      "number": 3004,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3004",
+      "title": "[Benchmark] RX 6700 XT: pinned Flash draft pilot and official quick suites",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-18T02:36:31Z",
+      "updated_at": "2026-11-10T15:17:46Z",
+      "closed_at": null
+    },
+    {
+      "number": 5545,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5545",
+      "title": "[Engine] GLM-5.3-Flash engine path (strata-glm), quantization pipeline, and multimodal bring-up",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T00:38:57Z",
+      "updated_at": "2026-11-10T14:38:43Z",
+      "closed_at": null
+    },
+    {
+      "number": 5712,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5712",
+      "title": "[Engine] Add opt-in NUMA-aware idle CPU expert prefetch",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-10T12:09:19Z",
+      "updated_at": "2026-11-10T12:09:19Z",
+      "closed_at": null
+    },
+    {
+      "number": 5099,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5099",
+      "title": "[Engine] Overlap split-arena expert refills across decode windows (experimental)",
+      "state": "closed",
+      "draft": true,
+      "created_at": "2026-11-03T12:12:24Z",
+      "updated_at": "2026-11-10T12:09:36Z",
+      "closed_at": "2026-11-10T11:53:37Z"
+    },
+    {
+      "number": 4225,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4225",
+      "title": "[Other] Allow storage on mounted media and symlinked home",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-10-26T12:42:14Z",
+      "updated_at": "2026-11-10T11:22:38Z",
+      "closed_at": "2026-11-10T11:19:38Z"
+    },
+    {
+      "number": 4999,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4999",
+      "title": "[TUI] read AMD GPU utilization, VRAM, temp, and PCIe link on Windows",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-02T12:23:48Z",
+      "updated_at": "2026-11-10T11:10:04Z",
+      "closed_at": "2026-11-10T11:10:04Z"
+    },
+    {
+      "number": 5709,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5709",
+      "title": "[Benchmark] Community bench: RTX 4080 SUPER / Ryzen 7950X3D - Flash-Next IQ3_XXS, IQ3_S and Swift on engine 0.1.59",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T10:04:05Z",
+      "updated_at": "2026-11-10T10:04:05Z",
+      "closed_at": null
+    },
+    {
+      "number": 5357,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5357",
+      "title": "[Engine] DeepSeek: accept an MXFP4 down beside a low-bit gate / up (Unsloth UD-Q2_K_XL)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-05T23:12:12Z",
+      "updated_at": "2026-11-10T09:22:09Z",
+      "closed_at": null
+    },
+    {
+      "number": 1855,
+      "html_url": "https://github.com/Niko1221/Strata/pull/1855",
+      "title": "bench: community results on one MI50 32 GB (gfx906), 262,144 context",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-10-10T15:15:54Z",
+      "updated_at": "2026-11-10T09:03:11Z",
+      "closed_at": "2026-10-19T16:56:41Z"
+    },
+    {
+      "number": 5706,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5706",
+      "title": "[Engine] Add DeepSeek UD-Q3_K_XL setup support",
+      "state": "closed",
+      "draft": true,
+      "created_at": "2026-11-10T08:02:55Z",
+      "updated_at": "2026-11-10T08:27:46Z",
+      "closed_at": "2026-11-10T08:27:33Z"
+    },
+    {
+      "number": 2492,
+      "html_url": "https://github.com/Niko1221/Strata/pull/2492",
+      "title": "[Engine] add opt-in gfx12 grid padding for selected decode matvecs",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-14T20:23:08Z",
+      "updated_at": "2026-11-10T07:58:02Z",
+      "closed_at": null
+    },
+    {
+      "number": 5452,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5452",
+      "title": "[Engine] Metal: restore spare pooled row on checkpoint rewind and rebind session in window_init",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T04:03:44Z",
+      "updated_at": "2026-11-10T07:06:19Z",
+      "closed_at": null
+    },
+    {
+      "number": 5597,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5597",
+      "title": "[Benchmark] Community results: RTX PRO 6000 Blackwell WS 96 GB at 350 W (engine 0.1.58, NVFP4 pack)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T16:25:10Z",
+      "updated_at": "2026-11-10T06:32:41Z",
+      "closed_at": null
+    },
+    {
+      "number": 4005,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4005",
+      "title": "[Engine] prefill: opt-in sparse copied events and deduplicated slot waits (Windows HIP prompt reads +36% at 4K, +15% at 32K)",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-10-24T21:05:50Z",
+      "updated_at": "2026-11-10T05:55:00Z",
+      "closed_at": "2026-10-27T15:29:29Z"
+    },
+    {
+      "number": 5699,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5699",
+      "title": "[Engine] session-identity: the whole STRATA_* environment and the device plan join the config fingerprint (#5379)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T04:08:15Z",
+      "updated_at": "2026-11-10T04:22:37Z",
+      "closed_at": null
+    },
+    {
+      "number": 3420,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3420",
+      "title": "[GUI] Web search and page reading for the web app's Chat (DuckDuckGo default, SearXNG, Brave, Tavily, Serper, Exa, Perplexity)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-20T11:19:05Z",
+      "updated_at": "2026-11-10T04:19:53Z",
+      "closed_at": null
+    },
+    {
+      "number": 5700,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5700",
+      "title": "[Engine] fix the --draft-conf slot estimate for UD-Q4_K_XL and other native-experts packs",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T04:13:34Z",
+      "updated_at": "2026-11-10T04:17:33Z",
+      "closed_at": null
+    },
+    {
+      "number": 5698,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5698",
+      "title": "[Engine] opt-in vision.elastic_no_warmup: an on-demand GPU picture reader skips its warm-up encode",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-10T04:03:43Z",
+      "updated_at": "2026-11-10T04:03:43Z",
+      "closed_at": null
+    },
+    {
+      "number": 5685,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5685",
+      "title": "[Engine] AMD RX660xt (gfx1032) support [Docs] AMD benchmark details corrected so title isn't generic [Benchmark] AMD RX6600xt",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-09T20:31:19Z",
+      "updated_at": "2026-11-10T04:01:22Z",
+      "closed_at": "2026-11-10T04:01:21Z"
+    },
+    {
+      "number": 4408,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4408",
+      "title": "[Engine] fix KVA crash with STRATA_GDN_CHUNKED on HIP: the state-only GDN recurrence no longer takes the chunked WMMA scan",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-28T03:23:53Z",
+      "updated_at": "2026-11-10T03:22:22Z",
+      "closed_at": null
+    },
+    {
+      "number": 5475,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5475",
+      "title": "[Engine] opt-in int8 copies for the persistent hc read (STRATA_HC_PERSIST_Q8)",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-07T11:37:32Z",
+      "updated_at": "2026-11-10T03:05:14Z",
+      "closed_at": null
+    },
+    {
+      "number": 5692,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5692",
+      "title": "[Benchmark] RX 7900 XTX / Swift-1.5 IQ3_S / IQ3_S / strata-qwen38-thinking-v1-draft.1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-10T00:10:41Z",
+      "updated_at": "2026-11-10T03:00:32Z",
+      "closed_at": null
+    },
+    {
+      "number": 5695,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5695",
+      "title": "[Benchmark] RX 7900 XTX: engine 0.1.59 built two ways - official component vs a source build with ROCm 10.1 (vision off)",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-10T02:45:08Z",
+      "updated_at": "2026-11-10T03:00:29Z",
+      "closed_at": "2026-11-10T03:00:26Z"
+    },
+    {
+      "number": 4986,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4986",
+      "title": "[Engine] macOS builds target macOS 15.0, and the packager refuses a Mac binary that needs a newer macOS (#4634)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-02T08:00:00Z",
+      "updated_at": "2026-11-10T02:34:54Z",
+      "closed_at": null
+    },
+    {
+      "number": 5655,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5655",
+      "title": "[Engine] fix route_prior leaking a sentinel expert id and an OOB write on degenerate logits",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T11:31:11Z",
+      "updated_at": "2026-11-10T01:30:48Z",
+      "closed_at": null
+    },
+    {
+      "number": 1492,
+      "html_url": "https://github.com/Niko1221/Strata/pull/1492",
+      "title": "[Engine] save and restore sessions without an MTP drafter",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-10-08T04:40:08Z",
+      "updated_at": "2026-11-10T01:27:36Z",
+      "closed_at": null
+    },
+    {
+      "number": 5592,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5592",
+      "title": "[Engine] Jetson AGX Thor (sm_110): the aarch64 CUDA engine carries machine code for it, and the Terminal runs it (#4559)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T15:04:54Z",
+      "updated_at": "2026-11-10T00:23:23Z",
+      "closed_at": null
+    },
+    {
+      "number": 5671,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5671",
+      "title": "Bench/dsv41 4x 2080ti 2026 11 08",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T16:44:57Z",
+      "updated_at": "2026-11-09T22:40:37Z",
+      "closed_at": null
+    },
+    {
+      "number": 5108,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5108",
+      "title": "[Engine] prefill: room after the MMQ row table for ggml's stream-k fixup read (Xid 31 on long prompts)",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-03T13:16:10Z",
+      "updated_at": "2026-11-09T22:29:46Z",
+      "closed_at": "2026-11-07T08:56:42Z"
+    },
+    {
+      "number": 3287,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3287",
+      "title": "[Engine] Metal: record non-finite logits in both serve paths so #879 can end and flush a poisoned conversation",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-19T23:01:41Z",
+      "updated_at": "2026-11-09T22:00:10Z",
+      "closed_at": null
+    },
+    {
+      "number": 5299,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5299",
+      "title": "[Engine] Enable generic NVFP4 W4A8 prefill and parity tools on HIP",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-05T11:57:27Z",
+      "updated_at": "2026-11-09T21:32:23Z",
+      "closed_at": null
+    },
+    {
+      "number": 5668,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5668",
+      "title": "[Benchmark] evaluate domain-informed expert profiles on held-out routing",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T15:45:13Z",
+      "updated_at": "2026-11-09T21:26:41Z",
+      "closed_at": null
+    },
+    {
+      "number": 5690,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5690",
+      "title": "[Benchmark] add synthetic two-request reproduction for shared Qwen repetition (#606)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T21:12:30Z",
+      "updated_at": "2026-11-09T21:12:30Z",
+      "closed_at": null
+    },
+    {
+      "number": 5689,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5689",
+      "title": "[Engine] preserve acknowledged thinking-budget drain tokens",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T21:02:55Z",
+      "updated_at": "2026-11-09T21:11:43Z",
+      "closed_at": null
+    },
+    {
+      "number": 1493,
+      "html_url": "https://github.com/Niko1221/Strata/pull/1493",
+      "title": "[Engine] Add opt-in memory relief and supervised tool resource leases",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-10-08T04:56:44Z",
+      "updated_at": "2026-11-09T21:00:07Z",
+      "closed_at": null
+    },
+    {
+      "number": 5688,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5688",
+      "title": "[Benchmark] RX 7900 XTX / Qwen3.8-Flash-Next IQ3_S / Linux HIP gfx1100 community run",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T20:58:55Z",
+      "updated_at": "2026-11-09T20:58:55Z",
+      "closed_at": null
+    },
+    {
+      "number": 5682,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5682",
+      "title": "[Benchmark] community report: 2x Radeon RX 6800 XT + RX 6600, IQ3_S at 128k",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T20:06:27Z",
+      "updated_at": "2026-11-09T20:13:37Z",
+      "closed_at": null
+    },
+    {
+      "number": 5640,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5640",
+      "title": "[Engine] a quote that closes a sentence right before </think> no longer keeps the answer in the reasoning",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T07:10:56Z",
+      "updated_at": "2026-11-09T19:45:10Z",
+      "closed_at": null
+    },
+    {
+      "number": 5036,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5036",
+      "title": "[Engine] HIP: --expert-parallel-device N, two gfx1100 cards compute each layer's experts together",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-02T22:55:28Z",
+      "updated_at": "2026-11-09T17:55:18Z",
+      "closed_at": null
+    },
+    {
+      "number": 5675,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5675",
+      "title": "[Benchmark] Apple M5 Ultra 96 GB / Qwen3.8-Flash-Next / IQ3_S, UD-Q3_K_XL, UD-IQ4_XS-v31 / strata-qwen38-thinking-v1-draft.1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T17:26:00Z",
+      "updated_at": "2026-11-09T17:26:00Z",
+      "closed_at": null
+    },
+    {
+      "number": 5651,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5651",
+      "title": "[Engine] setup.py: pick a host gcc nvcc accepts, and name this distro's install command when none is installed",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T10:19:29Z",
+      "updated_at": "2026-11-09T17:25:43Z",
+      "closed_at": null
+    },
+    {
+      "number": 4974,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4974",
+      "title": "[Engine] tests: the three files that set env variables do not compile on Windows (setenv is POSIX)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-02T03:03:17Z",
+      "updated_at": "2026-11-09T16:58:23Z",
+      "closed_at": null
+    },
+    {
+      "number": 5002,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5002",
+      "title": "[Engine] prompt path: opt-in dual data-parallel prompt read for two-GPU layer splits (STRATA_DP_PREFILL)",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-02T13:50:53Z",
+      "updated_at": "2026-11-09T16:53:57Z",
+      "closed_at": null
+    },
+    {
+      "number": 2427,
+      "html_url": "https://github.com/Niko1221/Strata/pull/2427",
+      "title": "[Engine] HC_Q8: skip the layers' bf16 hyper-connection copies on a layer split too",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-14T12:52:50Z",
+      "updated_at": "2026-11-09T15:58:01Z",
+      "closed_at": null
+    },
+    {
+      "number": 5580,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5580",
+      "title": "[Engine] continue_final_message - the generation continues the final assistant message (llama.cpp / HF transformers semantics)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T11:06:39Z",
+      "updated_at": "2026-11-09T15:44:56Z",
+      "closed_at": null
+    },
+    {
+      "number": 5662,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5662",
+      "title": "[Engine] keep single-GPU requests in fixed physical slots",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T14:18:10Z",
+      "updated_at": "2026-11-09T15:41:43Z",
+      "closed_at": null
+    },
+    {
+      "number": 5667,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5667",
+      "title": "[Engine] split: don't count the arena's unallocated expert slots as free VRAM in the prompt-path pick",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T15:37:36Z",
+      "updated_at": "2026-11-09T15:37:36Z",
+      "closed_at": null
+    },
+    {
+      "number": 2071,
+      "html_url": "https://github.com/Niko1221/Strata/pull/2071",
+      "title": "sm_75: a faster tiled FP32 block scorer (STRATA_SELECT_SIMT=2), and the case for SIMT on RTX 20 by default",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-10-12T08:19:22Z",
+      "updated_at": "2026-11-09T15:37:26Z",
+      "closed_at": "2026-10-19T04:25:42Z"
+    },
+    {
+      "number": 3971,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3971",
+      "title": "[Engine] serve: keep the thinking tokens generated past a budget cut, so the answer doesn't re-read the thinking",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-24T14:35:57Z",
+      "updated_at": "2026-11-09T15:19:42Z",
+      "closed_at": null
+    },
+    {
+      "number": 4738,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4738",
+      "title": "[Engine] test control-queue wakeup handoffs",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-30T19:49:03Z",
+      "updated_at": "2026-11-09T15:12:42Z",
+      "closed_at": null
+    },
+    {
+      "number": 5664,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5664",
+      "title": "[Engine] split: serve Q5_0 routed experts (decode + prompt tiles), raise expert pool cap to 8",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T14:34:11Z",
+      "updated_at": "2026-11-09T14:34:11Z",
+      "closed_at": null
+    },
+    {
+      "number": 5562,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5562",
+      "title": "[Engine] prefill: the fused layout's shrink asks every layer's path, not only the formats",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-08T05:43:01Z",
+      "updated_at": "2026-11-09T14:09:12Z",
+      "closed_at": null
+    },
+    {
+      "number": 5531,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5531",
+      "title": "[Engine] Linux: load the expert arena again when the reserved hugetlb pool or droppable file cache can serve the shortfall (#5327)",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-07T21:27:43Z",
+      "updated_at": "2026-11-09T12:48:11Z",
+      "closed_at": "2026-11-09T12:48:11Z"
+    },
+    {
+      "number": 3374,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3374",
+      "title": "[Engine] verify_q8: fix the CUDA 12.0/12.1 build (host call to device-only __half_as_ushort)",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-10-20T06:20:40Z",
+      "updated_at": "2026-11-09T12:42:47Z",
+      "closed_at": "2026-11-09T12:42:46Z"
+    },
+    {
+      "number": 5656,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5656",
+      "title": "[Benchmark] exclude cached or unverified samples from fresh-prefill summaries",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T12:03:45Z",
+      "updated_at": "2026-11-09T12:16:41Z",
+      "closed_at": null
+    },
+    {
+      "number": 5657,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5657",
+      "title": "[Engine] transfer cancelled slot claims before the release waiter starts",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T12:09:33Z",
+      "updated_at": "2026-11-09T12:09:33Z",
+      "closed_at": null
+    },
+    {
+      "number": 5652,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5652",
+      "title": "[Benchmark] community report: Tesla P100-PCIE-16GB (sm_60), Swift IQ3_S at 131K, suite 1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T10:32:53Z",
+      "updated_at": "2026-11-09T10:36:18Z",
+      "closed_at": null
+    },
+    {
+      "number": 5643,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5643",
+      "title": "[Engine] serve: restore reasoning a client dropped, so the next turn reuses the cached prompt",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T07:48:37Z",
+      "updated_at": "2026-11-09T08:49:58Z",
+      "closed_at": null
+    },
+    {
+      "number": 5648,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5648",
+      "title": "[Engine] recover a tool function opener missing its opening angle",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T08:46:51Z",
+      "updated_at": "2026-11-09T08:46:51Z",
+      "closed_at": null
+    },
+    {
+      "number": 2392,
+      "html_url": "https://github.com/Niko1221/Strata/pull/2392",
+      "title": "[Engine] hip: hipBLASLt tuning table for gfx1101 (RX 7800 XT, hipBLASLt 1.2.0)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-14T08:10:32Z",
+      "updated_at": "2026-11-09T07:44:46Z",
+      "closed_at": null
+    },
+    {
+      "number": 5639,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5639",
+      "title": "[Benchmark] Radeon 780M (gfx1103), DeepSeek-V4.1-Flash IQ1_M",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T06:58:28Z",
+      "updated_at": "2026-11-09T06:59:55Z",
+      "closed_at": null
+    },
+    {
+      "number": 4989,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4989",
+      "title": "[Other] Measure free space on the drive that receives the files",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-02T09:01:29Z",
+      "updated_at": "2026-11-09T06:06:52Z",
+      "closed_at": null
+    },
+    {
+      "number": 4248,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4248",
+      "title": "[GUI] allow an explicit local inference silence timeout",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-10-26T17:22:40Z",
+      "updated_at": "2026-11-09T06:06:52Z",
+      "closed_at": null
+    },
+    {
+      "number": 5637,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5637",
+      "title": "[Other] inhibit sleep during inference on Linux",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T06:03:15Z",
+      "updated_at": "2026-11-09T06:03:15Z",
+      "closed_at": null
+    },
+    {
+      "number": 5630,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5630",
+      "title": "[Other] Setup and the updater name the same AMD cards: one shared GPU table",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T04:22:23Z",
+      "updated_at": "2026-11-09T04:22:23Z",
+      "closed_at": null
+    },
+    {
+      "number": 4968,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4968",
+      "title": "[GUI] Monitor: a model card, working-time averages, and the speed min and max",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-02T01:15:47Z",
+      "updated_at": "2026-11-09T03:58:38Z",
+      "closed_at": null
+    },
+    {
+      "number": 5628,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5628",
+      "title": "[Engine] stream array and object tool arguments at JSON token boundaries while the model writes them",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T03:52:06Z",
+      "updated_at": "2026-11-09T03:52:06Z",
+      "closed_at": null
+    },
+    {
+      "number": 5467,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5467",
+      "title": "[Engine] q36: flash attention on mma.m16n8k16 for the prompt (fp16 K/V)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T09:27:04Z",
+      "updated_at": "2026-11-09T03:11:47Z",
+      "closed_at": null
+    },
+    {
+      "number": 4883,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4883",
+      "title": "[Other] Setup: --gpus on Windows AMD: RDNA 2, 3 and 4 cards sharing one model",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-01T09:10:09Z",
+      "updated_at": "2026-11-09T02:59:28Z",
+      "closed_at": null
+    },
+    {
+      "number": 4972,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4972",
+      "title": "[Engine] keep the file tier's Linux defaults off when the GPU caches hold every expert",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-02T02:27:11Z",
+      "updated_at": "2026-11-09T02:34:43Z",
+      "closed_at": null
+    },
+    {
+      "number": 5623,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5623",
+      "title": "[Engine] share immutable host KV prefixes across streaming sessions",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-09T02:33:33Z",
+      "updated_at": "2026-11-09T02:33:33Z",
+      "closed_at": null
+    },
+    {
+      "number": 5618,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5618",
+      "title": "[Benchmark] Tesla P40 + V100 32GB (Hyper-V VMs), Flash-Next IQ3_S 262K on 0.2.12: BENCH and standard runs",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T23:41:25Z",
+      "updated_at": "2026-11-08T23:41:45Z",
+      "closed_at": null
+    },
+    {
+      "number": 5613,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5613",
+      "title": "[Benchmark] 4x RTX 3090 / Qwen3.8-Flash-Next / UD-IQ4_XS / strata-qwen38-thinking-v1-draft.1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T21:47:03Z",
+      "updated_at": "2026-11-08T21:47:03Z",
+      "closed_at": null
+    },
+    {
+      "number": 5512,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5512",
+      "title": "[Engine] serve: skip the thinking block on prompts that ask for a short direct answer (opt-in)",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-07T17:39:20Z",
+      "updated_at": "2026-11-08T20:05:17Z",
+      "closed_at": null
+    },
+    {
+      "number": 5516,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5516",
+      "title": "[Engine] serve: in-place retune (TUNE) and conversation-cache routing by traffic shape",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-07T18:48:29Z",
+      "updated_at": "2026-11-08T20:05:09Z",
+      "closed_at": null
+    },
+    {
+      "number": 3509,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3509",
+      "title": "[Engine] arena: attach a complete shared arena instead of re-copying (STRATA_ARENA_REUSE=1, opt-in)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-20T20:40:08Z",
+      "updated_at": "2026-11-08T20:02:27Z",
+      "closed_at": null
+    },
+    {
+      "number": 5603,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5603",
+      "title": "[Benchmark] RTX 5070 Ti Windows: DavidAU IQ3_S, Strata 0.2.9 vs 0.2.12",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T18:37:33Z",
+      "updated_at": "2026-11-08T18:37:33Z",
+      "closed_at": null
+    },
+    {
+      "number": 5602,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5602",
+      "title": "[Engine] tests: test_hip_ordinal fails on any machine with an integrated Radeon",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T18:16:15Z",
+      "updated_at": "2026-11-08T18:16:15Z",
+      "closed_at": null
+    },
+    {
+      "number": 5600,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5600",
+      "title": "[TUI] Advanced table: an environment setting without its own row is not called a typing mistake (#5136)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T16:27:22Z",
+      "updated_at": "2026-11-08T16:27:22Z",
+      "closed_at": null
+    },
+    {
+      "number": 5599,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5599",
+      "title": "[Docs] reproducible output: add the CPU prompt share and the route tail skip, and correct both rows (#4673)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T16:27:21Z",
+      "updated_at": "2026-11-08T16:27:21Z",
+      "closed_at": null
+    },
+    {
+      "number": 5598,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5598",
+      "title": "[Engine] dsv41: a string=\"true\" parameter stays a string when the call uses an accepted short name",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T16:27:19Z",
+      "updated_at": "2026-11-08T16:27:19Z",
+      "closed_at": null
+    },
+    {
+      "number": 5596,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5596",
+      "title": "[Engine] dsv41: STRATA_DS4_CACHE_ROUTE, a selection bonus for the experts VRAM or the RAM store already hold (opt-in, changes the answers)",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-08T16:04:59Z",
+      "updated_at": "2026-11-08T16:04:59Z",
+      "closed_at": null
+    },
+    {
+      "number": 5588,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5588",
+      "title": "[Engine] --ple-gguf: a side-loaded PLE table now wins the by-name resolution over the embedded copy",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T13:26:56Z",
+      "updated_at": "2026-11-08T15:56:09Z",
+      "closed_at": null
+    },
+    {
+      "number": 5594,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5594",
+      "title": "Community benchmark: 2x Tesla V100-PCIE-32GB (sm_70), Qwen3.8-Flash-Next UD-Q4_K_XL",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T15:25:52Z",
+      "updated_at": "2026-11-08T15:26:02Z",
+      "closed_at": null
+    },
+    {
+      "number": 4582,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4582",
+      "title": "[GUI] add --lan (STRATA_LAN=1) to the Linux AppImage so the model is on your network as Strata starts",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-29T07:05:53Z",
+      "updated_at": "2026-11-08T15:10:24Z",
+      "closed_at": null
+    },
+    {
+      "number": 4536,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4536",
+      "title": "[Engine] gguf_reader: header bounds check cannot wrap on a huge string length",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-28T20:21:04Z",
+      "updated_at": "2026-11-08T14:37:00Z",
+      "closed_at": null
+    },
+    {
+      "number": 3925,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3925",
+      "title": "[Engine] q36: load GGUFs whose ssm_alpha / ssm_beta are K-quants or IQ4_XS",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-24T06:16:37Z",
+      "updated_at": "2026-11-08T13:35:10Z",
+      "closed_at": null
+    },
+    {
+      "number": 5473,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5473",
+      "title": "[Engine] link stubs for fused::want_dm_f16 / dm_f16_used without the fused prompt kernels",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T10:29:10Z",
+      "updated_at": "2026-11-08T13:32:30Z",
+      "closed_at": null
+    },
+    {
+      "number": 5587,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5587",
+      "title": "Community benchmark: 2x Tesla V100-PCIE-32GB (sm_70), DeepSeek-V4.1-Flash",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T13:14:35Z",
+      "updated_at": "2026-11-08T13:14:47Z",
+      "closed_at": null
+    },
+    {
+      "number": 5584,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5584",
+      "title": "[Benchmark] RX 7900 XTX / qwen3.8-flash-next Gyro-M TQ2_0 / pre-protocol quick report",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T12:50:03Z",
+      "updated_at": "2026-11-08T12:50:03Z",
+      "closed_at": null
+    },
+    {
+      "number": 5582,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5582",
+      "title": "[Engine] Jetson AGX Thor (sm_110): the aarch64 CUDA engine carries machine code for it, and the Terminal runs it (#4559)",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-08T12:33:46Z",
+      "updated_at": "2026-11-08T15:05:05Z",
+      "closed_at": "2026-11-08T12:42:27Z"
+    },
+    {
+      "number": 5339,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5339",
+      "title": "[GUI] Monitor: per-card tiles for a split run (GPU load, VRAM, temp, Power, PCIe)",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-05T18:01:12Z",
+      "updated_at": "2026-11-08T11:06:45Z",
+      "closed_at": "2026-11-08T11:06:45Z"
+    },
+    {
+      "number": 5568,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5568",
+      "title": "[Benchmark] RTX PRO 5000 72GB Blackwell / Qwen3.8-Flash-Next / Unsloth Q8_0 / strata-qwen38-thinking-v1-draft.1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T09:04:10Z",
+      "updated_at": "2026-11-08T09:14:47Z",
+      "closed_at": null
+    },
+    {
+      "number": 5567,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5567",
+      "title": "[Benchmark] Apple M3 Max / Qwen3.8-Flash-Next / IQ3_S / strata-qwen38-thinking-v1-draft.1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T07:40:40Z",
+      "updated_at": "2026-11-08T07:49:49Z",
+      "closed_at": null
+    },
+    {
+      "number": 5566,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5566",
+      "title": "[Engine] dsv41: opt-in cold store for the expert arena (the #5391 read-source half, validated end-to-end)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T07:31:50Z",
+      "updated_at": "2026-11-08T07:31:50Z",
+      "closed_at": null
+    },
+    {
+      "number": 5470,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5470",
+      "title": "[Engine] DS4_PROF_WIN: the decode profile of the drafter's verify windows, and the attention by part",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T09:46:13Z",
+      "updated_at": "2026-11-08T07:15:00Z",
+      "closed_at": null
+    },
+    {
+      "number": 5471,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5471",
+      "title": "[Engine] DeepSeek: faster Q4_K / Q5_K decode GEMVs and light experts with the same bits, the default only on integrated GPUs",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T09:46:31Z",
+      "updated_at": "2026-11-08T07:14:59Z",
+      "closed_at": null
+    },
+    {
+      "number": 5472,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5472",
+      "title": "[Engine] DeepSeek on a DGX Spark: STRATA_DS4_DISK_SKIP_RANK / PROMPT_SKIP_RANK, a store miss left out by its pick rank (opt-in, changes the answers)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T09:46:51Z",
+      "updated_at": "2026-11-08T07:14:58Z",
+      "closed_at": null
+    },
+    {
+      "number": 5453,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5453",
+      "title": "[Engine] DeepSeek on a DGX Spark: DS4_UMA_TIER=1, one expert tier the GPU reads in place (opt-in)",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T04:24:14Z",
+      "updated_at": "2026-11-08T07:14:57Z",
+      "closed_at": null
+    },
+    {
+      "number": 5469,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5469",
+      "title": "[Benchmark] R9700 + RX 6800 XT / Qwen3.8-Flash-Next / UD-IQ4_XS / strata-qwen38-thinking-v1-draft.1",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-07T09:43:23Z",
+      "updated_at": "2026-11-08T06:51:47Z",
+      "closed_at": "2026-11-08T06:51:44Z"
+    },
+    {
+      "number": 5565,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5565",
+      "title": "[Benchmark] R9700 + RX 6800 XT / Qwen3.8-Flash-Next / UD-IQ4_XS / strata-qwen38-thinking-v1-draft.1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T06:51:40Z",
+      "updated_at": "2026-11-08T06:51:40Z",
+      "closed_at": null
+    },
+    {
+      "number": 5561,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5561",
+      "title": "[Engine] Linux file tier: opt-in sequential read-ahead for the mapped expert files (STRATA_EXPERTS_SEQ_READAHEAD)",
+      "state": "open",
+      "draft": true,
+      "created_at": "2026-11-08T05:36:26Z",
+      "updated_at": "2026-11-08T05:57:54Z",
+      "closed_at": null
+    },
+    {
+      "number": 4854,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4854",
+      "title": "[Engine] AVX1 Q2_0 Native Rows",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-31T20:59:24Z",
+      "updated_at": "2026-11-08T05:52:21Z",
+      "closed_at": null
+    },
+    {
+      "number": 5556,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5556",
+      "title": "[Benchmark] Intel Arc Pro B70 / Coder IQ1_M / strata-qwen38-thinking-v1-draft.1",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-08T03:56:51Z",
+      "updated_at": "2026-11-08T03:57:01Z",
+      "closed_at": null
+    },
+    {
+      "number": 5451,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5451",
+      "title": "[Other] Mac app install: allow metal/tools so Unsloth sizes can be repacked",
+      "state": "closed",
+      "draft": false,
+      "created_at": "2026-11-07T03:03:06Z",
+      "updated_at": "2026-11-08T03:48:40Z",
+      "closed_at": "2026-11-08T03:48:40Z"
+    },
+    {
+      "number": 4777,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4777",
+      "title": "[Engine] Dynamic route_prior runtime control via API, per-request params, and engine protocol",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-31T02:50:11Z",
+      "updated_at": "2026-11-08T02:47:34Z",
+      "closed_at": null
+    },
+    {
+      "number": 5463,
+      "html_url": "https://github.com/Niko1221/Strata/pull/5463",
+      "title": "[Benchmark] community report: 2x RTX 3090, --pipeline-windows 2 fills the idle half of the layer split",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-11-07T09:08:00Z",
+      "updated_at": "2026-11-08T01:48:22Z",
+      "closed_at": null
+    },
+    {
+      "number": 4310,
+      "html_url": "https://github.com/Niko1221/Strata/pull/4310",
+      "title": "[Engine] session files: format v2 with per-stage save/restore under --layer-split",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-27T13:15:54Z",
+      "updated_at": "2026-11-08T01:37:20Z",
+      "closed_at": null
+    },
+    {
+      "number": 3277,
+      "html_url": "https://github.com/Niko1221/Strata/pull/3277",
+      "title": "[Engine] extend native-IQ prefill dispatch to SM75",
+      "state": "open",
+      "draft": false,
+      "created_at": "2026-10-19T22:02:50Z",
+      "updated_at": "2026-11-08T01:10:57Z",
+      "closed_at": null
+    }
+  ]
+}
