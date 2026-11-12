@@ -71,6 +71,14 @@ KV instead of elastic GPU KV. #3648 improves the peer tier, not split 16.
 #5475 needs a CUDA persistent-HC prerequisite absent from this fork.
 These were not measured as improvements on this deployment.
 
+[Upstream #5002](https://github.com/Niko1221/Strata/pull/5002), dual
+data-parallel prefill, was ported to a separate experimental branch and
+compiled for CUDA. With the daily profile it reported
+`STRATA_DP_PREFILL is off`: it requires streamed host KV, not elastic
+GPU KV. The port also lacked conversation checkpoint saving on that path.
+It was not published or enabled. No DP speed comparison is claimed.
+The service was restored to this HC_Q8 PR branch and answered `17`.
+
 ## FP16 expert prefill row-offset fix (2026-11-11)
 
 [Issue #100](https://github.com/jmnargi/Strata-V100/issues/100) reports NaN

@@ -1595,5 +1595,18 @@
     "hip_gfx1100_changed_translation_units": "passed",
     "hip_full": "failed: unchanged qpn2_nvfp4.cu:111 invalid +f asm output constraint",
     "sycl": "not run: no compiler"
+  },
+  "dp_prefill_evaluation": {
+    "upstream_pr": "https://github.com/Niko1221/Strata/pull/5002",
+    "experimental_port_commit": "da8550a65",
+    "cuda_build": "passed",
+    "daily_profile_result": "off; requires streamed host KV, incompatible with daily elastic GPU KV",
+    "stderr": [
+      "strata generate: STRATA_DP_PREFILL is off (two GPUs in a layer split, no --batch / --peer-device / stage trim, streamed K/V and STRATA_KV_HOST_DMA=1)"
+    ],
+    "port_limit": "conversation checkpoint saving missing on DP path",
+    "speed_comparison": "not run: DP does not activate on required daily profile",
+    "published": false,
+    "final_service": "restored HC PR branch; health200, arithmetic17"
   }
 }
