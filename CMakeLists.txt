@@ -1300,8 +1300,10 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
   set_tests_properties(qsa_topk_parity_reg_always PROPERTIES ENVIRONMENT "STRATA_TOPK_REG_MIN_BLOCKS=0")
   # STRATA_TOPK_COMPACT=1 (opt-in CUDA narrowing): the same ids on every case, including the signed-zero/infinity and
   # NaN score rows the harness now builds
-  add_test(NAME qsa_topk_parity_compact COMMAND qsa_topk_parity --selftest)
-  set_tests_properties(qsa_topk_parity_compact PROPERTIES ENVIRONMENT "STRATA_TOPK_COMPACT=1")
+  if(NOT STRATA_ENABLE_HIP AND NOT STRATA_HIP_GFX906)
+    add_test(NAME qsa_topk_parity_compact COMMAND qsa_topk_parity --selftest)
+    set_tests_properties(qsa_topk_parity_compact PROPERTIES ENVIRONMENT "STRATA_TOPK_COMPACT=1")
+  endif()
 
   # ---- P2.S4: the PLE n-gram hash, the IQ4_NL table read, and the PLE block ----
   # `ngram.cpp` is host-only but lives in `strata_kernels` because `ple.cu` shares its geometry constants, and

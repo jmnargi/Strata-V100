@@ -1115,9 +1115,8 @@ __global__ void __launch_bounds__(TK_T) block_topk_wide_kernel(const float* __re
 // emit, so a pivot inside a block, or shared by several blocks, needs no extra fallback.  A query declines and is
 // re-run by block_topk_wide_kernel<true> (g_tk_fail, the sample kernel's contract) only when the probe sees one bin or
 // a NaN, a bucket holds more than TC_CAP cells (hence more blocks than the buffer), or any live score is NaN.  The
-// exact path then produces the ids, so narrowing can only cost a scan, never change a selection.  Signed zeros: they
-// share the coarse key, while order_key and the exact refinement keep -0.0 and +0.0 apart exactly as the reference
-// does.
+// exact path then produces the ids, so narrowing can only cost a scan, never change a selection. Signed zeros
+// share both the coarse key and the exact order_key, matching the reference's normalization to +0.0.
 constexpr int TC_CBINS = 4096;  // 12 bits of the half key: four bins per thread, one block scan
 constexpr int TC_CAP = 5120;    // candidate blocks per bucket; 2.5x the 2,051-cell widest selection
 constexpr int64_t TC_MIN_CELLS = 32768;   // below this the probe/histogram's fixed cost is not worth it; decline
@@ -1125,7 +1124,7 @@ static_assert(TC_CBINS == 4 * TK_T, "tc_choose_coarse scans four bins per thread
 static_assert(TC_CAP >= 2048 + 3, "the candidate buffer must hold the widest selection");
 
 __device__ __forceinline__ uint32_t tc_coarse_key(float v) {
-    if (v == 0.0f) v = 0.0f;    // fold -0.0 into +0.0; the exact pass separates them again
+    if (v == 0.0f) v = 0.0f;    // fold -0.0 into +0.0, matching the exact pass
     const uint16_t h = __half_as_ushort(__float2half_rn(v));
     const uint32_t ordered = (h & 0x8000u) ? (uint32_t) (uint16_t) ~h : (uint32_t) (uint16_t) (h | 0x8000u);
     return ordered >> 4;        // 12 bits: sign, 5 exponent bits, 6 mantissa bits
