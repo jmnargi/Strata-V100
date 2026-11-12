@@ -4,6 +4,64 @@ Strata's ready-made engine and the support matrix start at compute capability 7.
 engine compiled for it, through the experimental build that issue #236 added. It is **community-tested, not part of the
 supported cards**: no ready-made engine is published for it and the numbers below come from one machine.
 
+## Split HC_Q8 memory saving (2026-11-11)
+
+Ported [upstream PR #2427](https://github.com/Niko1221/Strata/pull/2427),
+head `f7f4f61c1a6eb7730a597468b22d7d79919c8114`. It was updated November 9;
+it is not a newly opened November PR. With `STRATA_HC_Q8=1`, a layer split
+now skips the canonical BF16 hyper-connection down/up rows, just as one
+GPU already did. Each card also uploads only its own layers' Q8_0 rows.
+The switch remains opt-in. Its unset path is unchanged.
+
+Measured on two V100-PCIE-16GB cards at 175 W, Ryzen 5 3600 and 94 GiB RAM.
+GPU0 uses PCIe Gen3 x4; GPU1 uses x16. The model was
+`local-inference-lab/Qwen3.8-Flash-Next-NVFP4`, with split 16, MTP 4,
+minimum acceptance probability 0.7, 800 MiB reserve, int8 elastic KV,
+524288 logical context, the whole-expert RAM arena and lazy vision.
+This is not the earlier resident-budget, text-only benchmark.
+
+| Startup expert slots | GPU0 | GPU1 | Total |
+| --- | ---: | ---: | ---: |
+| Daily configuration, HC_Q8 unset | 4822 | 3410 | 8232 |
+| Before port, HC_Q8 enabled | 4725 | 3216 | 7941 |
+| After port, HC_Q8 enabled | 4864 | 3507 | 8371 |
+
+The port recovers 430 slots, about 1.1 GiB across both cards, compared
+with the old HC_Q8 path. Against the daily BF16 path, enabling the corrected
+option adds 139 slots, about 0.36 GiB. These are startup capacities;
+elastic KV takes slots back as the context grows.
+
+The HTTP sweep used uncached prompts of 2084, 16281 and 32505 tokens,
+512-token greedy replies, thinking off, and three rounds per arm.
+The table gives medians in tokens/s:
+
+| Prompt | Daily prefill / decode | Old HC_Q8 | Corrected HC_Q8 |
+| --- | ---: | ---: | ---: |
+| 2K | 275.1 / 61.8 | 268.4 / 60.3 | 275.7 / 62.7 |
+| 16K | 1073.1 / 59.6 | 1055.8 / 58.5 | 1074.7 / 60.3 |
+| 32K | 1289.5 / 57.8 | 1268.3 / 57.4 | 1295.2 / 60.2 |
+
+The arms ran in batches, not interleaved. One corrected-HC_Q8 16K decode
+run fell to 41.4 tokens/s; it is retained in the evidence. A HIP CMake
+configuration also overlapped that arm. These small median differences
+are not proof of a speed gain. The retained result is the memory saving.
+Replies were not byte-identical between arms. HC_Q8 changes precision;
+these requests are not a model-quality benchmark. Arithmetic answered `17`,
+and passage extraction answered `1887; 14; 22`.
+
+All requests, full replies, timings, prompt hashes and settings are in
+[`v100-hc-q8-split-2026-11-11.json`](../benchmarks/v100-hc-q8-split-2026-11-11.json).
+
+The [PR search inventory](../benchmarks/v100-upstream-pr-inventory-2026-11-11.json)
+records 108 PRs created since November 8 and 99 older PRs updated in the
+same window, fetched late November 11 local time. Most target other
+hardware or engines. In particular, #4382 and #4302 target DeepSeek,
+#5119 targets the separate all-cards engine, #5593 helps file-backed
+expert reads rather than this RAM arena, and #5623 requires host-streamed
+KV instead of elastic GPU KV. #3648 improves the peer tier, not split 16.
+#5475 needs a CUDA persistent-HC prerequisite absent from this fork.
+These were not measured as improvements on this deployment.
+
 ## FP16 expert prefill row-offset fix (2026-11-11)
 
 [Issue #100](https://github.com/jmnargi/Strata-V100/issues/100) reports NaN
