@@ -80,6 +80,16 @@ English).
 
 ## Notas de versão
 
+### Engine 0.1.45.8 — 16 de novembro de 2026
+
+A [versão v0.1.45.8](https://github.com/jmnargi/Strata-V100/releases/tag/v0.1.45.8)
+dá ao engine V100 atual uma versão distinta. Inclui a correção do deslocamento de
+linhas no prefill FP16 dos especialistas, trabalho no decode NVFP4, economia
+opcional de memória HC_Q8 entre placas, melhorias opcionais na pontuação de prompts
+e no KV transferido, e progresso do prompt por slot. Esta mudança de versão não
+altera o código de inferência nem as configurações padrão. As medições e os limites
+estão em [NVIDIA_V100.md](docs/NVIDIA_V100.md).
+
 ### Conjuntos Unsloth Dynamic v3.1 (1-4 bits) — 8 de novembro de 2026
 
 Resolve a [#95](https://github.com/jmnargi/Strata-V100/issues/95): o menu `--family unsloth` do setup parava em

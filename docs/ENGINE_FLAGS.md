@@ -24,7 +24,7 @@ passes these flags from the run config's `"args"` list; see [How to set a flag](
 
 These three flags exit before any GPU work:
 
-- `--version` (or `-V`) prints `strata 0.1.45.7` and exits `0`.
+- `--version` (or `-V`) prints `strata 0.1.45.8` and exits `0`.
 - `--families` prints the GGUF architectures this build runs (`qwen4exp`, and `qwen35moe`
   when the Qwen3.6 path is built) and exits `0`.
 - `--help` (or `-h`) prints the usage text to stderr and exits `0`.
@@ -399,7 +399,7 @@ differ there are listed in the table. See [QWEN36.md](QWEN36.md).
 | `--max-new` | `N` | `16` | tokens to generate |
 | `--serve` | no value | off | stay resident and read requests on stdin (`GEN` lines) |
 | `--help` | no value | none | print the usage text to stderr and exit `0` |
-| `--version` | no value | none | print `strata 0.1.45.7` and exit `0` |
+| `--version` | no value | none | print `strata 0.1.45.8` and exit `0` |
 | `--ple-io` | `direct\|mmap\|ram` | `direct` | PLE table reads: unbuffered SSD, mmap, or the whole table locked in RAM |
 | `--ple-row-cache` | `N` | `1048576` rows | cache budget in rows of 90 B, held as whole pages; `0` = off |
 | `--ple-inflight` | `N` | `256` | outstanding PLE SSD reads; range `1..1024` |

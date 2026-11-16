@@ -75,6 +75,17 @@ simplifié).
 
 ## Notes de version
 
+### Moteur 0.1.45.8 — 16 novembre 2026
+
+La [version v0.1.45.8](https://github.com/jmnargi/Strata-V100/releases/tag/v0.1.45.8)
+donne au moteur V100 actuel un numéro distinct. Elle comprend la correction du
+décalage des lignes du prefill FP16 des experts, le travail sur le décodage NVFP4,
+les économies de mémoire HC_Q8 optionnelles entre cartes, les améliorations
+optionnelles du calcul des scores de prompt et du KV transféré, et la progression
+du prompt par slot. Ce changement de version ne modifie ni le code d'inférence ni
+les réglages par défaut. Les mesures et limites sont dans
+[NVIDIA_V100.md](docs/NVIDIA_V100.md).
+
 ### Jeux Unsloth Dynamic v3.1 (1-4 bits) — 8 novembre 2026
 
 Résout [#95](https://github.com/jmnargi/Strata-V100/issues/95) : le menu `--family unsloth` de l'installateur s'arrêtait à

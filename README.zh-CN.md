@@ -71,6 +71,14 @@ NVFP4 各行需要 NVIDIA 显卡（RTX 50 显卡以 FP4 宽度相乘；较老的
 
 ## 发布说明
 
+### 引擎 0.1.45.8 —— 2026 年 11 月 16 日
+
+[发布版本 v0.1.45.8](https://github.com/jmnargi/Strata-V100/releases/tag/v0.1.45.8)
+为当前 V100 引擎提供独立版本号。它包含 FP16 专家 prefill 行偏移修复、
+NVFP4 解码改进、需手动启用的多卡 HC_Q8 内存节省、需手动启用的提示评分与
+流式 KV 改进，以及每个槽位的提示处理进度。本次版本号更新本身不改变推理代码
+或默认调优设置。测量结果和限制见 [NVIDIA_V100.md](docs/NVIDIA_V100.md)。
+
 ### Unsloth Dynamic v3.1 量化集（1-4 bit）—— 2026 年 11 月 8 日
 
 解决 [#95](https://github.com/jmnargi/Strata-V100/issues/95)：setup 的 `--family unsloth` 菜单以前停在 UD-IQ4_XS（约 4 bit）。现在它也提供 Unsloth 的 Dynamic v3.1 文件，范围约 1 到 4 bit，采用 Unsloth 于 2026-11-04 发布的修订版本（提交 `d9620119`）：

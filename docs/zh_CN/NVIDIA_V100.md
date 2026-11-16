@@ -1,8 +1,12 @@
 # NVIDIA Tesla V100 / Titan V（Volta，sm_70）：社区构建
 <a id="nvidia-tesla-v100-titan-v-volta-sm_70-the-community-build"></a>
 
-Strata 的现成引擎与支持矩阵从计算能力 7.5（RTX 20）起步。V100（7.0）通过 issue #236 加入的实验性构建，运行**为它
-编译的同一引擎**。它**由社区测试，不属于受支持的显卡**：没有为它发布的现成引擎，下文数字也来自一台机器。
+上游 Strata 的现成引擎与支持矩阵从计算能力 7.5（RTX 20）起步。V100（7.0）运行同一引擎的专用构建。
+本分支在[发布版本 v0.1.45.8](https://github.com/jmnargi/Strata-V100/releases/tag/v0.1.45.8)
+提供 Linux x86-64、CUDA 12.8、`sm_70` 引擎。这是社区测试版本，不属于上游支持范围。
+该二进制文件需要支持 AVX2 的 CPU 和 CUDA 12 运行时库，不包含模型、服务器或视觉编码器。
+它还需要 glibc 2.38 或更新版本，以及提供 `GLIBCXX_3.4.32` 的 libstdc++。
+其他平台或混合 GPU 架构请从源码构建。下文测量各自注明硬件，并不代表所有 V100 系统的性能。
 
 ## 构建
 <a id="build"></a>

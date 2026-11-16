@@ -1,7 +1,7 @@
 # Strata documentation
 
 This directory holds all Strata documentation. The pages describe engine version
-0.1.45.7 and the server in `serve/`.
+0.1.45.8 and the server in `serve/`.
 
 ## Start here
 

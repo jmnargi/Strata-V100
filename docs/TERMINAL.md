@@ -1,7 +1,7 @@
 # The `strata` command
 
 This page documents the Terminal: `strata.py` and the `strata_cli/` package. The page covers
-engine version 0.1.45.7. Every command below exists in `strata_cli/cli.py` in this tree.
+engine version 0.1.45.8. Every command below exists in `strata_cli/cli.py` in this tree.
 
 The Terminal starts the server, edits saved settings, manages an owned server instance, reads
 telemetry, and runs the tuner. It does not contain engine code. The engine is the `strata` binary in
@@ -26,7 +26,7 @@ strata --version
 Python interpreter this terminal uses (from the code, `strata_cli/cli.py`, class `_VersionAction`).
 
 ```
-strata 0.2.0-beta (build 0.1.45.7; python 3.12.3 at /usr/bin/python3)
+strata 0.2.0-beta (build 0.1.45.8; python 3.12.3 at /usr/bin/python3)
 ```
 
 The product version comes from `strata_cli.PRODUCT_VERSION`. The build number comes from `VERSION`
