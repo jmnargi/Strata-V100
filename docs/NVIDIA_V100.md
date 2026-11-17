@@ -9,6 +9,36 @@ It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.
 Build from source for other platforms or a mix of GPU architectures. The measurements
 below state their hardware and do not establish performance on every V100 system.
 
+## Packed prompt-expert dequantization (2026-11-17)
+
+The CUDA WMMA2 prompt path decodes IQ3_XXS, IQ3_S and IQ2_S gate/up
+weights in pairs. The codebook coefficient fits exactly in FP16, so the
+final multiply by the block scale rounds once, as before. The tensor-core
+tile, dispatch and IQ4_NL down path do not change.
+
+On a V100-PCIE-16GB with CUDA 12.8, `pf_wmma_parity --bench` isolated
+one 1280 × 2560 gate/up launch with 64 experts. Baseline and packed
+binaries ran in A/B/B/A order, with 56 CUDA graph launches per shape
+per run. These are median component times, not model throughput:
+
+| Format | 2 rows/expert | 64 rows/expert | 128 rows/expert | 256 rows/expert |
+| --- | ---: | ---: | ---: | ---: |
+| IQ3_XXS | 0.486 → 0.424 ms | 0.790 → 0.709 ms | 1.595 → 1.508 ms | 3.137 → 3.011 ms |
+| IQ3_S | 0.711 → 0.689 ms | 0.919 → 0.873 ms | 1.753 → 1.624 ms | 3.389 → 3.179 ms |
+| IQ2_S | 0.467 → 0.391 ms | 0.784 → 0.678 ms | 1.542 → 1.475 ms | 3.081 → 2.956 ms |
+
+The two WMMA2 tile orientations passed numerical parity, including
+partial tiles and gathered activation rows. A separate sweep of the
+three codebooks and all finite FP16 block scales found no bit differences.
+The 16 benchmark shapes also matched baseline output bit for bit.
+
+On two V100-PCIE-16GB cards at 175 W, Unsloth UD-IQ3_XXS code/tool
+prompts with no reused prefix took 8.58 → 8.53 s at 15,381 tokens and
+24.08 → 23.83 s at 53,148 tokens. These are medians of three requests per
+build with matched starting GPU temperatures. An uncontrolled run was
+slower on the later arm across unrelated phases. The controlled model
+comparison shows no meaningful throughput gain; decode was variable.
+
 ## Optional CUDA host-copy DMA (2026-11-15)
 
 `STRATA_KV_HOST_DMA=1` extends the existing HIP prompt-copy option to CUDA,
