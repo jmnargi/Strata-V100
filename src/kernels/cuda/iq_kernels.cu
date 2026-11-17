@@ -6136,9 +6136,11 @@ __global__ void w2_iq4_skinny(const uint8_t* W, size_t expert_bytes, size_t row_
     const __half* x = X + (size_t) row * ldx;
     const uint8_t* w = (indirect ? (const uint8_t*) tbl.dn[e] : W + (size_t) e * expert_bytes) +
                        (size_t) (n0 + mr) * row_bytes;
-    __shared__ half2 lut[256];
-    for (int i = threadIdx.x; i < 256; i += blockDim.x)
-        lut[i] = __halves2half2(__int2half_rn(kvalues_iq4nl[i & 15]), __int2half_rn(kvalues_iq4nl[i >> 4]));
+    __shared__ half2 lut[Paired ? 16 : 256];
+    for (int i = threadIdx.x; i < (Paired ? 16 : 256); i += blockDim.x) {
+        const __half lo = __int2half_rn(kvalues_iq4nl[i & 15]);
+        lut[i] = __halves2half2(lo, Paired ? lo : __int2half_rn(kvalues_iq4nl[i >> 4]));
+    }
     __syncthreads();
     float c[8] = {};
     // Two 18-byte blocks fit nine aligned words. Word four holds the first
@@ -6161,8 +6163,13 @@ __global__ void w2_iq4_skinny(const uint8_t* W, size_t expert_bytes, size_t row_
                 } else {
                     codes = w2_ld_b2(w + 2 + 4 * j);
                 }
-                const half2 t0 = lut[codes & 255], t1 = lut[(codes >> 8) & 255];
-                const half2 t2 = lut[(codes >> 16) & 255], t3 = lut[codes >> 24];
+                auto lookup = [&](unsigned v) {
+                    if constexpr (Paired)
+                        return __halves2half2(__low2half(lut[v & 15]), __low2half(lut[(v >> 4) & 15]));
+                    else return lut[v & 255];
+                };
+                const half2 t0 = lookup(codes), t1 = lookup(codes >> 8);
+                const half2 t2 = lookup(codes >> 16), t3 = lookup(codes >> 24);
 #pragma unroll
                 for (int hi = 0; hi < 2; ++hi) {
                     const uint2 a = mr < rows ? *reinterpret_cast<const uint2*>(x + k + 32 * b + 4 * j + 16 * hi)

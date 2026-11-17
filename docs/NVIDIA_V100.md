@@ -41,6 +41,11 @@ both cards. The packed weights and accumulation order are unchanged
 from the original register-fed path. A direct expert stride that
 is not four-byte aligned keeps the original loads.
 
+Using a 16-entry nibble table instead of a 256-entry byte table on the
+aligned path brought these times to 50, 51, 53–54 and 59–60 µs. Staging
+the activations in shared memory lost (91–100 µs), even with the smaller
+table (89–97 µs). Both cards agreed on the ranking.
+
 These are component timings. Whole-model throughput and answer quality
 were not measured for this switch.
 
