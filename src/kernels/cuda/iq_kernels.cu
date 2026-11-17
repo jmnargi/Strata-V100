@@ -6130,13 +6130,13 @@ __global__ void w2_iq4_skinny(const uint8_t* W, size_t expert_bytes, size_t row_
     if (!rows) return;
     const int lane = threadIdx.x & 31, q = (lane >> 2) & 3;
     const int mr = (lane & 3) | ((lane >> 2) & 4);
-    const int n0 = 128 * blockIdx.x + 32 * (threadIdx.x >> 5) + 8 * q;
+    const int n0 = blockDim.x * blockIdx.x + 32 * (threadIdx.x >> 5) + 8 * q;
     const int row = mr < rows ? (ids ? ids[first + mr] : first + mr) : 0;
     const __half* x = X + (size_t) row * ldx;
     const uint8_t* w = (indirect ? (const uint8_t*) tbl.dn[e] : W + (size_t) e * expert_bytes) +
                        (size_t) (n0 + mr) * row_bytes;
     __shared__ half2 lut[256];
-    for (int i = threadIdx.x; i < 256; i += 128)
+    for (int i = threadIdx.x; i < 256; i += blockDim.x)
         lut[i] = __halves2half2(__int2half_rn(kvalues_iq4nl[i & 15]), __int2half_rn(kvalues_iq4nl[i >> 4]));
     __syncthreads();
     float c[8] = {};
@@ -6273,8 +6273,11 @@ bool gemm_iq_f16_grouped(int ty, const void* W, size_t expert_bytes, int n_out, 
     // them.
     if (w2_on() && w2_select(ty, K, ldx, ldy, W, X, Y, n_experts, indirect, down, (caps & 256u) != 0)) {
         if (ty == 20 && max_rows <= 8 && w2_skinny_on(dev)) {
-            const dim3 grid(n_out / 128, n_experts);
-            w2_iq4_skinny<<<grid, 128, 0, s>>>(w, expert_bytes, row_bytes, K, x, ldx, bounds, ids, Y, ldy,
+            // Eight warps won on the 2560-output projection. Keep four when an eight-warp block
+            // would leave a partial output tile; the grouped entry point requires a multiple of 128.
+            const int threads = n_out % 256 == 0 ? 256 : 128;
+            const dim3 grid(n_out / threads, n_experts);
+            w2_iq4_skinny<<<grid, threads, 0, s>>>(w, expert_bytes, row_bytes, K, x, ldx, bounds, ids, Y, ldy,
                                               indirect != nullptr, tbl);
             return cudaGetLastError() == cudaSuccess;
         }

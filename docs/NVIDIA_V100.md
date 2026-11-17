@@ -30,6 +30,11 @@ launches per shape in each run. Median latency on each card:
 | 8 | 93 µs | 82 µs |
 | 9 (WMMA2 fallback) | 93–94 µs | 93–94 µs |
 
+A separate 1/2/4/8-warp block sweep on both cards found eight warps
+fastest. At 1, 2, 4 and 8 rows/expert, the four-warp times above fell
+to 65, 66–67, 69 and 79 µs. One and two warps were slower than four.
+The kernel keeps four warps when the output width is not divisible by 256.
+
 These are component timings. Whole-model throughput and answer quality
 were not measured for this switch.
 
