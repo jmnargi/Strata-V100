@@ -6133,6 +6133,7 @@ bool w2_attrs_fit(int dev) {
 
 // One warp handles eight routed rows by 32 outputs, as four independent 8x8 quad-pair tiles.
 // IQ4_NL weights go from their native row directly to MMA registers, with no FP16 weight tile.
+template <bool Paired>
 __global__ void w2_iq4_skinny(const uint8_t* W, size_t expert_bytes, size_t row_bytes, int K,
                               const __half* X, int ldx, const int32_t* bounds, const int32_t* ids,
                               float* Y, int ldy, bool indirect, GroupedWeightTable tbl) {
@@ -6151,23 +6152,39 @@ __global__ void w2_iq4_skinny(const uint8_t* W, size_t expert_bytes, size_t row_
         lut[i] = __halves2half2(__int2half_rn(kvalues_iq4nl[i & 15]), __int2half_rn(kvalues_iq4nl[i >> 4]));
     __syncthreads();
     float c[8] = {};
-    for (int k = 0; k < K; k += 32, w += 18) {
-        const half2 d = __half2half2(__ushort_as_half(*reinterpret_cast<const uint16_t*>(w)));
+    // Two 18-byte blocks fit nine aligned words. Word four holds the first
+    // block's final two codes and the second block's scale.
+    for (int k = 0; k < K; k += Paired ? 64 : 32, w += Paired ? 36 : 18) {
+        const auto* words = reinterpret_cast<const uint32_t*>(w);
+        uint32_t carry = Paired ? words[0] : 0;
 #pragma unroll
-        for (int j = 0; j < 4; ++j) {
-            const uint32_t codes = w2_ld_b2(w + 2 + 4 * j);
-            const half2 t0 = lut[codes & 255], t1 = lut[(codes >> 8) & 255];
-            const half2 t2 = lut[(codes >> 16) & 255], t3 = lut[codes >> 24];
+        for (int b = 0; b < (Paired ? 2 : 1); ++b) {
+            const uint16_t scale = Paired ? uint16_t(b ? carry >> 16 : carry)
+                                          : *reinterpret_cast<const uint16_t*>(w);
+            const half2 d = __half2half2(__ushort_as_half(scale));
 #pragma unroll
-            for (int hi = 0; hi < 2; ++hi) {
-                const uint2 a = mr < rows ? *reinterpret_cast<const uint2*>(x + k + 4 * j + 16 * hi)
-                                         : make_uint2(0, 0);
-                const uint32_t b0 = w2_u32(__hmul2(d, hi ? __highs2half2(t0, t1) : __lows2half2(t0, t1)));
-                const uint32_t b1 = w2_u32(__hmul2(d, hi ? __highs2half2(t2, t3) : __lows2half2(t2, t3)));
-                asm volatile("mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 "
-                             "{%0,%1,%2,%3,%4,%5,%6,%7}, {%8,%9}, {%10,%11}, {%0,%1,%2,%3,%4,%5,%6,%7};"
-                             : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3]), "+f"(c[4]), "+f"(c[5]), "+f"(c[6]), "+f"(c[7])
-                             : "r"(a.x), "r"(a.y), "r"(b0), "r"(b1));
+            for (int j = 0; j < 4; ++j) {
+                uint32_t codes;
+                if constexpr (Paired) {
+                    const uint32_t next = words[1 + j + 4 * b];
+                    codes = b ? next : __byte_perm(carry, next, 0x5432);
+                    carry = next;
+                } else {
+                    codes = w2_ld_b2(w + 2 + 4 * j);
+                }
+                const half2 t0 = lut[codes & 255], t1 = lut[(codes >> 8) & 255];
+                const half2 t2 = lut[(codes >> 16) & 255], t3 = lut[codes >> 24];
+#pragma unroll
+                for (int hi = 0; hi < 2; ++hi) {
+                    const uint2 a = mr < rows ? *reinterpret_cast<const uint2*>(x + k + 32 * b + 4 * j + 16 * hi)
+                                             : make_uint2(0, 0);
+                    const uint32_t b0 = w2_u32(__hmul2(d, hi ? __highs2half2(t0, t1) : __lows2half2(t0, t1)));
+                    const uint32_t b1 = w2_u32(__hmul2(d, hi ? __highs2half2(t2, t3) : __lows2half2(t2, t3)));
+                    asm volatile("mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 "
+                                 "{%0,%1,%2,%3,%4,%5,%6,%7}, {%8,%9}, {%10,%11}, {%0,%1,%2,%3,%4,%5,%6,%7};"
+                                 : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3]), "+f"(c[4]), "+f"(c[5]), "+f"(c[6]), "+f"(c[7])
+                                 : "r"(a.x), "r"(a.y), "r"(b0), "r"(b1));
+                }
             }
         }
     }
@@ -6288,8 +6305,13 @@ bool gemm_iq_f16_grouped(int ty, const void* W, size_t expert_bytes, int n_out, 
             // would leave a partial output tile; the grouped entry point requires a multiple of 128.
             const int threads = n_out % 256 == 0 ? 256 : 128;
             const dim3 grid(n_out / threads, n_experts);
-            w2_iq4_skinny<<<grid, threads, 0, s>>>(w, expert_bytes, row_bytes, K, x, ldx, bounds, ids, Y, ldy,
-                                              indirect != nullptr, tbl);
+            // W2 checks base/table alignment and K % 128 (a four-byte row stride).
+            if (indirect || expert_bytes % 4 == 0)
+                w2_iq4_skinny<true><<<grid, threads, 0, s>>>(w, expert_bytes, row_bytes, K, x, ldx, bounds, ids, Y, ldy,
+                                                               indirect != nullptr, tbl);
+            else
+                w2_iq4_skinny<false><<<grid, threads, 0, s>>>(w, expert_bytes, row_bytes, K, x, ldx, bounds, ids, Y, ldy,
+                                                                indirect != nullptr, tbl);
             return cudaGetLastError() == cudaSuccess;
         }
         const bool n64 = w2_n64_on(max_rows);

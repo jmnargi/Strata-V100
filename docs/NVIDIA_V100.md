@@ -35,6 +35,12 @@ fastest. At 1, 2, 4 and 8 rows/expert, the four-warp times above fell
 to 65, 66–67, 69 and 79 µs. One and two warps were slower than four.
 The kernel keeps four warps when the output width is not divisible by 256.
 
+Loading pairs of IQ4_NL blocks as aligned 32-bit words cuts those
+eight-warp times again, to 51, 52, 55 and 61–62 µs in A/B/B/A runs on
+both cards. The packed weights and accumulation order are unchanged
+from the original register-fed path. A direct expert stride that
+is not four-byte aligned keeps the original loads.
+
 These are component timings. Whole-model throughput and answer quality
 were not measured for this switch.
 
