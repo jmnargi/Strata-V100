@@ -9,6 +9,30 @@ It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.
 Build from source for other platforms or a mix of GPU architectures. The measurements
 below state their hardware and do not establish performance on every V100 system.
 
+## Optional register-fed IQ4_NL prompt down projection (2026-11-17)
+
+`STRATA_PF_WMMA_SKINNY=1` enables a CUDA sm_70 experiment on the WMMA2
+prompt path. It applies to IQ4_NL down projections only when the largest
+expert in the group has at most eight routed rows. The kernel decodes
+weights into registers and feeds `mma.m8n8k4` without a shared FP16
+weight tile. It changes the FP32 accumulation order, so it is not
+bit-identical. Leave the switch unset or at `0` for the original path.
+
+CUDA 12.8, two V100-PCIE-16GB cards, one 2560 × 640 projection with 16
+resident experts. Each card ran A/B/B/A, with seven timed graphs of eight
+launches per shape in each run. Median latency on each card:
+
+| Routed rows/expert | WMMA2 | Register-fed |
+| ---: | ---: | ---: |
+| 1 | 92 µs | 67 µs |
+| 2 | 92–93 µs | 69 µs |
+| 4 | 92–93 µs | 72 µs |
+| 8 | 93 µs | 82 µs |
+| 9 (WMMA2 fallback) | 93–94 µs | 93–94 µs |
+
+These are component timings. Whole-model throughput and answer quality
+were not measured for this switch.
+
 ## Optional CUDA host-copy DMA (2026-11-15)
 
 `STRATA_KV_HOST_DMA=1` extends the existing HIP prompt-copy option to CUDA,

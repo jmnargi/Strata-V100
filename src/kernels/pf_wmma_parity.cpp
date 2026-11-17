@@ -100,10 +100,13 @@ std::vector<uint8_t> random_rows(int t, int64_t rows, int64_t n, std::mt19937& r
     return w;
 }
 
-int run(int ty, int n_out, int K, std::mt19937& rng, bool use_ids, bool down, bool short_group = false) {
+int run(int ty, int n_out, int K, std::mt19937& rng, bool use_ids, bool down, bool short_group = false,
+        bool skinny = false) {
     static constexpr int short_rows[] = {0, 1, 63, 64, 65, 127, 128};
     static constexpr int wide_rows[] = {0, 1, 63, 64, 65, 127, 128, 129, 200, 255, 256, 257, 300};
-    const auto rows = short_group ? std::span<const int>(short_rows) : std::span<const int>(wide_rows);
+    static constexpr int skinny_rows[] = {0, 1, 2, 4, 8, 3};
+    const auto rows = skinny ? std::span<const int>(skinny_rows)
+                    : short_group ? std::span<const int>(short_rows) : std::span<const int>(wide_rows);
     const int E = (int) rows.size(), base = 5;
     std::vector<int32_t> bounds(E + 1);
     bounds[0] = base;
@@ -330,8 +333,9 @@ int bench(std::mt19937& rng) {
 int main(int argc, char** argv) {
     const bool do_bench = argc == 2 && std::strcmp(argv[1], "--bench") == 0;
     const bool wmma2_only = argc == 2 && std::strcmp(argv[1], "--wmma2") == 0;
-    if (argc > 2 || (argc == 2 && !do_bench && !wmma2_only)) {
-        std::fprintf(stderr, "usage: pf_wmma_parity [--bench|--wmma2]\n");
+    const bool skinny = argc == 2 && std::strcmp(argv[1], "--skinny") == 0;
+    if (argc > 2 || (argc == 2 && !do_bench && !wmma2_only && !skinny)) {
+        std::fprintf(stderr, "usage: pf_wmma_parity [--bench|--wmma2|--skinny]\n");
         return 2;
     }
     int dev = 0, major = 0;
@@ -339,6 +343,14 @@ int main(int argc, char** argv) {
     cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
     if (major < 7) { std::printf("pf_wmma_parity: needs sm_70+, skipped\n"); return 77; }
     std::mt19937 rng(70);
+    if (skinny) {
+        int minor = -1;
+        cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev);
+        if (major != 7 || minor != 0) return 77;
+        int failures = run(20, 2560, 640, rng, false, true, false, true);
+        failures += run(20, 2560, 640, rng, true, true, false, true);
+        return failures ? 1 : 0;
+    }
     if (do_bench) {
         const int fails = bench(rng);
         std::printf("pf_wmma_parity --bench: %d failures\n", fails);
