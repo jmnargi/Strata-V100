@@ -6131,6 +6131,68 @@ bool w2_attrs_fit(int dev) {
     return ok;
 }
 
+// One warp handles eight routed rows by 32 outputs, as four independent 8x8 quad-pair tiles.
+// IQ4_NL weights go from their native row directly to MMA registers, with no FP16 weight tile.
+__global__ void w2_iq4_skinny(const uint8_t* W, size_t expert_bytes, size_t row_bytes, int K,
+                              const __half* X, int ldx, const int32_t* bounds, const int32_t* ids,
+                              float* Y, int ldy, bool indirect, GroupedWeightTable tbl) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+    const int e = blockIdx.y, first = bounds[e], rows = bounds[e + 1] - first;
+    if (!rows) return;
+    const int lane = threadIdx.x & 31, q = (lane >> 2) & 3;
+    const int mr = (lane & 3) | ((lane >> 2) & 4);
+    const int n0 = 128 * blockIdx.x + 32 * (threadIdx.x >> 5) + 8 * q;
+    const int row = mr < rows ? (ids ? ids[first + mr] : first + mr) : 0;
+    const __half* x = X + (size_t) row * ldx;
+    const uint8_t* w = (indirect ? (const uint8_t*) tbl.dn[e] : W + (size_t) e * expert_bytes) +
+                       (size_t) (n0 + mr) * row_bytes;
+    __shared__ half2 lut[256];
+    for (int i = threadIdx.x; i < 256; i += 128)
+        lut[i] = __halves2half2(__int2half_rn(kvalues_iq4nl[i & 15]), __int2half_rn(kvalues_iq4nl[i >> 4]));
+    __syncthreads();
+    float c[8] = {};
+    for (int k = 0; k < K; k += 32, w += 18) {
+        const half2 d = __half2half2(__ushort_as_half(*reinterpret_cast<const uint16_t*>(w)));
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const uint32_t codes = w2_ld_b2(w + 2 + 4 * j);
+            const half2 t0 = lut[codes & 255], t1 = lut[(codes >> 8) & 255];
+            const half2 t2 = lut[(codes >> 16) & 255], t3 = lut[codes >> 24];
+#pragma unroll
+            for (int hi = 0; hi < 2; ++hi) {
+                const uint2 a = mr < rows ? *reinterpret_cast<const uint2*>(x + k + 4 * j + 16 * hi)
+                                         : make_uint2(0, 0);
+                const uint32_t b0 = w2_u32(__hmul2(d, hi ? __highs2half2(t0, t1) : __lows2half2(t0, t1)));
+                const uint32_t b1 = w2_u32(__hmul2(d, hi ? __highs2half2(t2, t3) : __lows2half2(t2, t3)));
+                asm volatile("mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 "
+                             "{%0,%1,%2,%3,%4,%5,%6,%7}, {%8,%9}, {%10,%11}, {%0,%1,%2,%3,%4,%5,%6,%7};"
+                             : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3]), "+f"(c[4]), "+f"(c[5]), "+f"(c[6]), "+f"(c[7])
+                             : "r"(a.x), "r"(a.y), "r"(b0), "r"(b1));
+            }
+        }
+    }
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        const int r = (i & 2) | ((lane >> 2) & 4) | (lane & 1);
+        const int col = (i & 1) | (lane & 2) | ((i >> 2) * 4);
+        if (r < rows) Y[(size_t) (first + r) * ldy + n0 + col] = c[i];
+    }
+#endif
+}
+
+bool w2_skinny_on(int dev) {
+    static const bool on = [] { const char* e = std::getenv("STRATA_PF_WMMA_SKINNY"); return e && e[0] == '1'; }();
+    if (!on) return false;
+    static thread_local int arch[64] = {};
+    if (!arch[dev]) {
+        int major = 0, minor = 0;
+        cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
+        cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev);
+        arch[dev] = major == 7 && minor == 0 ? 1 : -1;
+    }
+    return arch[dev] == 1;
+}
+
 bool w2_on() {
     static const bool v = [] { const char* e = std::getenv("STRATA_PF_WMMA2"); return e && e[0] == '1'; }();
     return v;
@@ -6221,6 +6283,12 @@ bool gemm_iq_f16_grouped(int ty, const void* W, size_t expert_bytes, int n_out, 
     // The tile is stricter than the generic ones (w2_select's comment); a caller that misses one of those keeps
     // them.
     if (w2_on() && w2_select(ty, K, ldx, ldy, W, X, Y, n_experts, indirect, down, (caps & 256u) != 0)) {
+        if (ty == 20 && max_rows <= 8 && w2_skinny_on(dev)) {
+            const dim3 grid(n_out / 128, n_experts);
+            w2_iq4_skinny<<<grid, 128, 0, s>>>(w, expert_bytes, row_bytes, K, x, ldx, bounds, ids, Y, ldy,
+                                              indirect != nullptr, tbl);
+            return cudaGetLastError() == cudaSuccess;
+        }
         const bool n64 = w2_n64_on(max_rows);
         if (ty == 22) return w2_launch<22>(n64, w, expert_bytes, row_bytes, K, x, ldx, bounds, ids, max_rows, Y, ldy,
                                            wsrc, tbl, n_out, n_experts, s);
