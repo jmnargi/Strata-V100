@@ -349,6 +349,8 @@ int main(int argc, char** argv) {
         if (major != 7 || minor != 0) return 77;
         int failures = run(20, 2560, 640, rng, false, true, false, true);
         failures += run(20, 2560, 640, rng, true, true, false, true);
+        // A 128-column tail cannot use the eight-warp geometry.
+        failures += run(20, 384, 640, rng, true, true, false, true);
         return failures ? 1 : 0;
     }
     if (do_bench) {
