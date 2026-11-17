@@ -9,6 +9,18 @@ It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.
 Build from source for other platforms or a mix of GPU architectures. The measurements
 below state their hardware and do not establish performance on every V100 system.
 
+## Resident routing without diagnostic counters (2026-11-17)
+
+With routing diagnostics off, the resident swap skips counting misses
+before and after routing. It also leaves the selected IDs alone when
+no swap occurs. The selection and weights do not change.
+
+On both V100-PCIE-16GB cards (CUDA 12.8), a four-token captured
+routing call including the ID reset went from 8.59–8.75 to
+8.41–8.52 µs for one tail rank, and from 16.24–16.48 to
+16.09–16.20 µs for four tail ranks. These are component timings,
+not decode throughput.
+
 ## Optional CUDA host-copy DMA (2026-11-15)
 
 `STRATA_KV_HOST_DMA=1` extends the existing HIP prompt-copy option to CUDA,
