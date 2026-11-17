@@ -5861,28 +5861,37 @@ __device__ __forceinline__ void w2_raw_st(const uint32_t (&R)[w2_nl<TY, RB>()], 
     }
 }
 
-// sub-block `sb` (0..7) of the IQ2_S super-block at rr -> 32 halves at o, natural order, bit for bit dq_iq2_s's values:
-// cvt<__half>(dl * grid[j] * +-1) with dl = d * (0.5 + scale) * 0.25 in FP32 (the sign flips the rounded half, which is the same)
-__device__ __forceinline__ float w2_b2f(uint32_t w, int j) { return __int_as_float(0x4B000000 | ((w >> 8 * j) & 0xff)) - 8388608.0f; }
+// Each grid byte times an odd block multiplier (1..31) is <= 1922. This integer and
+// its power-of-two rescaling are exact in FP16, so only the last multiply rounds.
+// Pack two bytes as 1024 + byte, then cancel the 1024 bias in the scale FMA.
+// PRMT interleaves the selected bytes with 0x64, the high byte of half(1024).
+__device__ __forceinline__ uint32_t w2_scale_pair(uint32_t w, int sel, half2 d, half2 mul, half2 bias) {
+    const half2 grid = w2_h2(__byte_perm(w, 0x64646464u, sel));
+    return w2_u32(__hmul2(d, __hfma2(grid, mul, bias)));
+}
+
+// IQ2_S sub-block: d * (0.5 + scale) * 0.25 * grid with its sign bit applied last.
 __device__ __forceinline__ void w2_dq_iq2_s(const uint8_t* rr, int sb, __half* o, const uint2* __restrict__ tab) {
     const uint2* sgn = tab + 1024;
     const uint32_t sc = rr[2 + 64 + 8 + sb], qh = rr[2 + 64 + sb];
     const uint32_t qs = w2_ld_b2(rr + 2 + 4 * sb), sg = w2_ld_b2(rr + 2 + 32 + 4 * sb);
-    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
-    const float dl0 = d * (0.5f + (float) (sc & 0xf)) * 0.25f;
-    const float dl1 = d * (0.5f + (float) (sc >> 4)) * 0.25f;
+    const half2 d = __half2half2(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
+    const half2 mul0 = __float2half2_rn(0.125f * (float) (1 + 2 * (sc & 15)));
+    const half2 mul1 = __float2half2_rn(0.125f * (float) (1 + 2 * (sc >> 4)));
+    const half2 neg_base = __float2half2_rn(-1024.0f);
+    const half2 bias0 = __hmul2(mul0, neg_base), bias1 = __hmul2(mul1, neg_base);
 #pragma unroll
     for (int il = 0; il < 4; ++il) {
-        const float dl = il < 2 ? dl0 : dl1;
+        const half2 mul = il < 2 ? mul0 : mul1, bias = il < 2 ? bias0 : bias1;
         const int idx = (int) (((qs >> 8 * il) & 0xff) | ((qh << (8 - 2 * il)) & 0x300));
         const uint2 gw = tab[idx];
         const uint32_t sbits = (sg >> 8 * il) & 0xff;
         const uint2 s0 = sgn[sbits & 15], s1 = sgn[sbits >> 4];
         uint4 out;
-        out.x = w2_u32(__floats2half2_rn(dl * w2_b2f(gw.x, 0), dl * w2_b2f(gw.x, 1))) ^ s0.x;
-        out.y = w2_u32(__floats2half2_rn(dl * w2_b2f(gw.x, 2), dl * w2_b2f(gw.x, 3))) ^ s0.y;
-        out.z = w2_u32(__floats2half2_rn(dl * w2_b2f(gw.y, 0), dl * w2_b2f(gw.y, 1))) ^ s1.x;
-        out.w = w2_u32(__floats2half2_rn(dl * w2_b2f(gw.y, 2), dl * w2_b2f(gw.y, 3))) ^ s1.y;
+        out.x = w2_scale_pair(gw.x, 0x4140, d, mul, bias) ^ s0.x;
+        out.y = w2_scale_pair(gw.x, 0x4342, d, mul, bias) ^ s0.y;
+        out.z = w2_scale_pair(gw.y, 0x4140, d, mul, bias) ^ s1.x;
+        out.w = w2_scale_pair(gw.y, 0x4342, d, mul, bias) ^ s1.y;
         *reinterpret_cast<uint4*>(o + 8 * il) = out;
     }
 }
@@ -5895,8 +5904,9 @@ __device__ __forceinline__ void w2_dq_iq3_xxs(const uint8_t* rr, int sb, __half*
                                               const uint2* __restrict__ sgn) {
     const uint32_t q0 = w2_ld_b2(rr + 2 + 8 * sb), q1 = w2_ld_b2(rr + 2 + 8 * sb + 4);
     const uint32_t aux = w2_ld_b2(rr + 2 + 64 + 4 * sb);
-    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
-    const float dl = d * (0.5f + (float) (aux >> 28)) * 0.5f;
+    const half2 d = __half2half2(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
+    const half2 mul = __float2half2_rn(0.25f * (float) (1 + 2 * (aux >> 28)));
+    const half2 bias = __hmul2(mul, __float2half2_rn(-1024.0f));
 #pragma unroll
     for (int il = 0; il < 4; ++il) {
         const uint32_t qw = il < 2 ? q0 : q1;
@@ -5906,10 +5916,10 @@ __device__ __forceinline__ void w2_dq_iq3_xxs(const uint8_t* rr, int sb, __half*
         const uint32_t signs = v ^ ((uint32_t) (__popc(v) & 1) << 7);
         const uint2 s0 = sgn[signs & 15], s1 = sgn[signs >> 4];
         uint4 out;
-        out.x = w2_u32(__floats2half2_rn(dl * w2_b2f(g0, 0), dl * w2_b2f(g0, 1))) ^ s0.x;
-        out.y = w2_u32(__floats2half2_rn(dl * w2_b2f(g0, 2), dl * w2_b2f(g0, 3))) ^ s0.y;
-        out.z = w2_u32(__floats2half2_rn(dl * w2_b2f(g1, 0), dl * w2_b2f(g1, 1))) ^ s1.x;
-        out.w = w2_u32(__floats2half2_rn(dl * w2_b2f(g1, 2), dl * w2_b2f(g1, 3))) ^ s1.y;
+        out.x = w2_scale_pair(g0, 0x4140, d, mul, bias) ^ s0.x;
+        out.y = w2_scale_pair(g0, 0x4342, d, mul, bias) ^ s0.y;
+        out.z = w2_scale_pair(g1, 0x4140, d, mul, bias) ^ s1.x;
+        out.w = w2_scale_pair(g1, 0x4342, d, mul, bias) ^ s1.y;
         *reinterpret_cast<uint4*>(o + 8 * il) = out;
     }
 }
@@ -5921,8 +5931,9 @@ __device__ __forceinline__ void w2_dq_iq3_s(const uint8_t* rr, int sb, __half* o
                                             const uint2* __restrict__ sgn) {
     const uint32_t q0 = w2_ld_b2(rr + 2 + 8 * sb), q1 = w2_ld_b2(rr + 2 + 8 * sb + 4);
     const uint32_t qh = rr[2 + 64 + sb], sc = rr[2 + 64 + 8 + 32 + (sb >> 1)];
-    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
-    const float dl = d * (float) (1 + 2 * ((sc >> (4 * (sb & 1))) & 0x0f));
+    const half2 d = __half2half2(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
+    const half2 mul = __float2half2_rn((float) (1 + 2 * ((sc >> (4 * (sb & 1))) & 0x0f)));
+    const half2 bias = __hmul2(mul, __float2half2_rn(-1024.0f));
 #pragma unroll
     for (int il = 0; il < 4; ++il) {
         const uint32_t qw = il < 2 ? q0 : q1;
@@ -5932,10 +5943,10 @@ __device__ __forceinline__ void w2_dq_iq3_s(const uint8_t* rr, int sb, __half* o
         const uint32_t signs = rr[2 + 64 + 8 + 4 * sb + il];
         const uint2 s0 = sgn[signs & 15], s1 = sgn[signs >> 4];
         uint4 out;
-        out.x = w2_u32(__floats2half2_rn(dl * w2_b2f(g0, 0), dl * w2_b2f(g0, 1))) ^ s0.x;
-        out.y = w2_u32(__floats2half2_rn(dl * w2_b2f(g0, 2), dl * w2_b2f(g0, 3))) ^ s0.y;
-        out.z = w2_u32(__floats2half2_rn(dl * w2_b2f(g1, 0), dl * w2_b2f(g1, 1))) ^ s1.x;
-        out.w = w2_u32(__floats2half2_rn(dl * w2_b2f(g1, 2), dl * w2_b2f(g1, 3))) ^ s1.y;
+        out.x = w2_scale_pair(g0, 0x4140, d, mul, bias) ^ s0.x;
+        out.y = w2_scale_pair(g0, 0x4342, d, mul, bias) ^ s0.y;
+        out.z = w2_scale_pair(g1, 0x4140, d, mul, bias) ^ s1.x;
+        out.w = w2_scale_pair(g1, 0x4342, d, mul, bias) ^ s1.y;
         *reinterpret_cast<uint4*>(o + 8 * il) = out;
     }
 }
