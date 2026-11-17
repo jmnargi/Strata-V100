@@ -2,7 +2,7 @@
 
 Upstream Strata's ready-made engine and support matrix start at compute capability 7.5 (RTX 20).
 A V100 (7.0) runs the same engine compiled for it. This fork publishes a Linux x86-64
-CUDA 12.8 `sm_70` engine in [release v0.1.45.8](https://github.com/jmnargi/Strata-V100/releases/tag/v0.1.45.8).
+CUDA 12.8 `sm_70` engine in [release v0.1.45.9](https://github.com/jmnargi/Strata-V100/releases/tag/v0.1.45.9).
 It is community-tested, not an upstream-supported build. The binary needs an AVX2 CPU
 and the CUDA 12 runtime libraries; it does not include models, the server or the vision encoder.
 It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.
@@ -48,6 +48,35 @@ table (89–97 µs). Both cards agreed on the ranking.
 
 These are component timings. Whole-model throughput and answer quality
 were not measured for this switch.
+
+## Packed prompt-expert dequantization (2026-11-17)
+
+CUDA WMMA2 decodes IQ3_XXS, IQ3_S and IQ2_S gate/up weights in pairs.
+The coefficient is exact in FP16; multiplication by the block scale
+still rounds once. Tile selection, accumulation and IQ4_NL down are unchanged.
+
+On a V100-PCIE-16GB with CUDA 12.8, `pf_wmma_parity --bench` tested
+1280 × 2560 gate/up with 64 experts, in A/B/B/A order and 56 captured
+launches per shape per run. At 64 rows/expert the component times were
+0.790 → 0.709 ms for IQ3_XXS, 0.919 → 0.873 ms for IQ3_S and
+0.784 → 0.678 ms for IQ2_S. Across 2–256 rows the reduction was 3–16%.
+All 16 measured shapes matched bit for bit. Both tile orientations passed
+parity; an exhaustive sweep of finite FP16 block scales, codebook symbols
+and scale nibbles found no bit differences.
+
+On two V100-PCIE-16GB cards at 175 W, Unsloth UD-IQ3_XXS code/tool prompts
+without prefix reuse took 8.58 → 8.53 s at 15,381 tokens and 24.08 → 23.83 s
+at 53,148 tokens (three requests per build, matched starting temperatures).
+This is not a meaningful whole-model throughput gain.
+
+## Resident routing without diagnostic counters (2026-11-17)
+
+Resident routing skips before/after miss counts when diagnostics are
+off and leaves the IDs alone if no swap occurs. Selection and weights
+are unchanged. On both V100-PCIE-16GB cards (CUDA 12.8), a four-token
+captured call including ID reset took 8.59–8.75 → 8.41–8.52 µs for one
+tail rank and 16.24–16.48 → 16.09–16.20 µs for four. These are component
+times, not decode throughput.
 
 ## Optional CUDA host-copy DMA (2026-11-15)
 

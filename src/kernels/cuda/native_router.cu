@@ -277,12 +277,12 @@ __global__ void route_resident_k(const float* __restrict__ logits, int32_t* __re
     int32_t my[10];
     for (int r = 0; r < 10; ++r) my[r] = id[r];
     int swaps = 0, tail = 0, before = 0;
-    if (lane == 0)
+    if (stats && lane == 0)
         for (int r = 0; r < 10; ++r) before += res[my[r]] < 0;
     for (int r = lo; r <= hi && r < 10; ++r) {
         const int e = my[r];
         if (res[e] >= 0) continue;                      // already resident: uniform across the warp
-        if (lane == 0) ++tail;
+        if (stats && lane == 0) ++tail;
         float bv = -INFINITY;
         int bi = -1;
         for (int f = lane; f < 512; f += 32) {
@@ -302,7 +302,7 @@ __global__ void route_resident_k(const float* __restrict__ logits, int32_t* __re
         my[r] = __shfl_sync(0xffffffffu, my[r], 0);     // all lanes keep the same picked set
     }
     int after = 0;
-    if (lane == 0)
+    if (stats && lane == 0)
         for (int r = 0; r < 10; ++r) after += res[my[r]] < 0;
     const int sw = __shfl_sync(0xffffffffu, swaps, 0);
     if (sw) {
@@ -316,7 +316,8 @@ __global__ void route_resident_k(const float* __restrict__ logits, int32_t* __re
         if (lane < 10) weights[(size_t) t * 10 + lane] = ex[lane] / sum;
     }
     if (lane == 0) {
-        for (int r = 0; r < 10; ++r) id[r] = my[r];
+        if (sw)
+            for (int r = 0; r < 10; ++r) id[r] = my[r];
         if (stats) {
             atomicAdd(stats + 0, (unsigned long long) tail);
             atomicAdd(stats + 1, (unsigned long long) sw);
