@@ -22,6 +22,7 @@
 
 #include "ggml.h"
 
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -39,9 +40,42 @@ namespace {
 void ck(cudaError_t e, const char* what) {
     if (e != cudaSuccess) { std::fprintf(stderr, "%s: %s\n", what, cudaGetErrorString(e)); std::exit(1); }
 }
+
+int fp16_all_codes() {
+    constexpr int blocks = 256, vals = blocks * 64, bytes = blocks * 36;
+    uint8_t packed[bytes];
+    for (int b = 0; b < blocks; ++b) {
+        uint8_t* p = packed + b * 36;
+        for (int s = 0; s < 4; ++s) p[s] = (uint8_t) b;
+        for (int j = 0; j < 32; ++j)
+            p[4 + j] = (uint8_t) ((j & 7) | (((j & 7) + 8) << 4));
+    }
+    float ref[vals];
+    ggml_get_type_traits(GGML_TYPE_NVFP4)->to_float(packed, ref, vals);
+    uint8_t* src;
+    uint16_t* dst;
+    ck(cudaMalloc(&src, bytes), "NVFP4 input");
+    ck(cudaMalloc(&dst, vals * sizeof(*dst)), "FP16 output");
+    ck(cudaMemcpy(src, packed, bytes, cudaMemcpyHostToDevice), "upload");
+    k::iq_dequant_f16(40, src, vals, dst, nullptr);
+    uint16_t got[vals];
+    ck(cudaMemcpy(got, dst, sizeof(got), cudaMemcpyDeviceToHost), "download");
+    ck(cudaFree(dst), "free output");
+    ck(cudaFree(src), "free input");
+    int bad = 0;
+    for (int i = 0; i < vals; ++i)
+        bad += got[i] != __half_raw(__float2half_rn(ref[i])).x;
+    std::printf("NVFP4 FP16 expansion: %d values, %d bit mismatches\n", vals, bad);
+    return bad != 0;
+}
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::strcmp(argv[1], "--fp16-all-codes") == 0) {
+        int devices = 0;
+        if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0) return 77;
+        return fp16_all_codes();
+    }
     if (argc < 2) { std::fprintf(stderr, "usage: nvfp4_expert_gpu_parity pack/experts.bin [layer expert ...]\n"); return 2; }
     constexpr int64_t N = 2560, FF = 640;
     constexpr int T = 8;

@@ -3353,6 +3353,27 @@ template<typename dst_t>
 __device__ void dq_nvfp4(const void* vx, int64_t ibs, dst_t* yy, int tid) {
     const block_nvfp4* x = (const block_nvfp4*) vx + ibs * 4;
     const int b = tid / 8, part = tid % 8;
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700 && !defined(__HIPCC__)
+    if constexpr (std::is_same_v<dst_t, __half>) {
+        // UE4M3/2 is exactly representable in half. Use the CUDA nibble
+        // decoder once per word and multiply/store adjacent values together.
+        const int s = part >> 1;
+        const half2 scale = __float2half2_rn(ue4m3_to_f32_half(x[b].d[s]));
+        auto* out = reinterpret_cast<half2*>(yy + tid * 8);
+        const auto code = [&](int word) {
+            const int2 pair = get_int2_nvfp4(get_int_b4(x[b].qs, s * 2 + word));
+            return uint32_t((part & 1) ? pair.y : pair.x);
+        };
+#pragma unroll
+        for (int word = 0; word < 2; ++word) {
+            const uint32_t v = code(word);
+            const auto f = [&](int shift) { return float(int8_t(v >> shift)); };
+            out[2 * word] = __hmul2(scale, __floats2half2_rn(f(0), f(8)));
+            out[2 * word + 1] = __hmul2(scale, __floats2half2_rn(f(16), f(24)));
+        }
+        return;
+    }
+#endif
     for (int j = 0; j < 8; ++j) {
         const int i = part * 8 + j, s = i / 16, k = i % 16;
         const uint8_t byte = x[b].qs[s * 8 + (k & 7)];

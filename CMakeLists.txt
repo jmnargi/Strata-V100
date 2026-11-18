@@ -2089,6 +2089,8 @@ if(STRATA_NATIVE_EXPERTS)
   if(STRATA_ENABLE_CUDA)   # the NVFP4 decode kernels vs ggml's reference
     add_executable(nvfp4_expert_gpu_parity src/kernels/nvfp4_expert_gpu_parity.cpp)
     target_link_libraries(nvfp4_expert_gpu_parity PRIVATE strata_kernels ggml-base CUDA::cudart)
+    add_test(NAME nvfp4_fp16_expansion_parity COMMAND nvfp4_expert_gpu_parity --fp16-all-codes)
+    set_tests_properties(nvfp4_fp16_expansion_parity PROPERTIES SKIP_RETURN_CODE 77)
   endif()
   if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     add_executable(native_expert_parity src/kernels/native_expert_parity.cpp)

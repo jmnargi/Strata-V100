@@ -118,6 +118,14 @@ FP16's range.
 | `w4a4` | llama.cpp MMQ, Blackwell FP4 MMA (sm_120a only) | NVFP4 | 8.6% |
 | `fp16` | dequantize + cuBLAS FP16 GEMM | FP16 | reference |
 
+On CUDA sm_70 and newer, the FP16 path expands NVFP4 weights two
+values at a time. On the two V100-PCIE-16GB cards with CUDA 12.8,
+expanding 13.1 million values from the QAD pack took 182–201 µs
+before and 93–94 µs after (CUDA events, A/B/B/A, median of nine
+batches of 100 calls per run). The FP16 output matched byte for byte;
+all scale bytes and all E2M1 codes also matched ggml. This times only
+weight expansion, not the matrix multiply or model.
+
 `src/prefill/mmq_nvfp4_w4a8.cu` compiles mmq.cuh's int8 NVFP4 path with Blackwell's FP4 MMA hidden from both the
 device code and the host's tile config, so it is the same on every architecture; decode already multiplies at this
 precision. The FP4 MMA exists only in the arch-specific target, so `src/prefill/mmq_nvfp4_w4a4.cu` (the FP4 x FP4
