@@ -126,6 +126,14 @@ batches of 100 calls per run). The FP16 output matched byte for byte;
 all scale bytes and all E2M1 codes also matched ggml. This times only
 weight expansion, not the matrix multiply or model.
 
+On the same dual-V100 QAD setup with `STRATA_PREFILL_NVFP4=fp16`
+in both builds, a code/tool transcript ran twice per build in reverse
+order. Median engine prefill was 8.64 → 8.42 s at 7,739 new tokens
+(15,382 reused), 13.59 → 13.33 s at 15,383 fresh tokens, and
+31.90 → 31.32 s at 53,150 fresh tokens. Gains were 1.8–2.6% in
+prefill latency. Reply lengths differed, so these runs do not
+establish a decode or end-to-end speedup. W4A8 remains the default.
+
 `src/prefill/mmq_nvfp4_w4a8.cu` compiles mmq.cuh's int8 NVFP4 path with Blackwell's FP4 MMA hidden from both the
 device code and the host's tile config, so it is the same on every architecture; decode already multiplies at this
 precision. The FP4 MMA exists only in the arch-specific target, so `src/prefill/mmq_nvfp4_w4a4.cu` (the FP4 x FP4
