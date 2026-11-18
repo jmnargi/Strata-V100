@@ -562,8 +562,7 @@ bool kv_prefix_equal(const std::vector<const SavedConversation*>& stored,
 uint64_t content_common_prefix(const ConversationCheckpoint& content, const std::vector<int32_t>& ids,
                                const std::vector<ConversationImageKey>& images) {
     const size_t limit = std::min(content.ids.size(), ids.size());
-    size_t n = 0;
-    while (n < limit && content.ids[n] == ids[n]) ++n;
+    const size_t n = common_token_prefix(content.ids.data(), ids.data(), limit);
     if (n == 0) return 0;
     size_t j = 0;
     for (const auto& image : images) {

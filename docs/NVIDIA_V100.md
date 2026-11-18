@@ -2,12 +2,81 @@
 
 Upstream Strata's ready-made engine and support matrix start at compute capability 7.5 (RTX 20).
 A V100 (7.0) runs the same engine compiled for it. This fork publishes a Linux x86-64
-CUDA 12.8 `sm_70` engine in [release v0.1.45.8](https://github.com/jmnargi/Strata-V100/releases/tag/v0.1.45.8).
+CUDA 12.8 `sm_70` engine in [release v0.1.45.9](https://github.com/jmnargi/Strata-V100/releases/tag/v0.1.45.9).
 It is community-tested, not an upstream-supported build. The binary needs an AVX2 CPU
 and the CUDA 12 runtime libraries; it does not include models, the server or the vision encoder.
 It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.
 Build from source for other platforms or a mix of GPU architectures. The measurements
 below state their hardware and do not establish performance on every V100 system.
+
+## Optional register-fed IQ4_NL prompt down projection (2026-11-17)
+
+`STRATA_PF_WMMA_SKINNY=1` enables a CUDA sm_70 experiment on the WMMA2
+prompt path. It applies to IQ4_NL down projections only when the largest
+expert in the group has at most eight routed rows. The kernel decodes
+weights into registers and feeds `mma.m8n8k4` without a shared FP16
+weight tile. It changes the FP32 accumulation order, so it is not
+bit-identical. Leave the switch unset or at `0` for the original path.
+
+CUDA 12.8, two V100-PCIE-16GB cards, one 2560 × 640 projection with 16
+resident experts. Each card ran A/B/B/A, with seven timed graphs of eight
+launches per shape in each run. Median latency on each card:
+
+| Routed rows/expert | WMMA2 | Register-fed |
+| ---: | ---: | ---: |
+| 1 | 92 µs | 67 µs |
+| 2 | 92–93 µs | 69 µs |
+| 4 | 92–93 µs | 72 µs |
+| 8 | 93 µs | 82 µs |
+| 9 (WMMA2 fallback) | 93–94 µs | 93–94 µs |
+
+A separate 1/2/4/8-warp block sweep on both cards found eight warps
+fastest. At 1, 2, 4 and 8 rows/expert, the four-warp times above fell
+to 65, 66–67, 69 and 79 µs. One and two warps were slower than four.
+The kernel keeps four warps when the output width is not divisible by 256.
+
+Loading pairs of IQ4_NL blocks as aligned 32-bit words cuts those
+eight-warp times again, to 51, 52, 55 and 61–62 µs in A/B/B/A runs on
+both cards. The packed weights and accumulation order are unchanged
+from the original register-fed path. A direct expert stride that
+is not four-byte aligned keeps the original loads.
+
+Using a 16-entry nibble table instead of a 256-entry byte table on the
+aligned path brought these times to 50, 51, 53–54 and 59–60 µs. Staging
+the activations in shared memory lost (91–100 µs), even with the smaller
+table (89–97 µs). Both cards agreed on the ranking.
+
+These are component timings. Whole-model throughput and answer quality
+were not measured for this switch.
+
+## Packed prompt-expert dequantization (2026-11-17)
+
+CUDA WMMA2 decodes IQ3_XXS, IQ3_S and IQ2_S gate/up weights in pairs.
+The coefficient is exact in FP16; multiplication by the block scale
+still rounds once. Tile selection, accumulation and IQ4_NL down are unchanged.
+
+On a V100-PCIE-16GB with CUDA 12.8, `pf_wmma_parity --bench` tested
+1280 × 2560 gate/up with 64 experts, in A/B/B/A order and 56 captured
+launches per shape per run. At 64 rows/expert the component times were
+0.790 → 0.709 ms for IQ3_XXS, 0.919 → 0.873 ms for IQ3_S and
+0.784 → 0.678 ms for IQ2_S. Across 2–256 rows the reduction was 3–16%.
+All 16 measured shapes matched bit for bit. Both tile orientations passed
+parity; an exhaustive sweep of finite FP16 block scales, codebook symbols
+and scale nibbles found no bit differences.
+
+On two V100-PCIE-16GB cards at 175 W, Unsloth UD-IQ3_XXS code/tool prompts
+without prefix reuse took 8.58 → 8.53 s at 15,381 tokens and 24.08 → 23.83 s
+at 53,148 tokens (three requests per build, matched starting temperatures).
+This is not a meaningful whole-model throughput gain.
+
+## Resident routing without diagnostic counters (2026-11-17)
+
+Resident routing skips before/after miss counts when diagnostics are
+off and leaves the IDs alone if no swap occurs. Selection and weights
+are unchanged. On both V100-PCIE-16GB cards (CUDA 12.8), a four-token
+captured call including ID reset took 8.59–8.75 → 8.41–8.52 µs for one
+tail rank and 16.24–16.48 → 16.09–16.20 µs for four. These are component
+times, not decode throughput.
 
 ## Optional CUDA host-copy DMA (2026-11-15)
 

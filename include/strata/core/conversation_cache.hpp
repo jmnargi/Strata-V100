@@ -8,6 +8,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <type_traits>
 #include <deque>
 #include <utility>
 #include <vector>
@@ -372,6 +374,23 @@ int64_t conversation_prefix(const ConversationCheckpoint& c, const std::vector<T
     return (int64_t) n;
 }
 
+// Skip equal stretches with libc, then locate the first difference in
+// the one block that did not match.
+inline size_t common_token_prefix(const int32_t* a, const int32_t* b, size_t limit) {
+    if (limit == 0 || a[0] != b[0]) return 0;
+    constexpr size_t block = 256;
+    size_t n = 0;
+    while (limit - n >= block) {
+        if (std::memcmp(a + n, b + n, block * sizeof(*a)) != 0) {
+            limit = n + block;
+            break;
+        }
+        n += block;
+    }
+    while (n < limit && a[n] == b[n]) ++n;
+    return n;
+}
+
 /// The K/V extent this checkpoint's backing shares with `prompt`: the longest
 /// common token prefix below the last prompt token, with the image keys below it
 /// equal.  Unlike conversation_prefix it does not require the checkpoint to end
@@ -382,7 +401,10 @@ int64_t conversation_common_prefix(const ConversationCheckpoint& c, const std::v
                                    const std::vector<ConversationImageKey>& images) {
     const size_t limit = std::min(c.ids.size(), prompt.empty() ? size_t(0) : prompt.size() - 1);
     size_t n = 0;
-    while (n < limit && c.ids[n] == prompt[n]) ++n;
+    if constexpr (std::is_same_v<Token, int32_t>)
+        n = common_token_prefix(c.ids.data(), prompt.data(), limit);
+    else
+        while (n < limit && c.ids[n] == prompt[n]) ++n;
     size_t j = 0;
     for (const auto& image : images) {
         if (image.start >= (int64_t) n) continue;
@@ -499,8 +521,7 @@ public:
             const auto& b = checkpoint;
             const auto& shorter = a.ids.size() <= b.ids.size() ? a : b;
             const auto& longer = a.ids.size() <= b.ids.size() ? b : a;
-            const int64_t common = std::mismatch(shorter.ids.begin(), shorter.ids.end(), longer.ids.begin()).first -
-                                   shorter.ids.begin();
+            const int64_t common = common_token_prefix(shorter.ids.data(), longer.ids.data(), shorter.ids.size());
             const bool terminal_rewrite = common < (int64_t) shorter.ids.size();
             if (terminal_rewrite) {
                 // Only a generated reply may be replaced, and this image's own

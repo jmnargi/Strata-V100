@@ -5861,28 +5861,37 @@ __device__ __forceinline__ void w2_raw_st(const uint32_t (&R)[w2_nl<TY, RB>()], 
     }
 }
 
-// sub-block `sb` (0..7) of the IQ2_S super-block at rr -> 32 halves at o, natural order, bit for bit dq_iq2_s's values:
-// cvt<__half>(dl * grid[j] * +-1) with dl = d * (0.5 + scale) * 0.25 in FP32 (the sign flips the rounded half, which is the same)
-__device__ __forceinline__ float w2_b2f(uint32_t w, int j) { return __int_as_float(0x4B000000 | ((w >> 8 * j) & 0xff)) - 8388608.0f; }
+// Each grid byte times an odd block multiplier (1..31) is <= 1922. This integer and
+// its power-of-two rescaling are exact in FP16, so only the last multiply rounds.
+// Pack two bytes as 1024 + byte, then cancel the 1024 bias in the scale FMA.
+// PRMT interleaves the selected bytes with 0x64, the high byte of half(1024).
+__device__ __forceinline__ uint32_t w2_scale_pair(uint32_t w, int sel, half2 d, half2 mul, half2 bias) {
+    const half2 grid = w2_h2(__byte_perm(w, 0x64646464u, sel));
+    return w2_u32(__hmul2(d, __hfma2(grid, mul, bias)));
+}
+
+// IQ2_S sub-block: d * (0.5 + scale) * 0.25 * grid with its sign bit applied last.
 __device__ __forceinline__ void w2_dq_iq2_s(const uint8_t* rr, int sb, __half* o, const uint2* __restrict__ tab) {
     const uint2* sgn = tab + 1024;
     const uint32_t sc = rr[2 + 64 + 8 + sb], qh = rr[2 + 64 + sb];
     const uint32_t qs = w2_ld_b2(rr + 2 + 4 * sb), sg = w2_ld_b2(rr + 2 + 32 + 4 * sb);
-    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
-    const float dl0 = d * (0.5f + (float) (sc & 0xf)) * 0.25f;
-    const float dl1 = d * (0.5f + (float) (sc >> 4)) * 0.25f;
+    const half2 d = __half2half2(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
+    const half2 mul0 = __float2half2_rn(0.125f * (float) (1 + 2 * (sc & 15)));
+    const half2 mul1 = __float2half2_rn(0.125f * (float) (1 + 2 * (sc >> 4)));
+    const half2 neg_base = __float2half2_rn(-1024.0f);
+    const half2 bias0 = __hmul2(mul0, neg_base), bias1 = __hmul2(mul1, neg_base);
 #pragma unroll
     for (int il = 0; il < 4; ++il) {
-        const float dl = il < 2 ? dl0 : dl1;
+        const half2 mul = il < 2 ? mul0 : mul1, bias = il < 2 ? bias0 : bias1;
         const int idx = (int) (((qs >> 8 * il) & 0xff) | ((qh << (8 - 2 * il)) & 0x300));
         const uint2 gw = tab[idx];
         const uint32_t sbits = (sg >> 8 * il) & 0xff;
         const uint2 s0 = sgn[sbits & 15], s1 = sgn[sbits >> 4];
         uint4 out;
-        out.x = w2_u32(__floats2half2_rn(dl * w2_b2f(gw.x, 0), dl * w2_b2f(gw.x, 1))) ^ s0.x;
-        out.y = w2_u32(__floats2half2_rn(dl * w2_b2f(gw.x, 2), dl * w2_b2f(gw.x, 3))) ^ s0.y;
-        out.z = w2_u32(__floats2half2_rn(dl * w2_b2f(gw.y, 0), dl * w2_b2f(gw.y, 1))) ^ s1.x;
-        out.w = w2_u32(__floats2half2_rn(dl * w2_b2f(gw.y, 2), dl * w2_b2f(gw.y, 3))) ^ s1.y;
+        out.x = w2_scale_pair(gw.x, 0x4140, d, mul, bias) ^ s0.x;
+        out.y = w2_scale_pair(gw.x, 0x4342, d, mul, bias) ^ s0.y;
+        out.z = w2_scale_pair(gw.y, 0x4140, d, mul, bias) ^ s1.x;
+        out.w = w2_scale_pair(gw.y, 0x4342, d, mul, bias) ^ s1.y;
         *reinterpret_cast<uint4*>(o + 8 * il) = out;
     }
 }
@@ -5895,8 +5904,9 @@ __device__ __forceinline__ void w2_dq_iq3_xxs(const uint8_t* rr, int sb, __half*
                                               const uint2* __restrict__ sgn) {
     const uint32_t q0 = w2_ld_b2(rr + 2 + 8 * sb), q1 = w2_ld_b2(rr + 2 + 8 * sb + 4);
     const uint32_t aux = w2_ld_b2(rr + 2 + 64 + 4 * sb);
-    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
-    const float dl = d * (0.5f + (float) (aux >> 28)) * 0.5f;
+    const half2 d = __half2half2(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
+    const half2 mul = __float2half2_rn(0.25f * (float) (1 + 2 * (aux >> 28)));
+    const half2 bias = __hmul2(mul, __float2half2_rn(-1024.0f));
 #pragma unroll
     for (int il = 0; il < 4; ++il) {
         const uint32_t qw = il < 2 ? q0 : q1;
@@ -5906,10 +5916,10 @@ __device__ __forceinline__ void w2_dq_iq3_xxs(const uint8_t* rr, int sb, __half*
         const uint32_t signs = v ^ ((uint32_t) (__popc(v) & 1) << 7);
         const uint2 s0 = sgn[signs & 15], s1 = sgn[signs >> 4];
         uint4 out;
-        out.x = w2_u32(__floats2half2_rn(dl * w2_b2f(g0, 0), dl * w2_b2f(g0, 1))) ^ s0.x;
-        out.y = w2_u32(__floats2half2_rn(dl * w2_b2f(g0, 2), dl * w2_b2f(g0, 3))) ^ s0.y;
-        out.z = w2_u32(__floats2half2_rn(dl * w2_b2f(g1, 0), dl * w2_b2f(g1, 1))) ^ s1.x;
-        out.w = w2_u32(__floats2half2_rn(dl * w2_b2f(g1, 2), dl * w2_b2f(g1, 3))) ^ s1.y;
+        out.x = w2_scale_pair(g0, 0x4140, d, mul, bias) ^ s0.x;
+        out.y = w2_scale_pair(g0, 0x4342, d, mul, bias) ^ s0.y;
+        out.z = w2_scale_pair(g1, 0x4140, d, mul, bias) ^ s1.x;
+        out.w = w2_scale_pair(g1, 0x4342, d, mul, bias) ^ s1.y;
         *reinterpret_cast<uint4*>(o + 8 * il) = out;
     }
 }
@@ -5921,8 +5931,9 @@ __device__ __forceinline__ void w2_dq_iq3_s(const uint8_t* rr, int sb, __half* o
                                             const uint2* __restrict__ sgn) {
     const uint32_t q0 = w2_ld_b2(rr + 2 + 8 * sb), q1 = w2_ld_b2(rr + 2 + 8 * sb + 4);
     const uint32_t qh = rr[2 + 64 + sb], sc = rr[2 + 64 + 8 + 32 + (sb >> 1)];
-    const float d = __half2float(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
-    const float dl = d * (float) (1 + 2 * ((sc >> (4 * (sb & 1))) & 0x0f));
+    const half2 d = __half2half2(__ushort_as_half(*reinterpret_cast<const uint16_t*>(rr)));
+    const half2 mul = __float2half2_rn((float) (1 + 2 * ((sc >> (4 * (sb & 1))) & 0x0f)));
+    const half2 bias = __hmul2(mul, __float2half2_rn(-1024.0f));
 #pragma unroll
     for (int il = 0; il < 4; ++il) {
         const uint32_t qw = il < 2 ? q0 : q1;
@@ -5932,10 +5943,10 @@ __device__ __forceinline__ void w2_dq_iq3_s(const uint8_t* rr, int sb, __half* o
         const uint32_t signs = rr[2 + 64 + 8 + 4 * sb + il];
         const uint2 s0 = sgn[signs & 15], s1 = sgn[signs >> 4];
         uint4 out;
-        out.x = w2_u32(__floats2half2_rn(dl * w2_b2f(g0, 0), dl * w2_b2f(g0, 1))) ^ s0.x;
-        out.y = w2_u32(__floats2half2_rn(dl * w2_b2f(g0, 2), dl * w2_b2f(g0, 3))) ^ s0.y;
-        out.z = w2_u32(__floats2half2_rn(dl * w2_b2f(g1, 0), dl * w2_b2f(g1, 1))) ^ s1.x;
-        out.w = w2_u32(__floats2half2_rn(dl * w2_b2f(g1, 2), dl * w2_b2f(g1, 3))) ^ s1.y;
+        out.x = w2_scale_pair(g0, 0x4140, d, mul, bias) ^ s0.x;
+        out.y = w2_scale_pair(g0, 0x4342, d, mul, bias) ^ s0.y;
+        out.z = w2_scale_pair(g1, 0x4140, d, mul, bias) ^ s1.x;
+        out.w = w2_scale_pair(g1, 0x4342, d, mul, bias) ^ s1.y;
         *reinterpret_cast<uint4*>(o + 8 * il) = out;
     }
 }
@@ -6120,6 +6131,92 @@ bool w2_attrs_fit(int dev) {
     return ok;
 }
 
+// One warp handles eight routed rows by 32 outputs, as four independent 8x8 quad-pair tiles.
+// IQ4_NL weights go from their native row directly to MMA registers, with no FP16 weight tile.
+template <bool Paired>
+__global__ void w2_iq4_skinny(const uint8_t* W, size_t expert_bytes, size_t row_bytes, int K,
+                              const __half* X, int ldx, const int32_t* bounds, const int32_t* ids,
+                              float* Y, int ldy, bool indirect, GroupedWeightTable tbl) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+    const int e = blockIdx.y, first = bounds[e], rows = bounds[e + 1] - first;
+    if (!rows) return;
+    const int lane = threadIdx.x & 31, q = (lane >> 2) & 3;
+    const int mr = (lane & 3) | ((lane >> 2) & 4);
+    const int n0 = blockDim.x * blockIdx.x + 32 * (threadIdx.x >> 5) + 8 * q;
+    const int row = mr < rows ? (ids ? ids[first + mr] : first + mr) : 0;
+    const __half* x = X + (size_t) row * ldx;
+    const uint8_t* w = (indirect ? (const uint8_t*) tbl.dn[e] : W + (size_t) e * expert_bytes) +
+                       (size_t) (n0 + mr) * row_bytes;
+    __shared__ half2 lut[Paired ? 16 : 256];
+    for (int i = threadIdx.x; i < (Paired ? 16 : 256); i += blockDim.x) {
+        const __half lo = __int2half_rn(kvalues_iq4nl[i & 15]);
+        lut[i] = __halves2half2(lo, Paired ? lo : __int2half_rn(kvalues_iq4nl[i >> 4]));
+    }
+    __syncthreads();
+    float c[8] = {};
+    // Two 18-byte blocks fit nine aligned words. Word four holds the first
+    // block's final two codes and the second block's scale.
+    for (int k = 0; k < K; k += Paired ? 64 : 32, w += Paired ? 36 : 18) {
+        const auto* words = reinterpret_cast<const uint32_t*>(w);
+        uint32_t carry = Paired ? words[0] : 0;
+#pragma unroll
+        for (int b = 0; b < (Paired ? 2 : 1); ++b) {
+            const uint16_t scale = Paired ? uint16_t(b ? carry >> 16 : carry)
+                                          : *reinterpret_cast<const uint16_t*>(w);
+            const half2 d = __half2half2(__ushort_as_half(scale));
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                uint32_t codes;
+                if constexpr (Paired) {
+                    const uint32_t next = words[1 + j + 4 * b];
+                    codes = b ? next : __byte_perm(carry, next, 0x5432);
+                    carry = next;
+                } else {
+                    codes = w2_ld_b2(w + 2 + 4 * j);
+                }
+                auto lookup = [&](unsigned v) {
+                    if constexpr (Paired)
+                        return __halves2half2(__low2half(lut[v & 15]), __low2half(lut[(v >> 4) & 15]));
+                    else return lut[v & 255];
+                };
+                const half2 t0 = lookup(codes), t1 = lookup(codes >> 8);
+                const half2 t2 = lookup(codes >> 16), t3 = lookup(codes >> 24);
+#pragma unroll
+                for (int hi = 0; hi < 2; ++hi) {
+                    const uint2 a = mr < rows ? *reinterpret_cast<const uint2*>(x + k + 32 * b + 4 * j + 16 * hi)
+                                             : make_uint2(0, 0);
+                    const uint32_t b0 = w2_u32(__hmul2(d, hi ? __highs2half2(t0, t1) : __lows2half2(t0, t1)));
+                    const uint32_t b1 = w2_u32(__hmul2(d, hi ? __highs2half2(t2, t3) : __lows2half2(t2, t3)));
+                    asm volatile("mma.sync.aligned.m8n8k4.row.col.f32.f16.f16.f32 "
+                                 "{%0,%1,%2,%3,%4,%5,%6,%7}, {%8,%9}, {%10,%11}, {%0,%1,%2,%3,%4,%5,%6,%7};"
+                                 : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3]), "+f"(c[4]), "+f"(c[5]), "+f"(c[6]), "+f"(c[7])
+                                 : "r"(a.x), "r"(a.y), "r"(b0), "r"(b1));
+                }
+            }
+        }
+    }
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+        const int r = (i & 2) | ((lane >> 2) & 4) | (lane & 1);
+        const int col = (i & 1) | (lane & 2) | ((i >> 2) * 4);
+        if (r < rows) Y[(size_t) (first + r) * ldy + n0 + col] = c[i];
+    }
+#endif
+}
+
+bool w2_skinny_on(int dev) {
+    static const bool on = [] { const char* e = std::getenv("STRATA_PF_WMMA_SKINNY"); return e && e[0] == '1'; }();
+    if (!on) return false;
+    static thread_local int arch[64] = {};
+    if (!arch[dev]) {
+        int major = 0, minor = 0;
+        cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
+        cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev);
+        arch[dev] = major == 7 && minor == 0 ? 1 : -1;
+    }
+    return arch[dev] == 1;
+}
+
 bool w2_on() {
     static const bool v = [] { const char* e = std::getenv("STRATA_PF_WMMA2"); return e && e[0] == '1'; }();
     return v;
@@ -6210,6 +6307,20 @@ bool gemm_iq_f16_grouped(int ty, const void* W, size_t expert_bytes, int n_out, 
     // The tile is stricter than the generic ones (w2_select's comment); a caller that misses one of those keeps
     // them.
     if (w2_on() && w2_select(ty, K, ldx, ldy, W, X, Y, n_experts, indirect, down, (caps & 256u) != 0)) {
+        if (ty == 20 && max_rows <= 8 && w2_skinny_on(dev)) {
+            // Eight warps won on the 2560-output projection. Keep four when an eight-warp block
+            // would leave a partial output tile; the grouped entry point requires a multiple of 128.
+            const int threads = n_out % 256 == 0 ? 256 : 128;
+            const dim3 grid(n_out / threads, n_experts);
+            // W2 checks base/table alignment and K % 128 (a four-byte row stride).
+            if (indirect || expert_bytes % 4 == 0)
+                w2_iq4_skinny<true><<<grid, threads, 0, s>>>(w, expert_bytes, row_bytes, K, x, ldx, bounds, ids, Y, ldy,
+                                                               indirect != nullptr, tbl);
+            else
+                w2_iq4_skinny<false><<<grid, threads, 0, s>>>(w, expert_bytes, row_bytes, K, x, ldx, bounds, ids, Y, ldy,
+                                                                indirect != nullptr, tbl);
+            return cudaGetLastError() == cudaSuccess;
+        }
         const bool n64 = w2_n64_on(max_rows);
         if (ty == 22) return w2_launch<22>(n64, w, expert_bytes, row_bytes, K, x, ldx, bounds, ids, max_rows, Y, ldy,
                                            wsrc, tbl, n_out, n_experts, s);

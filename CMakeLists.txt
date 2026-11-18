@@ -7,7 +7,7 @@
 # CUDA builds require compute capability 7.0 or newer.  Optional kernels with newer ISA requirements are
 # selected below so a binary never contains instructions its target GPU cannot execute.
 cmake_minimum_required(VERSION 3.24)
-project(strata VERSION 0.1.45.8 LANGUAGES CXX)
+project(strata VERSION 0.1.45.9 LANGUAGES CXX)
 # EXPERIMENTAL: the Intel Arc engine, the SYCL port in sycl/ (PR #423; icpx + oneMKL, docs/INTEL_ARC.md). It is its
 # own project that takes the unported sources from src/; with this on, nothing below is configured.
 option(STRATA_ENABLE_SYCL "EXPERIMENTAL: build the Intel Arc (SYCL) engine from sycl/ - docs/INTEL_ARC.md" OFF)
@@ -1104,6 +1104,8 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
     set_tests_properties(pf_wmma2_parity PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "STRATA_PF_WMMA2=1;STRATA_PF_WMMA2_N64=0")
     add_test(NAME pf_wmma2_n64_parity COMMAND pf_wmma_parity --wmma2)
     set_tests_properties(pf_wmma2_n64_parity PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "STRATA_PF_WMMA2=1;STRATA_PF_WMMA2_N64=1")
+    add_test(NAME pf_wmma_skinny_parity COMMAND pf_wmma_parity --skinny)
+    set_tests_properties(pf_wmma_skinny_parity PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT "STRATA_PF_WMMA2=1;STRATA_PF_WMMA_SKINNY=1")
   endif()
   add_executable(shared_expert_parity src/kernels/shared_expert_parity.cpp)
   target_include_directories(shared_expert_parity PRIVATE ${_strata_gpu_include_directories})

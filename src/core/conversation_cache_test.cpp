@@ -648,6 +648,19 @@ void test_retiring_capture_borrows_backing() {
 }
 
 int main() {
+    {
+        ConversationCheckpoint checkpoint;
+        checkpoint.ids.resize(800, 42);
+        auto prompt = checkpoint.ids;
+        for (size_t at : {0u, 255u, 256u, 257u, 767u, 798u}) {
+            prompt[at] = 43;
+            check(conversation_common_prefix(checkpoint, prompt, {}) == (int64_t) at,
+                  "long prefix ends exactly at the changed token");
+            prompt[at] = 42;
+        }
+        check(conversation_common_prefix(checkpoint, prompt, {}) == 799,
+              "long exact match still excludes the last prompt token");
+    }
     test_root_priority();
     test_shared_prefix();
     test_prefix_trim();

@@ -9,6 +9,11 @@ This page is the measurement record. The complete reference for each setting is 
 endpoints](SERVER.md), [terminal commands](TERMINAL.md), and [performance tuning](TUNING.md). The
 [docs index](README.md) lists every page and its purpose.
 
+Conversation-cache lookup skips equal token blocks with the platform's
+byte comparison. On a Ryzen 5 3600, a warm 131,072-token exact match took
+about 11 µs instead of 35 µs per candidate. This is CPU lookup time, not
+prefill throughput; cache selection and image checks are unchanged.
+
 > **On this page**
 >
 > - **Changes:** [v0.1.36](#upstream-v0136-in-the-v100-fork) · [v0.1.39](#upstream-v0139-in-the-v100-fork) ·
