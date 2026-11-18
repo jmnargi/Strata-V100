@@ -26,24 +26,30 @@ SuffixDrafter::SuffixDrafter(int min_match, int max_match, size_t capacity_token
 
 void SuffixDrafter::reset() {
     hist_.clear();
-    std::fill(table_.begin(), table_.end(), Slot{});
+    // A reset invalidates the index without writing the whole table. Clear stamps before reusing an epoch.
+    if (++epoch_ == 0) {
+        std::fill(table_.begin(), table_.end(), Slot{});
+        epoch_ = 1;
+    }
     last_match_ = 0;
 }
 
 uint64_t SuffixDrafter::key_at(size_t end) const {
     const uint64_t a = (uint32_t) hist_[end - 2], b = (uint32_t) hist_[end - 1], c = (uint32_t) hist_[end];
-    return mix(a * 0x9E3779B97F4A7C15ull ^ mix(b + 0x632BE59BD9B4E019ull) ^ (c << 1)) | 1ull;   // never 0
+    return mix(a * 0x9E3779B97F4A7C15ull ^ mix(b + 0x632BE59BD9B4E019ull) ^ (c << 1)) | 1ull;
 }
 
 SuffixDrafter::Slot* SuffixDrafter::find_slot(uint64_t key, bool insert) {
     for (size_t i = key & mask_, probes = 0; probes <= mask_; i = (i + 1) & mask_, ++probes) {
         Slot& s = table_[i];
-        if (s.key == key) return &s;
-        if (s.key == 0) {
+        if (s.epoch != epoch_) {
             if (!insert) return nullptr;
             s.key = key;
+            s.n = 0;
+            s.epoch = epoch_;
             return &s;
         }
+        if (s.key == key) return &s;
     }
     return nullptr;                                         // table full: the history outgrew its capacity
 }
