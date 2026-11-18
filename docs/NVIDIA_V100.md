@@ -19,6 +19,24 @@ reset plus rebuild at 2K/32K/128K/512K tokens: **5.65–5.69 / 7.08–7.14 /
 26.98–27.01 ms** after. This measures the host index only, not prompt or decode
 throughput.
 
+## Optional register prefetch for int8 prompt attention (2026-11-18)
+
+`STRATA_PA_V70_PREFETCH=1` lets Volta fetch the next int8 K/V tile into
+registers before computing the current tile, adapting
+[Basalt's decode prefetch](https://github.com/jesdga95/basalt/commit/72f5f753c7)
+to Strata's sparse **prompt** attention. It does not change the attention
+arithmetic or the decode kernel. Unset or `0` uses the original path.
+
+On one Tesla V100-PCIe-16GB, synthetic 256-query attention batches at
+2K and 32K context took **1.773–1.811 → 1.626–1.654 ms** and
+**2.000–2.009 → 1.795–1.797 ms**, respectively. Attention parity passed
+and output checksums matched. Whole-model tests on two V100s with
+UD-IQ3_XXS, 384-token greedy replies and generated code/text prompts did
+not show a meaningful gain: warm median prefill **1,093 → 1,090 tok/s**
+at 2K and **2,327 → 2,314 tok/s** at 32K. Greedy replies already varied
+between identical requests in the baseline, so only the kernel was
+verified bit-for-bit.
+
 ## Optional register-fed IQ4_NL prompt down projection (2026-11-17)
 
 `STRATA_PF_WMMA_SKINNY=1` enables a CUDA sm_70 experiment on the WMMA2

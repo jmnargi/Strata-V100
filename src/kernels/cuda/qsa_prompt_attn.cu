@@ -1558,7 +1558,7 @@ struct Smem70 : Smem70TqCent<KV_MODE> {
     long long row[2][CH];        // double-buffered pool rows: the next chunk's lookups hide under p.v
 };
 
-template <int KV_MODE>
+template <int KV_MODE, bool PREFETCH = false>
 __global__ void __launch_bounds__(THREADS) prompt_attn_v70_kernel(const float* __restrict__ q, QsaAttnPools p,
                                                                   const int32_t* __restrict__ ids,
                                                                   const int32_t* __restrict__ steps, int n_kv_heads,
@@ -1615,22 +1615,46 @@ __global__ void __launch_bounds__(THREADS) prompt_attn_v70_kernel(const float* _
 #pragma unroll
             for (int i = 0; i < 8; ++i) acc[rb][nt][i] = 0.0f;
 
-    // the pool rows of a chunk: -1 past the selection and for a page the KV streaming left non-resident (the
-    // decode kernel masks those, so this kernel does too).  Chunk 0's rows fill one buffer here; every later
-    // chunk's lookups fill the other just before the previous p.v, where their global latency hides.
+    // Cache pool rows for the current and next tile; -1 pads the last tile.
     int rbuf = 0;
-    if (t < CH) {
+    constexpr int I8_PIECES = HD / 16;
+    constexpr int I8_PER_THREAD = CH * I8_PIECES / THREADS;
+    static_assert(!PREFETCH || KV_MODE == 1, "this staging layout is for int8 KV");
+    uint4 next_k[I8_PER_THREAD], next_v[I8_PER_THREAD];
+    const auto fetch_i8 = [&](int buf) {
+#pragma unroll
+        for (int s = 0; s < I8_PER_THREAD; ++s) {
+            const int i = t + s * THREADS;
+            const long long row = S.row[buf][i / I8_PIECES];
+            const int piece = i % I8_PIECES;
+            next_k[s] = row >= 0 ? __ldg(reinterpret_cast<const uint4*>(p.k_q + row * HD) + piece)
+                                  : make_uint4(0, 0, 0, 0);
+            next_v[s] = row >= 0 ? __ldg(reinterpret_cast<const uint4*>(p.v_q + row * HD) + piece)
+                                  : make_uint4(0, 0, 0, 0);
+        }
+    };
+    const auto stage_rows = [&](int start, int buf) {
+        if (t >= CH) return;
         long long r = -1;
-        if (t < min(CH, n)) {
-            const int cell = ids[t];
+        if (start + t < n) {
+            const int cell = ids[start + t];
             const long long page = (long long) p.page_table[cell / page_size];
             r = (page * n_kv_heads + kvh) * page_size + (cell % page_size);
         }
-        S.row[0][t] = r;
+        S.row[buf][t] = r;
+    };
+    stage_rows(0, 0);
+    if constexpr (PREFETCH) {
+        __syncthreads();
+        if (n > 0) fetch_i8(0);
     }
     for (int c0 = 0; c0 < n; c0 += CH, rbuf ^= 1) {
         const int nh = min(CH, n - c0);
         __syncthreads();   // rows ready; the previous chunk's p.v is done with k, v
+        const bool more = c0 + CH < n;
+        if constexpr (PREFETCH) {
+            if (more) stage_rows(c0 + CH, rbuf ^ 1);
+        }
         // gather the chunk's K and V rows (16-byte pieces; K8V4's V as q4_0 blocks dequantized to fp16)
         // and their scales
         {
@@ -1655,6 +1679,14 @@ __global__ void __launch_bounds__(THREADS) prompt_attn_v70_kernel(const float* _
                         case 6: tq_row_group_f16<6>(p, side != 0, r, j, S.cent, dst); break;
                         default: tq_row_group_f16<8>(p, side != 0, r, j, S.cent, dst); break;
                     }
+                }
+            } else if constexpr (PREFETCH) {
+#pragma unroll
+                for (int s = 0; s < I8_PER_THREAD; ++s) {
+                    const int i = t + s * THREADS;
+                    const int c = i / I8_PIECES, d = i % I8_PIECES * 16;
+                    *reinterpret_cast<uint4*>(&S.k[c][d]) = next_k[s];
+                    *reinterpret_cast<uint4*>(&S.v[c][d]) = next_v[s];
                 }
             } else {
             constexpr int KPIECES = HD * (int) sizeof(typename Smem<KV_MODE>::KElem) / 16;   // per K row
@@ -1751,6 +1783,10 @@ __global__ void __launch_bounds__(THREADS) prompt_attn_v70_kernel(const float* _
             }
         }
         __syncthreads();
+        // Issue the next tile's K/V loads before this tile's tensor-core work.
+        if constexpr (PREFETCH) {
+            if (more) fetch_i8(rbuf ^ 1);
+        }
         // scores: warp w = dim group w (64 dims), QP q = cells 8q..8q+7. The hi and lo halves of q accumulate in
         // separate m8n8k4 chains (tg, tgl), added in FP32 at the end: Volta's tensor cores truncate as they
         // accumulate, and in one chain behind the hi products most of the lo half was lost (error vs FP64 at 32K
@@ -1896,16 +1932,8 @@ __global__ void __launch_bounds__(THREADS) prompt_attn_v70_kernel(const float* _
                         acc[rb][nt][i] = fmaf(acc[rb][nt][i], a_[(i >> 1) & 1], (tmp[rb][nt][i] + tmpl[rb][nt][i]) * vdown);
             }
         }
-        // the next chunk's pool rows, into the other buffer: the two global lookups per cell hide under p.v
-        if (c0 + CH < n && t < CH) {
-            long long r = -1;
-            const int idx = c0 + CH + t;
-            if (idx < n) {
-                const int cell = ids[idx];
-                const long long page = (long long) p.page_table[cell / page_size];
-                r = (page * n_kv_heads + kvh) * page_size + (cell % page_size);
-            }
-            S.row[rbuf ^ 1][t] = r;
+        if constexpr (!PREFETCH) {
+            if (more) stage_rows(c0 + CH, rbuf ^ 1);
         }
     }
     __syncthreads();
@@ -1929,7 +1957,7 @@ __global__ void __launch_bounds__(THREADS) prompt_attn_v70_kernel(const float* _
         }
 }
 
-template <int KV_MODE>
+template <int KV_MODE, bool PREFETCH = false>
 bool launch70(const float* q, const QsaAttnPools& pools, const int32_t* ids, const int32_t* steps, int64_t cap,
               const QsaShapes& s, float* attn, int64_t n_q, cudaStream_t st) {
     static bool attr[64] = {};
@@ -1938,8 +1966,8 @@ bool launch70(const float* q, const QsaAttnPools& pools, const int32_t* ids, con
     const int bytes = (int) sizeof(Smem70<KV_MODE>);
     if (dev < 0 || dev >= 64) return false;
     if (!attr[dev]) {
-        if (cudaFuncSetAttribute(prompt_attn_v70_kernel<KV_MODE>, cudaFuncAttributeMaxDynamicSharedMemorySize, bytes) !=
-            cudaSuccess) {
+        if (cudaFuncSetAttribute(prompt_attn_v70_kernel<KV_MODE, PREFETCH>, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                 bytes) != cudaSuccess) {
             cudaGetLastError();
             return false;
         }
@@ -1948,7 +1976,7 @@ bool launch70(const float* q, const QsaAttnPools& pools, const int32_t* ids, con
     const float scale_log2 = 1.4426950408889634f / sqrtf((float) HD);
     for (int64_t q0 = 0; q0 < n_q; q0 += 65535) {
         const int64_t nb = n_q - q0 < 65535 ? n_q - q0 : 65535;
-        prompt_attn_v70_kernel<KV_MODE><<<dim3((unsigned) nb, (unsigned) s.n_head_kv), THREADS, bytes, st>>>(
+        prompt_attn_v70_kernel<KV_MODE, PREFETCH><<<dim3((unsigned) nb, (unsigned) s.n_head_kv), THREADS, bytes, st>>>(
             q + q0 * s.n_head * HD, pools, ids + q0 * cap, steps + q0 * kStepCount, (int) s.n_head_kv,
             (int) s.page_size, scale_log2, attn + q0 * s.n_head * HD, (int) cap);
     }
@@ -1960,7 +1988,7 @@ bool launch70(const float* q, const QsaAttnPools& pools, const int32_t* ids, con
     return true;
 }
 #else   // AMD: no m8n8k4 kernel; the caller keeps the old one
-template <int KV_MODE>
+template <int KV_MODE, bool PREFETCH = false>
 bool launch70(const float*, const QsaAttnPools&, const int32_t*, const int32_t*, int64_t, const QsaShapes&, float*,
               int64_t, cudaStream_t) {
     return false;
@@ -2496,7 +2524,14 @@ bool qsa_prompt_attn_batch(const float* q, const QsaAttnPools& pools, const int3
         // for how far the model amplifies an FP32-level change.  Turing always takes it: v2's cp.async does not
         // exist before sm_80.
         static const bool v1 = std::getenv("STRATA_PROMPT_ATTN_V1") != nullptr;
-        if (volta) return launch70<1>(q, pools, ids, steps, cap, s, attn, n_q, st);
+        if (volta) {
+            static const bool prefetch = [] {
+                const char* v = std::getenv("STRATA_PA_V70_PREFETCH");
+                return v && v[0] == '1';
+            }();
+            if (prefetch) return launch70<1, true>(q, pools, ids, steps, cap, s, attn, n_q, st);
+            return launch70<1>(q, pools, ids, steps, cap, s, attn, n_q, st);
+        }
         // Turing: v2 with register staging instead of cp.async, opt-in (STRATA_PA_V2T=1) until measured
         static const bool v2t = [] { const char* e = std::getenv("STRATA_PA_V2T"); return e != nullptr && e[0] == '1'; }();
         if (v1 || (turing && !v2t)) {
