@@ -42,9 +42,10 @@ public:
 
 private:
     struct Slot {
-        uint64_t key = 0;             // trigram hash + 1 (0 = empty)
+        uint64_t key = 0;             // trigram hash; valid only in the current epoch
         uint32_t pos[WAYS] = {};      // end positions, most recent first
         uint8_t n = 0;
+        uint16_t epoch = 0;
     };
     Slot* find_slot(uint64_t key, bool insert);
     uint64_t key_at(size_t end) const;
@@ -52,6 +53,7 @@ private:
     int min_match_, max_match_;
     std::vector<int32_t> hist_;
     std::vector<Slot> table_;
+    uint16_t epoch_ = 1;
     size_t mask_ = 0;
     int last_match_ = 0;
 };

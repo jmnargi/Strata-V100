@@ -111,6 +111,18 @@ void unit_tests() {
         int32_t out[4];
         check(d.propose(4, out) > 0, "propose after overflow of nominal capacity");
     }
+    {   // A full old index must not block insertion after a reset, even when its epoch rolls over.
+        for (int resets : {1, 65535}) {
+            SuffixDrafter d(3, 32, 8);
+            for (int32_t i = 100; i < 200; ++i) d.append(i);
+            for (int i = 0; i < resets; ++i) d.reset();
+            const int32_t doc[] = {1, 2, 3, 4, 5, 1, 2, 3};
+            d.append(doc, 8);
+            int32_t out[2] = {};
+            check(d.propose(2, out) == 2 && out[0] == 4 && out[1] == 5,
+                  "reset allows new suffix matches, including after epoch rollover");
+        }
+    }
     {
         // --lookup-chain: the match continues from the drafts appended to the history, which stays unchanged
         SuffixDrafter d(3, 32, 256);

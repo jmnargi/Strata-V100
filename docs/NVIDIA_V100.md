@@ -9,6 +9,16 @@ It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.
 Build from source for other platforms or a mix of GPU architectures. The measurements
 below state their hardware and do not establish performance on every V100 system.
 
+## Suffix lookup index reset (2026-11-18)
+
+Suffix lookup now marks each index entry with the history it belongs to instead
+of clearing the table on every reset. A paired CPU microbenchmark (Ryzen 5 3600,
+524,288-token context plus 4,096 tokens of headroom, generated token IDs) measured
+reset plus rebuild at 2K/32K/128K/512K tokens: **5.65–5.69 / 7.08–7.14 /
+11.69–11.82 / 31.91–32.11 ms** before, **0.017 / 0.365–0.366 / 6.025–6.032 /
+26.98–27.01 ms** after. This measures the host index only, not prompt or decode
+throughput.
+
 ## Optional register-fed IQ4_NL prompt down projection (2026-11-17)
 
 `STRATA_PF_WMMA_SKINNY=1` enables a CUDA sm_70 experiment on the WMMA2
