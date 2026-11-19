@@ -295,7 +295,7 @@ absent variable as enabled. `engine default` means a value the code computes.
 | `STRATA_RESIDENT_PIN` | on | pin the resident copy; `0` keeps it pageable |
 | `STRATA_STAGE_PIN` | engine default (off) | pin the staging buffers; `1` = on, `0` = off |
 | `STRATA_DEFERRED_REGISTER` | off | defer the arena registration to its first use (RTX 5070, Windows) |
-| `STRATA_UNBUFFERED_LOAD` | engine default | force unbuffered loading on or off, as on Windows |
+| `STRATA_UNBUFFERED_LOAD` | Windows: automatic; Linux: off | `1` forces unbuffered loading. On Linux this applies to an aligned, packed `experts.bin` arena; unsupported or unaligned reads use the file cache. `0` forces buffered loading. |
 | `STRATA_STARTUP_UNBUFFERED` | on | read the startup fill unbuffered; `0` reads through the mapping |
 | `STRATA_DROP_CACHE_ON_EXIT` | off | release the model's file pages when the engine stops |
 | `STRATA_FILE_RELEASE` | engine default | release a file's pages after its last read |

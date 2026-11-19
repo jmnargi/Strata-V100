@@ -665,7 +665,7 @@ LoadStats load_experts_direct(const std::string& path, uint8_t* dst, const std::
                               const std::atomic<int>* ready) {
     LoadStats st;
     st.ok = false;
-#ifdef _WIN32
+#if defined(_WIN32) || defined(O_DIRECT)
     constexpr uint64_t kAlign = 4096;
     if (((uintptr_t) dst % kAlign) != 0 || chunk == 0 || chunk % kAlign != 0) return st;
     struct Piece { uint64_t off, n; int layer; };
@@ -682,10 +682,20 @@ LoadStats load_experts_direct(const std::string& path, uint8_t* dst, const std::
     std::atomic<size_t> next{0};
     std::mutex err_mu;
     std::string err;
+#ifdef _WIN32
     const int wide = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
     std::vector<wchar_t> wpath((size_t) (std::max)(wide, 1), L'\0');
     if (wide > 0) MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wide);
+#else
+    const int fd = open(path.c_str(), O_RDONLY | O_DIRECT | O_CLOEXEC);
+    if (fd < 0) {
+        if (errno != EINVAL && errno != EOPNOTSUPP) st.error = "cannot open " + path + ": " + std::strerror(errno);
+        return st;
+    }
+    std::atomic<bool> unsupported{false};
+#endif
     auto worker = [&]() {
+#ifdef _WIN32
         HANDLE h = CreateFileW(wpath.data(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                                FILE_FLAG_NO_BUFFERING | FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
         if (h == INVALID_HANDLE_VALUE) {
@@ -695,11 +705,13 @@ LoadStats load_experts_direct(const std::string& path, uint8_t* dst, const std::
             next = pieces.size();
             return;
         }
+#endif
         for (;;) {
             const size_t i = next.fetch_add(1);
             if (i >= pieces.size()) break;
             if (ready != nullptr)      // the slice must be registered before its pages are touched
                 while (ready->load(std::memory_order_acquire) <= pieces[i].layer + 1) std::this_thread::yield();
+#ifdef _WIN32
             OVERLAPPED ov{};
             ov.Offset = (DWORD) pieces[i].off;
             ov.OffsetHigh = (DWORD) (pieces[i].off >> 32);
@@ -713,13 +725,40 @@ LoadStats load_experts_direct(const std::string& path, uint8_t* dst, const std::
                 next = pieces.size();
                 break;
             }
+#else
+            const Piece& piece = pieces[i];
+            ssize_t got;
+            do {
+                got = pread(fd, dst + piece.off, piece.n, static_cast<off_t>(piece.off));
+            } while (got < 0 && errno == EINTR);
+            if (got < 0 && (errno == EINVAL || errno == EOPNOTSUPP)) {
+                unsupported = true;
+                next = pieces.size();
+                break;
+            }
+            if (got < 0 || static_cast<uint64_t>(got) != piece.n) {
+                const int cause = errno;
+                std::lock_guard<std::mutex> g(err_mu);
+                if (err.empty())
+                    err = "unbuffered read at offset " + std::to_string(piece.off) + ": " +
+                          (got < 0 ? std::strerror(cause) : "short read");
+                next = pieces.size();
+                break;
+            }
+#endif
         }
+#ifdef _WIN32
         CloseHandle(h);
+#endif
     };
     std::vector<std::thread> pool;
     for (int i = 1; i < threads; ++i) pool.emplace_back(worker);
     worker();
     for (auto& t : pool) t.join();
+#ifndef _WIN32
+    close(fd);
+    if (unsupported && err.empty()) return st;
+#endif
     st.layers = layer_off.size();
     if (!err.empty()) {
         st.seconds = -1.0;

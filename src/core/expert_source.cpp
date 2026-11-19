@@ -5485,15 +5485,22 @@ bool ArenaExpertSource::open(const std::string& pack_dir, int64_t n_layers, int6
         });
     }
     const std::atomic<int>* rp = deferred ? &ready : nullptr;
+    bool used_direct = false;
     if (from_gguf) {
         st = load_experts_gguf(gguf_, a->data(), lay, readers, unbuffered, rp, padded_ ? &pad_ : nullptr);
+#ifdef _WIN32
+        used_direct = unbuffered;
+#endif
     } else {
-        if (unbuffered && !padded_) st = load_experts_direct(path, a->data(), loff, lbytes, readers, /*chunk=*/8u << 20, rp);
+        if (unbuffered && !padded_) {
+            st = load_experts_direct(path, a->data(), loff, lbytes, readers, /*chunk=*/8u << 20, rp);
+            used_direct = st.ok;
+        }
         if (!unbuffered || padded_ || (!st.ok && st.error.empty()))   // unaligned ranges / the padded layout: the buffered reader
             st = load_experts_ranges(path, a->data(), loff, lbytes, threads, /*chunk=*/8u << 20, rp, padded_ ? &pad_ : nullptr);
     }
     if (reg.joinable()) reg.join();
-    std::fprintf(stderr, "strata generate: expert arena read %s (%s)\n", unbuffered ? "unbuffered" : "through the file cache",
+    std::fprintf(stderr, "strata generate: expert arena read %s (%s)\n", used_direct ? "unbuffered" : "through the file cache",
                  why.c_str());
     if (!st.ok) {
         delete a;
