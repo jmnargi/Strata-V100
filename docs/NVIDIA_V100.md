@@ -9,6 +9,36 @@ It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.
 Build from source for other platforms or a mix of GPU architectures. The measurements
 below state their hardware and do not establish performance on every V100 system.
 
+## Hy4-Flash Maya-S
+
+Hy4-Flash uses a separate, opt-in `strata-hy4` CUDA engine. It does not change
+the Qwen engine or its V100 settings. The Hy4 engine and its Volta tensor-core
+expert kernels come from [Project Maya](https://github.com/mw00/project-maya/tree/7a18c827ff9daeafba43244346548a66367482b5).
+
+```sh
+cmake -S . -B build-hy4 -DSTRATA_ENABLE_CUDA=ON -DSTRATA_BUILD_HY4=ON -DCMAKE_CUDA_ARCHITECTURES=70
+cmake --build build-hy4 --target strata-hy4
+python tools/hy4/pack_gguf.py --model /path/to/Maya-S
+```
+
+Keep both Maya-S GGUF shards in that folder. The pack indexes the weights in
+place instead of copying them; the 63 GB Engram table stays on the SSD.
+To serve text through Strata's API, save this configuration with absolute paths:
+
+```json
+{
+  "exe": "/path/to/strata-v100/build-hy4/strata-hy4",
+  "args": ["--pack", "/path/to/Maya-S/maya-hy4", "--gpus", "0,1",
+           "--max-context", "32768", "--vision", "off"],
+  "tokenizer": "/path/to/Maya-S/maya-hy4/tokenizer",
+  "model_name": "hy4-flash-maya-s"
+}
+```
+
+Start it with `python -m serve.server --engine strata --config hy4.json --port 8091`.
+Use the Hy4 engine's own options, not the Qwen engine's `--spec`, KV or pipeline
+flags. The Maya-S DFlash2 file is not used by this engine.
+
 ## Two cards, one request: what the layer split costs (2026-11-18)
 
 [sfnx](https://github.com/johnfink8/sfnx) is a separate engine for this same model
