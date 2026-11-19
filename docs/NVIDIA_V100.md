@@ -106,6 +106,55 @@ drafts were not accepted on this prompt: it rewards text that repeats, and a syn
 not. The tail skip is inside the spread. The device plan, the 4-bit draft copies, a longer MTP window
 and a wider cap are not wins.
 
+A second paired sweep (same prompt and method, two pairs an arm) found nothing above production
+either:
+
+| arm | decode tok/s, pair 1 / 2 |
+| --- | ---: |
+| production | 108.8 / 114.2 and 116.2 / 101.2 |
+| `STRATA_SPLIT_RING=384` | 95.6 / 93.8 |
+| `STRATA_SPLIT_RING=512` | 109.0 / 104.8 |
+| `STRATA_EXPERT_PAIR=1` | 106.1 / 99.1 |
+| `STRATA_HC_SPLIT=1` | 102.5 / 105.3 |
+| `STRATA_MTP_BATCH_F16=1` | 110.7 / 102.1 |
+| `--spec 3` (a 5-row window) | 96.4 / 96.3 |
+
+`--spec 3` is 11 % slower: the draft chain's length is not what costs the window, and a shorter chain
+loses more acceptance than it saves. The streamed ring is already at its best size (384 is 14 %
+worse in both pairs), which is why `STRATA_SPLIT_RING=192` stays in `99-dual-gpu.conf`.
+
+The cap is also at its floor. `STRATA_VERIFY_ECAP=14` refuses to start: "cannot serve a 6-token
+window: it keeps 4 of the tail's 50 picks, under one expert for each of the 5 draft rows". 15 is the
+minimum for the shipped `--spec 4` window, so 16 - the profile's value - is the tightest cap that
+runs, and no further decode can be bought there without a shorter window, which loses more.
+
+## Where a decode window's 22 ms goes (2026-11-18)
+
+`nsys` on the daily service (1,024-token prompt, 256 decoded tokens = 162 verify windows, UD-IQ3_XXS,
+layer split 16), summed over both cards and divided by the window count. The two stages are serial, so
+every row is on the critical path:
+
+| kernel | launches/window | ms/window | share | stage 0 | stage 1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `native_q6_k_mmvq` (dense Q6_K matvecs, the draft head is 1.28 of it) | 72.5 | 2.70 | 12.1 % | 0.41 | 2.30 |
+| `wait_flag_ge` (spin on the host stager's doorbell) | 87.7 | 2.50 | 11.2 % | 1.32 | 1.18 |
+| `gr_down_multi2` (hyper-connection down) | 71.4 | 2.20 | 9.9 % | 0.64 | 1.56 |
+| `native_gu_fused` (MoE gate/up, SwiGLU + q8_1) | 29.2 | 1.70 | 7.6 % | 0.63 | 1.08 |
+| `native_mmvq_il` (dense 2-4 column matvecs) | 30.2 | 1.44 | 6.5 % | 0.40 | 1.04 |
+| `gr_up_fast` (hyper-connection up) | 71.4 | 1.32 | 5.9 % | 0.38 | 0.94 |
+| `b6_mmvq_rows` | 52.8 | 1.30 | 5.8 % | 0.40 | 0.90 |
+| `fetch_blobs` (the PCIe share into the staging ring) | 29.2 | 1.29 | 5.8 % | 0.03 | 1.26 |
+| `native_down_lds` (MoE down) | 29.2 | 1.19 | 5.3 % | 0.41 | 0.78 |
+| the rest (attention, GDN, router, K/V, quantization) | | 6.7 | 30 % | 1.9 | 4.8 |
+| **total** | | **22.3** | | **6.5** | **15.8** |
+
+Two things follow. There is no single kernel to fix: the largest is 12 % of the window, and the ten
+above are 70 %. And the stages are serial (6.5 + 15.8 = the 22.3 ms of work against a ~20 ms wall), so
+a faster kernel pays in full but rebalancing the split pays nothing. The MoE dots (3.0 ms of the 22.3)
+run at 110-130 GB/s because IQ2_S / IQ3_XXS bit unpacking, not bandwidth, is their limit; that is the
+one place a kernel rewrite has a published 1.4-1.5x to claim
+([1Cat-vLLM's paired IQ3_XXS reader](https://github.com/1CatAI/1Cat-vLLM/pull/966)).
+
 ## Suffix lookup index reset (2026-11-18)
 
 Suffix lookup now marks each index entry with the history it belongs to instead
