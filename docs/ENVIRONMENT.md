@@ -213,7 +213,7 @@ absent variable as enabled. `engine default` means a value the code computes.
 | `STRATA_PF_WMMA` | off | WMMA prompt path with the tensor-core expert tiles. On a dual V100-PCIE-16GB with UD-IQ3_XXS (IQ2_S/IQ3_XXS gate/up, IQ4_NL down) it reads prompts **8.6-20 % faster** than MMQ's dp4a from 2K to 64K tokens (A-B-A-B, [NVIDIA_V100.md](NVIDIA_V100.md#the-fp16-prompt-expert-path-on-ud-iq3_xxs-2026-11-18)); it changes the prompt's FP16 activations, so a reply can differ in its last bits |
 | `STRATA_PF_WMMA2` | architecture table | the second prompt-expert tile; `0` keeps the first tile only |
 | `STRATA_PF_WMMA2_N64` | off | alternate tile orientation, half the weight rows per block |
-| `STRATA_PF_WMMA_LEAN` | off | lean buffers on the direct WMMA plan |
+| `STRATA_PF_WMMA_LEAN` | off | lean buffers on the direct WMMA plan: it stops allocating the MMQ-only prompt buffers the direct plan never reads. With `STRATA_PF_WMMA=1` on a dual V100-PCIE-16GB / UD-IQ3_XXS it read prompts **+4.0 % at 8K, +2.2 % at 32K, +1.7 % at 64K** (A-B-A-B, [NVIDIA_V100.md](NVIDIA_V100.md#the-fp16-prompt-expert-path-on-ud-iq3_xxs-2026-11-18)) |
 | `STRATA_PF_XMX` | off | grouped FP16 XMX GEMM for the A770 prompt path |
 | `STRATA_PF_XMX_GU_MAX` | 250 | mean rows per expert below which gate/up runs on XMX |
 

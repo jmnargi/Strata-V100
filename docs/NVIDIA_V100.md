@@ -74,6 +74,14 @@ The path changes the prompt's arithmetic - FP16 activations instead of MMQ's `q8
 its last bits from the MMQ path's. It is a start-time switch, not a per-request one, and it needs every visible
 card at compute capability 7.0 or newer.
 
+`STRATA_PF_WMMA_LEAN=1` (["Smaller prompt buffers"](#smaller-prompt-buffers-and-batched-draft-kv))
+goes with it: it stops allocating the MMQ-only prompt buffers the direct plan never reads, which at
+an 8,192-row chunk leaves about 420 MB more of the expert cache in VRAM. Whole-model, A-B-A-B, one
+engine start an arm: **+3.9/+4.8 % at 8,192, +2.0/+2.4 % at 32,768, +1.5/+1.8 % at 65,536, neutral
+at 2,048**, and every row's first generated token id matched across the four arms (the switch changes
+no arithmetic). The daily profile sets it since 2026-11-19; before that it was opt-in with a
+component-only measurement.
+
 ## Decode: what the window and its cap allow (2026-11-18)
 
 `STRATA_VERIFY_ECAP=16`, which the daily profile sets for about +11 % decode, also caps the window's
