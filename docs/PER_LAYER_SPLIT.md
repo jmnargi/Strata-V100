@@ -106,7 +106,8 @@ Measured on this rig with this model (2x V100-PCIE-16GB, UD-IQ3_XXS), it is not 
   expert traffic over PCIe, which is the opposite of what a per-layer split is for.
 - **It faults on the prompt**: `prefill: the PLE rows' upload failed: an illegal memory access` once
   the PLE table is in play, with `--ple-io mmap` and without it. This model needs PLE, so the path
-  cannot serve it today.
+  cannot serve it today. The engine now refuses that combination at start-up instead of faulting
+  mid-prefill (`--peer-device` with `--ple-gguf`).
 - It disables `STRATA_ADAPT_OVERLAP`, `STRATA_PREFILL_PROMOTE` and the two extra Volta switches that
   the layer split keeps, so even a working peer would start from a slower baseline.
 

@@ -3519,6 +3519,15 @@ int main(int argc, char** argv) {
                                             : "--expert-cache-device1..3 (the peer tier already caches experts there)");
         return 2;
     }
+    // A PLE model with the peer tier faults on the prompt path ("prefill: the PLE rows' upload failed: an illegal
+    // memory access", measured on two V100-PCIE-16GB with UD-IQ3_XXS, with and without --ple-io mmap).  The peer
+    // tier keeps only 960 of the primary's cache slots, so it was not a candidate here anyway; refuse it at start-up
+    // instead of faulting mid-prefill.  docs/PER_LAYER_SPLIT.md records the measurement.
+    if (o.peer_device >= 1 && !o.ple_gguf.empty()) {
+        std::fprintf(stderr, "strata generate: --peer-device with a PLE table (--ple-gguf) faults on the prompt "
+                             "path; use --layer-split instead (docs/PER_LAYER_SPLIT.md)\n");
+        return 2;
+    }
 
     if (o.native_flash_attn_short && o.max_context > 256) {
         std::fprintf(stderr, "strata generate: --native-flash-attn-short requires --max-context <=256\n");
