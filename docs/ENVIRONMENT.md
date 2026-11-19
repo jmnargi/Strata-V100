@@ -210,7 +210,7 @@ absent variable as enabled. `engine default` means a value the code computes.
 | `STRATA_PF_SKIP_UNROUTED` | off | skip a pinned blob whose routing did not reach it (WMMA walk) |
 | `STRATA_PF_STEP_SYNC` | off | wait for both streams after each prompt step (diagnosis) |
 | `STRATA_PF_SWITCH_MIN_T` | 0 (off) | chunk size from which the rounding-level prompt switches act |
-| `STRATA_PF_WMMA` | off | WMMA prompt path with the tensor-core expert tiles |
+| `STRATA_PF_WMMA` | off | WMMA prompt path with the tensor-core expert tiles. On a dual V100-PCIE-16GB with UD-IQ3_XXS (IQ2_S/IQ3_XXS gate/up, IQ4_NL down) it reads prompts **8.6-20 % faster** than MMQ's dp4a from 2K to 64K tokens (A-B-A-B, [NVIDIA_V100.md](NVIDIA_V100.md#the-fp16-prompt-expert-path-on-ud-iq3_xxs-2026-11-18)); it changes the prompt's FP16 activations, so a reply can differ in its last bits |
 | `STRATA_PF_WMMA2` | architecture table | the second prompt-expert tile; `0` keeps the first tile only |
 | `STRATA_PF_WMMA2_N64` | off | alternate tile orientation, half the weight rows per block |
 | `STRATA_PF_WMMA_LEAN` | off | lean buffers on the direct WMMA plan |
