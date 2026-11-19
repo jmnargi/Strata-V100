@@ -99,8 +99,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 
-# The only lengths this project measures (assignment: 2048,4096,8192,16384,32768).
-ALLOWED_TARGETS = (2048, 4096, 8192, 16384, 32768)
+# The only lengths this project measures (assignment: 2048,4096,8192,16384,32768), plus the
+# 64K row the V100 profile's context ceiling asks for.
+ALLOWED_TARGETS = (2048, 4096, 8192, 16384, 32768, 49152, 65536)
 
 IMAGE_PAD = 248056   # qwen4exp.ple.image_token_id (generate.cpp kImagePad)
 

@@ -9,6 +9,160 @@ It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.
 Build from source for other platforms or a mix of GPU architectures. The measurements
 below state their hardware and do not establish performance on every V100 system.
 
+## Two cards, one request: what the layer split costs (2026-11-18)
+
+[sfnx](https://github.com/johnfink8/sfnx) is a separate engine for this same model
+(Qwen3.8-Flash-Next) on V100s over PCIe with no NVLink. It splits **every layer** across the
+cards - a card holds a slice of each expert's FF width, of the K/V by position, and of the
+output head - and sums the partials between cards as fp16 pairs with GPU threads inside the
+window's CUDA graph. Strata splits **by layer**, so for one request the cards take turns.
+
+That difference, not the kernels, is the whole gap. `nsys` on this rig's daily service
+(UD-IQ3_XXS, `--layer-split 16`, `--pipeline-windows 2`, a 1,024-token prompt and 256 decoded
+tokens) sums to 3,614 ms of GPU work in a 3,147 ms decode: the two stages overlap by about
+15 %, and each card is idle most of the window.
+
+sfnx measured its two-card build against a Strata build on the same box (their prompts, their
+method; upstream `011c9e60` plus four of their commits, 2026-10-26):
+
+| One request, 2 V100-PCIE | sfnx, per-layer split | Strata, layer split |
+| --- | ---: | ---: |
+| Code edit, greedy | 209-211 tok/s | 131-135 |
+| New code, greedy | 137-163 | 94-99 |
+| 3k random words, cold read | 1,512-1,565 tok/s | 934-952 |
+| 32k random words, cold read | 2,827-2,837 | 2,071-2,120 |
+| 114k source code, cold read | 42.1 s | 53.7 s |
+| Decode after it | 105.4 tok/s | 69.6 |
+| GPUs busy | 48 % / 48 % | 27 % / 32 % |
+
+Two things follow for this fork. First, a per-layer split is the only route to that scale of
+gain here, and it is a re-architecture (expert slicing, in-graph ring sums, K/V by position,
+a head split), not a switch - it is not implemented in this fork. Second, the kernel and
+flag work below is measured against a baseline that is already 1.5-2x behind on decode, so a
+few percent of kernel time is what that work can buy until the split changes.
+
+sfnx's other portable findings, and what this fork already has: n-gram (suffix) drafts of
+3-15 tokens - `--suffix-draft` is on by default here and `--lookup-chain K` extends it past
+the MTP's own drafts; a 4-bit draft layer for fewer bytes per draft step - `--mtp-q4`;
+prompt chunks of 4,096-8,192 rows - this rig runs 8,192 (`prefill_cap=8192`); the n-gram
+table on disk - this rig maps it (`--ple-io mmap`). Its MTP draft experts are Q4_0 and it
+measures 63 % draft acceptance against 59 % for the Q2_0 build this rig uses
+(`/mnt/strata-models/mtp/rt`, `tools/mtp_pack.py --experts q4_0` is that comparison arm).
+
+## The FP16 prompt-expert path on UD-IQ3_XXS (2026-11-18)
+
+The daily V100 service already sets `STRATA_PF_WMMA=1` (`service/strata-v100.service.d/96-prefill-performance.conf`).
+That switch runs the prompt's expert products on the FP16 tensor cores (`gemm_iq_f16_grouped`: each weight
+superblock dequantized once into shared memory, FP16 activations, FP32 sums) instead of MMQ's dp4a kernels.
+IQ2_S / IQ3_XXS gate/up and IQ4_NL down are covered, which is what this pack holds, so the whole prompt path
+takes it.
+
+Measured on this rig, **A-B-A-B, two runs an arm**, one cold request per row through the engine's own `--serve`
+protocol with exact token ids (`bench/run_v100_prefill.py`), production config plus the six service drop-ins,
+two V100-PCIE-16GB (GPU 0 Gen3 x4, GPU 1 x16), CUDA 12.8, `--layer-split 16`, `--pipeline-windows 2`:
+
+| prompt tokens | MMQ (`STRATA_PF_WMMA=0`) | FP16 tiles (`STRATA_PF_WMMA=1`) | |
+| ---: | ---: | ---: | ---: |
+| 2,048 | 979 / 953 tok/s | 1,063 / - | +8.6 % |
+| 8,192 | 1,311 / 1,308 | 1,520 / - | +16.0 % |
+| 32,768 | 1,969 / 1,965 | 2,351 / - | +19.4 % |
+| 65,536 | 2,127 / 2,121 | 2,545 / - | +19.7 % |
+
+Decode is unaffected: 89.5-92.2 and 69.6-95.1 tok/s across the two arms at 2K-8K, inside the run-to-run spread.
+
+The path changes the prompt's arithmetic - FP16 activations instead of MMQ's `q8_1` - so a reply can differ in
+its last bits from the MMQ path's. It is a start-time switch, not a per-request one, and it needs every visible
+card at compute capability 7.0 or newer.
+
+`STRATA_PF_WMMA_LEAN=1` (["Smaller prompt buffers"](#smaller-prompt-buffers-and-batched-draft-kv))
+goes with it: it stops allocating the MMQ-only prompt buffers the direct plan never reads, which at
+an 8,192-row chunk leaves about 420 MB more of the expert cache in VRAM. Whole-model, A-B-A-B, one
+engine start an arm: **+3.9/+4.8 % at 8,192, +2.0/+2.4 % at 32,768, +1.5/+1.8 % at 65,536, neutral
+at 2,048**, and every row's first generated token id matched across the four arms (the switch changes
+no arithmetic). The daily profile sets it since 2026-11-19; before that it was opt-in with a
+component-only measurement.
+
+## Decode: what the window and its cap allow (2026-11-18)
+
+`STRATA_VERIFY_ECAP=16`, which the daily profile sets for about +11 % decode, also caps the window's
+length: the engine refuses a window where the cap would leave under one expert per draft row, and
+says so at start-up ("STRATA_VERIFY_ECAP=16 cannot serve a 8-token window: it keeps 6 of the tail's
+70 picks, under one expert for each of the 7 draft rows"). So with the cap on, `--spec 6` (a
+7-row window) and `--lookup-chain 8` (an 8-row window) are refused; raising the cap to 17 or more is
+what lets a longer window start. A longer window is how sfnx gets 11 tokens a round on code edits
+(its n-gram drafts run 3-15 tokens), so the cap and the window length have to be chosen together.
+
+Measured on this rig (production profile, 3,000-token prompt, 192 greedy tokens, one engine start an
+arm; the run-to-run spread on a single sample is 15 %, so read the paired rows only):
+
+| arm | decode tok/s | windows offered |
+| --- | ---: | ---: |
+| production, pair 1 / 2 | 105.3 / 101.1 | 134 / 132 |
+| `--lookup-chain 8` with `STRATA_VERIFY_ECAP=18`, pair 1 / 2 | 106.2 / 108.2 | 141 / 144 |
+| `STRATA_ROUTE_TAIL_SKIP=9`, pair 1 / 2 | 100.9 / 117.7 | 132 / 134 |
+| `--pcie-mode dma` | 112.9 | 137 |
+| `--mtp-max-t 6` | 109.7 | 135 |
+| `--mtp-q4 head` | 97.5 | 119 |
+| `--mtp-q4 all` | 112.4 | 124 |
+| `STRATA_VERIFY_DEVICE_PLAN=1` | 97.5 | 125 |
+| `STRATA_VERIFY_ECAP=20` | 97.2 | 139 |
+
+The lookup chain is the only arm above production in both pairs (+0.8 % and +7.0 %), and it pays for
+a wider cap at the same time (16 -> 18), so the chain itself is worth a little more than that - but
+it offered *more* windows for the same 192 tokens (141/144 against 134/132), which means the extra
+drafts were not accepted on this prompt: it rewards text that repeats, and a synthetic prompt does
+not. The tail skip is inside the spread. The device plan, the 4-bit draft copies, a longer MTP window
+and a wider cap are not wins.
+
+A second paired sweep (same prompt and method, two pairs an arm) found nothing above production
+either:
+
+| arm | decode tok/s, pair 1 / 2 |
+| --- | ---: |
+| production | 108.8 / 114.2 and 116.2 / 101.2 |
+| `STRATA_SPLIT_RING=384` | 95.6 / 93.8 |
+| `STRATA_SPLIT_RING=512` | 109.0 / 104.8 |
+| `STRATA_EXPERT_PAIR=1` | 106.1 / 99.1 |
+| `STRATA_HC_SPLIT=1` | 102.5 / 105.3 |
+| `STRATA_MTP_BATCH_F16=1` | 110.7 / 102.1 |
+| `--spec 3` (a 5-row window) | 96.4 / 96.3 |
+
+`--spec 3` is 11 % slower: the draft chain's length is not what costs the window, and a shorter chain
+loses more acceptance than it saves. The streamed ring is already at its best size (384 is 14 %
+worse in both pairs), which is why `STRATA_SPLIT_RING=192` stays in `99-dual-gpu.conf`.
+
+The cap is also at its floor. `STRATA_VERIFY_ECAP=14` refuses to start: "cannot serve a 6-token
+window: it keeps 4 of the tail's 50 picks, under one expert for each of the 5 draft rows". 15 is the
+minimum for the shipped `--spec 4` window, so 16 - the profile's value - is the tightest cap that
+runs, and no further decode can be bought there without a shorter window, which loses more.
+
+## Where a decode window's 22 ms goes (2026-11-18)
+
+`nsys` on the daily service (1,024-token prompt, 256 decoded tokens = 162 verify windows, UD-IQ3_XXS,
+layer split 16), summed over both cards and divided by the window count. The two stages are serial, so
+every row is on the critical path:
+
+| kernel | launches/window | ms/window | share | stage 0 | stage 1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `native_q6_k_mmvq` (dense Q6_K matvecs, the draft head is 1.28 of it) | 72.5 | 2.70 | 12.1 % | 0.41 | 2.30 |
+| `wait_flag_ge` (spin on the host stager's doorbell) | 87.7 | 2.50 | 11.2 % | 1.32 | 1.18 |
+| `gr_down_multi2` (hyper-connection down) | 71.4 | 2.20 | 9.9 % | 0.64 | 1.56 |
+| `native_gu_fused` (MoE gate/up, SwiGLU + q8_1) | 29.2 | 1.70 | 7.6 % | 0.63 | 1.08 |
+| `native_mmvq_il` (dense 2-4 column matvecs) | 30.2 | 1.44 | 6.5 % | 0.40 | 1.04 |
+| `gr_up_fast` (hyper-connection up) | 71.4 | 1.32 | 5.9 % | 0.38 | 0.94 |
+| `b6_mmvq_rows` | 52.8 | 1.30 | 5.8 % | 0.40 | 0.90 |
+| `fetch_blobs` (the PCIe share into the staging ring) | 29.2 | 1.29 | 5.8 % | 0.03 | 1.26 |
+| `native_down_lds` (MoE down) | 29.2 | 1.19 | 5.3 % | 0.41 | 0.78 |
+| the rest (attention, GDN, router, K/V, quantization) | | 6.7 | 30 % | 1.9 | 4.8 |
+| **total** | | **22.3** | | **6.5** | **15.8** |
+
+Two things follow. There is no single kernel to fix: the largest is 12 % of the window, and the ten
+above are 70 %. And the stages are serial (6.5 + 15.8 = the 22.3 ms of work against a ~20 ms wall), so
+a faster kernel pays in full but rebalancing the split pays nothing. The MoE dots (3.0 ms of the 22.3)
+run at 110-130 GB/s because IQ2_S / IQ3_XXS bit unpacking, not bandwidth, is their limit; that is the
+one place a kernel rewrite has a published 1.4-1.5x to claim
+([1Cat-vLLM's paired IQ3_XXS reader](https://github.com/1CatAI/1Cat-vLLM/pull/966)).
+
 ## Suffix lookup index reset (2026-11-18)
 
 Suffix lookup now marks each index entry with the history it belongs to instead
