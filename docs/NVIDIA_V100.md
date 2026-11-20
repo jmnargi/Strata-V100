@@ -29,7 +29,7 @@ To serve text through Strata's API, save this configuration with absolute paths:
 {
   "exe": "/path/to/strata-v100/build-hy4/strata-hy4",
   "args": ["--pack", "/path/to/Maya-S/maya-hy4", "--gpus", "0,1",
-           "--tp", "0", "--max-context", "32768", "--vision", "off"],
+           "--tp", "0", "--max-context", "32768", "--kv", "q8", "--vision", "off"],
   "tokenizer": "/path/to/Maya-S/maya-hy4/tokenizer",
   "model_name": "hy4-flash-maya-s"
 }
@@ -49,6 +49,32 @@ with Q8 KV and did not fit.
 For MTP, pass `--mtp /path/to/Hy4-Flash-mtp-BF16.gguf` to the packer and
 add `"--mtp", "--draft", "4"` to the engine arguments. This is Tencent's
 separate MTP GGUF, not the `.dfly2` file in the Maya-S folder.
+
+**Place hot experts first.** Add `--profile-out /path/to/hy4-routes.bin` to
+the engine arguments and run representative requests. Then restart with
+`--profile /path/to/hy4-routes.bin`. To keep learning from subsequent
+requests, pass both flags with the same path after the first run. Use a
+separate profile per quant. This is Project Maya's placement mechanism:
+it ranks experts per layer by routes seen, without changing the router.
+On two coding prompts excluded from a small calibration, the same 4,059
+VRAM slots hit 47–51% of routes instead of 22–23% with expert-ID placement.
+
+At 32K on this pair, `--kv q8` stored the 512-value MLA latent in int8
+with FP16 scales and kept the 64 rotary values in FP16. Compared to FP16
+rows, it reduced the trunk cache and index from 1.30 to 0.73 GB and
+raised the resident expert count from 4,059 to 4,264 with MTP and a
+4,096-token prompt chunk. This changes the cache precision and can change
+generated tokens.
+
+For short coding turns on these cards, try `--chunk 1024` with int8 KV,
+MTP and a local route profile. On two held-out 192-token coding replies,
+it held 7,339 experts, hit 70–74% of routes and decoded at 19.5–23.4 tok/s.
+With [Basalt's Hy4 ranking](https://github.com/jesdga95/basalt/blob/8a5aa45a51a88455afcb0d58cafccc69f96b4e5b/data/profiles/hy4flash-42x512.prof)
+at the same settings, decode was 17.8–19.6 tok/s. The smaller chunk trades
+long-prompt speed for residency: using Basalt's ranking, a single
+6,220-token source review read at 81 tok/s with 1,024-token chunks versus
+233 tok/s with 4,096. Keep 4,096 for long reads. These runs did not use
+Basalt's per-layer slot weighting or temporary expert-slot borrowing.
 
 ## Two cards, one request: what the layer split costs (2026-11-18)
 
