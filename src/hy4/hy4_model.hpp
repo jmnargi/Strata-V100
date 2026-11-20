@@ -38,6 +38,7 @@ struct Options {
     std::string profile;          // an expert profile (uint32 [layers][experts] routings): the most routed in VRAM
     std::string profile_out;      // where save_profile writes it (the read one's counts with this run's)
     bool mtp = false;             // load the MTP block (the GGUF's nextn layer, its BF16 rounded to Q8_0) for drafts
+    std::string dfly;             // DFly2 drafter GGUF, mutually exclusive with MTP
     std::vector<int> layer_split; // the first layer of each GPU after the first (empty: fill each GPU in turn)
     int kv = -1;                  // the latent cache's rows: 0 F16, 1 8-bit (the latent int8 in blocks of 32 with F16
                                   // scales, the rotated part F16; the indexer's rows F16: about 58% of the VRAM), -1

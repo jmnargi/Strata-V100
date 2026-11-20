@@ -13,6 +13,7 @@
 //   x = hc_post(x, rms(that) w, post)
 // and logits = rms(hc_head(x)) w . Wout.
 #include "hy4_model.hpp"
+#include "hy4_dfly.hpp"
 
 #include "hy4_kernels.cuh"
 #include "hy4_lane.hpp"
@@ -343,6 +344,10 @@ struct Model::Impl {
     Options o;
     Pack pk;
     Geo g;
+    Dfly dfly;
+    DflyTarget dfly_target;
+    DflyInfo dfly_info;
+    std::vector<DflyCache> dfly_caches;
     std::vector<Layer> L;
     std::vector<Gpu> G;
     int head_gpu = 0;
@@ -442,6 +447,8 @@ struct Model::Impl {
     std::thread eg_populator;            // (its pages mapped in the background)
     int ring = 0;
     int Tc = W;                          // a forward's chunk at most (the prompt path's; W: the token path's alone)
+    int Tc_plan = W;                     // (the plan's chunk: what chunk() reports between prompts, and the base the
+                                         //  borrowed scratch's rows are counted above - a borrowed chunk raises Tc only)
     int64_t end = 0;
     // the MTP block's cache rows made from the trunk's states: positions [0, mtp_done) (a token window leaves its rows to
     // the next draft's first step, which makes them together with its own: one MTP forward a round, not two)
@@ -481,8 +488,37 @@ struct Model::Impl {
     std::FILE* eg_dump = nullptr;        // (HY4_EG_DUMP=<file>, tests: every looked-up row - see engram_row)
     std::mutex eg_dump_mu;
     int* h_pos = nullptr;                // pinned [3][Tc]: pos, lo, nk
+    // A long prompt's scratch, borrowed from the resident experts' VRAM (HY4_SCRATCH_BORROW): the state of one open
+    // lend - the lent layers (their planned rank and slots, put back by borrow_close), the GPUs whose views are borrowed,
+    // those views, the MTP block's borrowed rows, and the base host rows the views' own replace meanwhile.
+    struct Lent {
+        int il = 0, n_res = 0, k = 0;    // (the layer, its planned experts in VRAM, and the tail slots lent)
+        std::vector<int> slot_of;        // (its planned slot table: each expert's slot, -1: the CPU lane's)
+    };
+    struct Borrow {
+        bool open = false, swapped = false, broken = false, fatal = false, noted = false, skipped = false;
+        int rows = 0;                    // (the chunk's rows the borrowed scratch holds)
+        std::vector<int> gi;             // (the GPUs whose Gpu structs are borrowed - the base ones sit in `g`)
+        std::vector<Gpu> g;
+        std::vector<char> base_freed;    // (the GPUs whose plan row buffers were freed for the lend: back at close)
+        std::vector<void*> extra;        // (the MTP block's borrowed rows: in, cur, hin, out)
+        std::vector<Lent> lent;
+        std::string why;                 // (the last refusal, once to stderr)
+        float *mtp_in0 = nullptr, *mtp_cur0 = nullptr, *mtp_hin0 = nullptr, *mtp_out0 = nullptr;
+        float *h_x0 = nullptr, *h_valid0 = nullptr, *h_lat0 = nullptr, *h_cpu0 = nullptr, *h_emb0 = nullptr;
+        float* h_egs0 = nullptr;
+        uint8_t* h_eg0 = nullptr;
+        int *h_pos0 = nullptr, *h_ids0 = nullptr;
+        float* h_w0 = nullptr;
+    };
+    Borrow borrow;
 
     ~Impl() {
+        if (borrow.open) {   // (the borrowed rows and the experts' planned slots come back before the plan's own go)
+            std::string e;
+            (void) borrow_close(e);
+            if (!e.empty()) std::fprintf(stderr, "maya-hy4: %s\n", e.c_str());
+        }
         if (mtp_crew) mtp_crew->wait();
         mtp_crew.reset();
         if (hm.s) {
@@ -995,6 +1031,7 @@ struct Model::Impl {
         double head_b = (ot ? (double) ot->bytes : 0) + (double) g.n_vocab * W * 4 + (64u << 20) +
                         (double) ring * g.n_embd * 4;   // (the states' ring)
         if (o.mtp && g.n_mtp > 0) head_b += (double) layer_bytes(g.n_layer) * 0.56 + mtp_rows_bytes(Tc, g.n_embd);
+        head_b += (double) (dfly_info.weights + dfly_info.scratch);
         L.resize((size_t) g.n_layer);
         free_b[(size_t) main_gi] -= head_b;   // (the head and the MTP block on the main GPU)
         // the layers over the GPUs in order, each with `rho` of its routed experts in VRAM (the others on the CPU
@@ -1826,8 +1863,21 @@ struct Model::Impl {
         g = pk.g;
         if (o.max_ctx <= 0 || o.max_ctx > g.context) o.max_ctx = g.context;
         o.max_ctx = (o.max_ctx + g.ix_kpool - 1) / g.ix_kpool * g.ix_kpool;
+        if (!o.dfly.empty()) {
+            if (o.mtp || o.tp > 1) {
+                err = "--dfly requires layer split and cannot be combined with --mtp";
+                return false;
+            }
+            o.tp = 0;
+            dfly_target = {g.n_embd, g.n_vocab, g.ix_top_k, g.eps, g.rope_base, g.heads, {}, false};
+            for (int i = 0; i < g.n_layer; ++i)
+                dfly_target.sparse_indexed.push_back(g.indexer[i] && !g.swa[i]);
+            dfly_target.heads.resize(g.n_layer);
+            if (!Dfly::probe(o.dfly, dfly_target, g.ix_top_k + g.ix_kpool, o.max_ctx, dfly_info, err)) return false;
+        }
         auto set_chunk = [&](int c) {
             Tc = std::max(W, c);
+            Tc_plan = Tc;
             ring = (int) std::min<int64_t>(o.max_ctx, (int64_t) g.n_swa + std::max(o.ring_slack, Tc));
         };
         const bool chunk_auto = o.prefill_chunk <= 0;
@@ -2243,6 +2293,25 @@ struct Model::Impl {
             }
         }
         for (auto& gp : G) st.vram_gb += (double) gp.used / 1e9;
+        if (!o.dfly.empty()) {
+            Gpu& hg = G[(size_t) head_gpu];
+            dfly_target.kv_q8 = kv_q8;
+            if (!dfly.load(o.dfly, dfly_target, g.ix_top_k + g.ix_kpool, o.max_ctx, hg.dev,
+                           [this](const float* h, float* logits, cudaStream_t) {
+                               return mm(G[(size_t) head_gpu], out, h, g.n_embd, 1, logits, g.n_vocab);
+                           },
+                           [this](int32_t token, float* row) {
+                               if (token < 0 || token >= g.n_vocab) return false;
+                               tok_row(tok_type, tok_embd + (size_t) token * tok_ld, g.n_embd, row);
+                               return true;
+                           }, err)) return false;
+            for (const Layer& l : L)
+                dfly_caches.push_back({l.kv, (int64_t) kv_rb(), l.ring, G[(size_t) l.gpu].dev, kv_q8, {}});
+            const double gb = (double) (dfly.weights_bytes() + dfly.scratch_bytes()) / 1e9;
+            st.vram_gb += gb;
+            info.push_back("INFO DFly2: " + std::to_string(dfly.dims().layers) + " layers, " +
+                           std::to_string(gb) + " GB on GPU " + std::to_string(hg.dev));
+        }
         st.load_s = now_s() - t0;
         char buf[512];
         std::snprintf(buf, sizeof buf, "INFO maya-hy4: Hy4-flash, %d layers, %d experts (%d a token), context %lld, %.1f GB "
@@ -2261,6 +2330,21 @@ struct Model::Impl {
             if (a >= 0) split += " GPU" + std::to_string(G[gi].dev) + ":" + std::to_string(a) + "-" + std::to_string(b);
         }
         info.push_back(split);
+        if (borrow_on()) {   // (the prompt scratch's borrowing: said at the start, so a run's log shows what it ran)
+            if (lane == nullptr || h_stage == nullptr) {
+                info.push_back("INFO prompt scratch borrowing not used: every routed expert is in VRAM (no CPU lane to "
+                               "lend the prompt its rows)");
+            } else if (borrow_cap() <= Tc_plan) {
+                info.push_back("INFO prompt scratch borrowing not used: HY4_SCRATCH_BORROW_CHUNK is not above the plan's "
+                               "chunk (" + std::to_string(Tc_plan) + " tokens)");
+            } else {
+                char bb[320];
+                std::snprintf(bb, sizeof bb, "INFO prompt scratch borrowing (HY4_SCRATCH_BORROW): a prompt of %d tokens or "
+                              "more reads in chunks of up to %d, its row buffers lent from the resident experts' VRAM and "
+                              "the experts put back before decoding", borrow_min_tokens(), borrow_cap());
+                info.push_back(bb);
+            }
+        }
         return true;
     }
 
@@ -2604,11 +2688,23 @@ struct Model::Impl {
                 const int n_pool = (int) ((p0 + t0 + ts - 1) / KP);
                 // the picks are every pool the tokens see until a token sees more than `top` of them
                 const bool all = n_pool <= top;
+                const bool tap = dfly.on() && t0 + ts > T - kDflyTapRows &&
+                                 std::find(dfly.dims().idx_layers.begin(), dfly.dims().idx_layers.end(), l.il) !=
+                                     dfly.dims().idx_layers.end();
+                if (tap && all)
+                    for (int t = std::max(t0, T - kDflyTapRows); t < t0 + ts; ++t)
+                        dfly.selection_at(l.il, p0 + t, nullptr, -1, gp.dev, s);
                 if (T > W && all && attn_prompt(l, gp, t0, ts, p0, true, scale, dq)) continue;
                 k::ix_score(gp.iq + (size_t) t0 * IH * D, gp.wt + (size_t) t0 * IH, ts, IH, D, l.pooled, gp.pos + t0,
                             KP, n_pool, gp.score, npool_ld, s, kv_q8);
                 k::ix_select(gp.score, npool_ld, ts, gp.pos + t0, KP, top, gp.keys + (size_t) t0 * maxk, maxk,
                              gp.knk + t0, s);
+                if (tap && !all)
+                    for (int t = std::max(t0, T - kDflyTapRows); t < t0 + ts; ++t) {
+                        const int64_t pos = p0 + t;
+                        const int n = (int) (std::min<int64_t>(pos / KP, top) * KP + pos % KP + 1);
+                        dfly.selection_at(l.il, pos, gp.keys + (size_t) t * maxk, n, gp.dev, s);
+                    }
                 if (T > W && attn_prompt(l, gp, t0, ts, p0, false, scale, dq)) continue;
                 k::attention(gp.qcat + (size_t) t0 * H * KR, ts, H, KL, R, l.kv, 0, gp.keys + (size_t) t0 * maxk, maxk,
                              nullptr, gp.knk + t0, maxk, scale, l.sinks, gp.ws, gp.o + (size_t) t0 * H * KL, s, kv_q8);
@@ -3145,6 +3241,18 @@ struct Model::Impl {
                std::string& err) {
         d.clear();
         conf.clear();
+        if (dfly.on() && n > 0) {
+            Gpu& hg = G[(size_t) head_gpu];
+            n = std::min(n, kDflyDrafts);
+            if (!dfly.draft_begin(tok, pos, n, dfly_caches.data(), hg.s, -1, err)) return false;
+            d.resize(n);
+            conf.resize(n);
+            int made = 0;
+            if (!dfly.draft_end(d.data(), conf.data(), n, made, hg.s, err)) return false;
+            d.resize(made);
+            conf.resize(made);
+            return true;
+        }
         if (!M.mtp || n <= 0) return true;
         if (pos + n >= o.max_ctx) n = (int) std::max<int64_t>(0, o.max_ctx - pos - 1);
         Gpu& hg = G[(size_t) head_gpu];
@@ -3211,10 +3319,634 @@ struct Model::Impl {
         return true;
     }
 
+    // ------------------------------------------------------------ a long prompt's scratch, borrowed from the experts
+    // HY4_SCRATCH_BORROW=1 (opt-in; the default path never enters any of this): a prompt reads in chunks larger than the
+    // plan's, its row buffers carved from the VRAM of the routed experts the plan keeps resident - Basalt's lend and
+    // reclaim, on this plan's terms.  On every GPU that needs room, each CPU-lane layer lends the tail slots of its
+    // expert array: its kept rows are compacted into a smaller array inside VRAM (a device-to-device copy), the old
+    // array is freed and the freed bytes are the chunk's rows, so the GPU funds its own scratch from expert capacity
+    // and not from the reserve.  The prompt's chunks run; before the next decode the layer arrays come back at their
+    // planned rank - the kept rows copied back, the lent rows reloaded from the model's file through the CPU lane's
+    // threads - the slot tables come back bit for bit, and the borrowed rows are freed.  The decode's scratch, the
+    // caches, the MTP block's own rows and every other decision of the plan are untouched; a refusal (no room, no
+    // lane, a ring that would lap a larger chunk) leaves the plan exactly as it was.
+    static bool borrow_on() {
+        static const bool v = [] {
+            const char* e = std::getenv("HY4_SCRATCH_BORROW");
+            return e != nullptr && std::atoi(e) != 0;
+        }();
+        return v;
+    }
+    // the rows a chunk's buffers take on this GPU at T rows: the row-indexed half of scratch(), and kbuf's rows for a
+    // chunk of T (dense_max's own buffers do not grow with the chunk's rows)
+    template <class F>
+    void row_bufs(Gpu& gp, size_t T, F&& f) const {
+        const size_t E = (size_t) g.n_embd, hc = (size_t) g.hc, H = (size_t) gp.sH;
+        const size_t maxk = (size_t) g.ix_top_k + g.ix_kpool, lat = (size_t) g.n_lat;
+        const size_t ff = (size_t) (gp.sFF ? gp.sFF : g.n_ff), ffe = (size_t) g.n_ff_exp;
+        const size_t egc = (size_t) std::max(1, pk.eg.cols()) * std::max(1, pk.eg.head_dim);
+        const size_t qk = std::max({H * (size_t) g.v_mla, ff, H * (size_t) g.kv_lora, (size_t) g.q_lora, egc, E});
+        f(gp.x, T * hc * E);
+        f(gp.cur, T * E);
+        f(gp.post, T * hc);
+        f(gp.xa, T * E);
+        f(gp.qa, T * (size_t) g.q_lora);
+        f(gp.qr, T * (size_t) g.q_lora);
+        f(gp.q, T * H * (size_t) g.k_mla);
+        f(gp.qcat, T * H * (size_t) g.kv_row());
+        f(gp.kvr, T * (size_t) g.kv_row());
+        f(gp.o, T * H * (size_t) g.kv_lora);
+        f(gp.ob, T * H * (size_t) g.v_mla);
+        f(gp.g, T * H * (size_t) g.v_mla);
+        f(gp.y, T * E);
+        f(gp.xf, T * E);
+        f(gp.gu, T * ff * 2);
+        f(gp.hd, T * ff);
+        f(gp.rl, T * (size_t) g.n_expert);
+        f(gp.rw, T * 16);
+        f(gp.ids, T * 16);
+        f(gp.lat, T * lat);
+        f(gp.latout, T * (lat + (gp.sFF ? E : 0)));
+        f(gp.pos, 3 * T);
+        f(gp.keys, T * maxk);
+        f(gp.knk, T);
+        f(gp.iq, T * (size_t) g.ix_heads * (size_t) g.ix_dim);
+        f(gp.ik, T * (size_t) g.ix_dim);
+        f(gp.ivt, T * 2 * (size_t) g.ix_dim);
+        f(gp.wt, T * (size_t) g.ix_heads);
+        f(gp.eg_rows, T * egc);
+        f(gp.eg_valid, T);
+        f(gp.eg_r, T * egc);
+        if (eg_scale != nullptr) f(gp.eg_sc, T * (size_t) std::max(1, pk.eg.cols()));
+        f(gp.eg_kvo, T * (hc + 1) * E);
+        f(gp.hcur, T * E);
+        f(gp.xh16, T * qk);
+        f(gp.sh16, 16 * T * ffe);
+        f(gp.sy, 16 * T * lat);
+        f(gp.cpo, T * lat);
+        f(gp.stok, 16 * T);
+        f(gp.srow, 16 * T);
+        f(gp.kbuf, dense_kbuf_rows((size_t) g.n_swa, T, (size_t) dense_max, kSub) * (size_t) g.kv_row());
+    }
+    size_t row_bytes_at(Gpu& gp, size_t T) const {
+        size_t b = 0;
+        row_bufs(gp, T, [&](auto& p, size_t n) { b += std::max<size_t>(n * sizeof(*p), 256); });
+        return b;
+    }
+    size_t mtp_row_bytes(size_t T) const {
+        const size_t E = (size_t) g.n_embd;
+        return std::max<size_t>(2 * T * E * 4, 256) + 3 * std::max<size_t>(T * E * 4, 256);
+    }
+    // (the GPUs a forward uses: the head's, and every GPU holding a layer)
+    void used_gpus(std::vector<char>& used) const {
+        used.assign(G.size(), 0);
+        for (size_t i = 0; i < G.size(); ++i) used[i] = (int) i == head_gpu;
+        for (const Layer& l : L)
+            if (l.gpu >= 0) used[(size_t) l.gpu] = 1;
+    }
+    // the views' row buffers, as scratch() makes the plan's (each allocation as it is made there, T rows instead)
+    bool scratch_rows(Gpu& b, size_t T, std::string& err) {
+        CK(cudaSetDevice(b.dev));
+        bool ok = true;
+        row_bufs(b, T, [&](auto& p, size_t n) {
+            if (ok) {
+                ok = b.alloc(p, n, err);
+                if (!ok) err = "the prompt scratch borrow: " + err;
+            }
+        });
+        if (!ok) return false;
+        b.lo = b.pos + (int) T;
+        b.nk = b.pos + 2 * (int) T;
+        return true;
+    }
+    // a routed expert array can lend its tail: the layer is on the CPU lane already (its experts' host view is set),
+    // and has slots to give
+    bool can_lend(const Layer& l) const {
+        return l.tpm < 0 && !l.dense && !l.mtp && l.partial() && l.n_res > 0 && l.cex.gate != nullptr;
+    }
+    bool gpu_release(Gpu& gp, void* p) {
+        for (size_t i = 0; i < gp.allocs.size(); ++i)
+            if (gp.allocs[i] == p) {
+                if (cudaFree(p) != cudaSuccess) {
+                    (void) cudaGetLastError();
+                    return false;
+                }
+                gp.allocs.erase(gp.allocs.begin() + (long) i);
+                return true;
+            }
+        return false;
+    }
+    // The layer's tail `k` slots are lent: keep the first `n_res - k` slots' experts (same slots, a copy within VRAM),
+    // free the plan's array, and put the smaller one in its place.  The plan's rank and slots go to `borrow.lent`.
+    bool lend_layer(Layer& l, int k, std::string& err) {
+        Gpu& gp = G[(size_t) l.gpu];
+        CK(cudaSetDevice(gp.dev));
+        const int keep = l.n_res - k;
+        if (k <= 0 || keep < 0) return false;
+        uint8_t* nb = nullptr;
+        if (!gp.alloc(nb, (size_t) std::max(1, keep) * l.blob, err)) return false;
+        if (keep > 0 && cudaMemcpy(nb, l.experts, (size_t) keep * l.blob, cudaMemcpyDeviceToDevice) != cudaSuccess) {
+            (void) cudaGetLastError();
+            (void) gpu_release(gp, nb);
+            err = "the experts' compaction failed";
+            return false;
+        }
+        Lent e;
+        e.il = l.il;
+        e.n_res = l.n_res;
+        e.k = k;
+        e.slot_of = l.slot_of;
+        if (!gpu_release(gp, l.experts)) {
+            (void) gpu_release(gp, nb);
+            err = "the layer's expert array is not its own";
+            return false;
+        }
+        borrow.lent.push_back(e);
+        l.experts = nb;
+        l.n_res = keep;
+        for (int x = 0; x < (int) l.slot_of.size(); ++x)
+            if (l.slot_of[(size_t) x] >= keep) l.slot_of[(size_t) x] = -1;
+        CK(cudaMemcpy(l.slot_d, l.slot_of.data(), sizeof(int) * g.n_expert, cudaMemcpyHostToDevice));
+        return true;
+    }
+    // the lent slots' experts back into the restored array, their rows assembed from the model's file (the same bytes
+    // the load copied) by the CPU lane's threads, a pass of kStage at a time
+    bool reload_lent(Layer& l, uint8_t* dst, int keep, const Lent& e, std::string& err) {
+        const int np_all = e.n_res - keep;
+        if (np_all <= 0) return true;
+        if (lane == nullptr || h_stage == nullptr) {
+            err = "the CPU lane is not there to refill the lent experts";
+            return false;
+        }
+        std::vector<int> by_slot((size_t) np_all, -1);   // (the lent slot -> its expert)
+        for (int x = 0; x < (int) e.slot_of.size(); ++x) {
+            const int s = e.slot_of[(size_t) x];
+            if (s >= keep && s < e.n_res) by_slot[(size_t) (s - keep)] = x;
+        }
+        for (int s = 0; s < np_all; ++s)
+            if (by_slot[(size_t) s] < 0) {
+                err = "a lent slot holds no expert";
+                return false;
+            }
+        const CpuExperts& cx = l.cex;
+        const size_t gb = cx.g_stride, db = cx.d_stride;
+        for (int p0 = 0; p0 < np_all; p0 += kStage) {
+            const int np = std::min(kStage, np_all - p0);
+            lane->parallel_for(np * 3, [&](int it) {
+                const int i = it / 3, role = it % 3, ex = by_slot[(size_t) (p0 + i)];
+                uint8_t* b = h_stage + (size_t) i * l.blob + l.tr[role];
+                const uint8_t* src = role == 0 ? cx.gate + (size_t) ex * gb
+                                     : role == 1 ? cx.up + (size_t) ex * gb
+                                                 : cx.down + (size_t) ex * db;
+                std::memcpy(b, src, role == 2 ? db : gb);
+            });
+            if (cudaMemcpy(dst + (size_t) p0 * l.blob, h_stage, (size_t) np * l.blob, cudaMemcpyHostToDevice) !=
+                cudaSuccess) {
+                (void) cudaGetLastError();
+                err = "the lent experts' rows did not copy back to the GPU";
+                return false;
+            }
+        }
+        return true;
+    }
+    // A lent layer's array back at its planned rank: 0 restored, 2 not (the layer keeps its lent rank - a consistent
+    // state), 1 restored but the device's slot table did not take it (the caller stops the model rather than run on)
+    int restore_layer(const Lent& e, std::string& err) {
+        Layer& l = L[(size_t) e.il];
+        Gpu& gp = G[(size_t) l.gpu];
+        if (cudaSetDevice(gp.dev) != cudaSuccess) {
+            (void) cudaGetLastError();
+            err = "GPU " + std::to_string(gp.dev) + " could not be selected";
+            return 2;
+        }
+        const int keep = e.n_res - e.k;
+        uint8_t* ob = nullptr;
+        if (!gp.alloc(ob, (size_t) std::max(1, e.n_res) * l.blob, err)) return 2;
+        if (keep > 0 && cudaMemcpy(ob, l.experts, (size_t) keep * l.blob, cudaMemcpyDeviceToDevice) != cudaSuccess) {
+            (void) cudaGetLastError();
+            (void) gpu_release(gp, ob);
+            err = "layer " + std::to_string(e.il) + ": the kept experts' rows did not copy back";
+            return 2;
+        }
+        std::string re;
+        if (!reload_lent(l, ob + (size_t) keep * l.blob, keep, e, re)) {
+            (void) gpu_release(gp, ob);
+            err = "layer " + std::to_string(e.il) + ": " + re;
+            return 2;
+        }
+        uint8_t* compact = l.experts;
+        l.experts = ob;
+        if (!gpu_release(gp, compact))
+            std::fprintf(stderr, "maya-hy4: layer %d: the lent expert array did not free (kept until the end)\n", e.il);
+        l.n_res = e.n_res;
+        l.slot_of = e.slot_of;
+        if (cudaMemcpy(l.slot_d, l.slot_of.data(), sizeof(int) * g.n_expert, cudaMemcpyHostToDevice) != cudaSuccess) {
+            (void) cudaGetLastError();
+            err = "layer " + std::to_string(e.il) + ": the slot table did not copy back";
+            return 1;
+        }
+        return 0;
+    }
+    bool restore_lent(std::string& err) {
+        while (!borrow.lent.empty()) {
+            const Lent e = borrow.lent.back();
+            const int r = restore_layer(e, err);
+            if (r == 2) return false;   // (the layer keeps its lent rank; its slots and table agree)
+            borrow.lent.pop_back();
+            if (r == 1) {
+                borrow.fatal = true;    // (the host's slots are the plan's and the device's are not: do not run on)
+                return false;
+            }
+        }
+        return true;
+    }
+    // the chunk a prompt may read in when borrowing is on: the plan's chunk times four (the largest read a pair of
+    // 16 GB cards funds), HY4_SCRATCH_BORROW_CHUNK, rounded to whole plan chunks so a read without a lend is chunked
+    // exactly as before
+    int borrow_cap() const {
+        if (!borrow_on() || tp > 1 || lane == nullptr || h_stage == nullptr || borrow.broken || borrow.fatal) return Tc_plan;
+        int64_t cap = (int64_t) Tc_plan * 4;
+        if (const char* c = std::getenv("HY4_SCRATCH_BORROW_CHUNK")) cap = std::atoll(c);
+        cap = std::max<int64_t>(cap, Tc_plan);
+        if (o.max_ctx > 0) cap = std::min<int64_t>(cap, o.max_ctx);
+        cap = cap / Tc_plan * Tc_plan;
+        return (int) (cap > Tc_plan ? cap : Tc_plan);
+    }
+    int borrow_min_tokens() const {
+        if (const char* m = std::getenv("HY4_SCRATCH_BORROW_MIN")) return std::atoi(m);
+        return 2 * Tc_plan;   // (a short or agentic read keeps the plan's scratch and every resident expert)
+    }
+    void borrow_refused() {
+        if (borrow.noted) return;
+        borrow.noted = true;
+        std::fprintf(stderr, "maya-hy4: prompt scratch borrowing not taken%s%s\n",
+                     borrow.why.empty() ? "" : ": ", borrow.why.c_str());
+    }
+    // A prompt of n tokens (its first call since the last decode): borrow the rows of a chunk of n - its chunks then
+    // read n at a time - or of the largest of n, n/2, n/4, n/8 that the resident experts on every GPU can fund (a
+    // call larger than the rows is read in chunks of them: the lend still pays once for the whole prompt).  false
+    // with err empty: not taken (the plan's chunks read the prompt); false with err set: taken and undone, and the
+    // caller must stop (its state is the plan's again).
+    bool borrow_open(size_t n, std::string& err) {
+        err.clear();
+        int64_t want = std::min<int64_t>((int64_t) n, o.max_ctx > 0 ? o.max_ctx : (int64_t) n);
+        for (int tries = 0; tries < 4 && want > Tc_plan; ++tries, want /= 2) {
+            std::string e;
+            if (borrow_open_at((int) want, e)) return true;
+            if (borrow.fatal) {
+                err = e.empty() ? "the prompt scratch borrow: the plan's own rows could not be restored" : e;
+                return false;
+            }
+            if (!e.empty()) {
+                err = e;
+                return false;
+            }
+        }
+        return false;
+    }
+    bool borrow_open_at(int Tb, std::string& err) {
+        err.clear();
+        if (!borrow_on() || borrow.open || borrow.broken || borrow.fatal || tp > 1 || lane == nullptr || h_stage == nullptr)
+            return false;
+        if (Tb <= Tc_plan) return false;
+        if (ring < (int64_t) g.n_swa + Tb) {   // (a chunk that long would write its own window's rows)
+            borrow.why = "the sliding-window rings hold " + std::to_string(ring) + " rows, a chunk of " +
+                         std::to_string(Tb) + " needs " + std::to_string((int64_t) g.n_swa + Tb);
+            return false;
+        }
+        const size_t E = (size_t) g.n_embd;
+        const double mtp_b = M.mtp ? (double) mtp_row_bytes((size_t) Tb) : 0.0;
+        std::vector<double> free_b(G.size(), 0.0), lend_b(G.size(), 0.0), peak_b(G.size(), 0.0), need_b(G.size(), 0.0);
+        std::vector<char> used;
+        used_gpus(used);
+        borrow.base_freed.assign(G.size(), 0);
+        for (const Layer& l : L)
+            if (can_lend(l)) {
+                lend_b[(size_t) l.gpu] += (double) l.n_res * (double) l.blob;
+                peak_b[(size_t) l.gpu] = std::max(peak_b[(size_t) l.gpu], (double) l.n_res * (double) l.blob);
+            }
+        const double margin = std::max(64.0 * 1048576.0, 0.5 * o.reserve_gb * 1e9);
+        for (size_t i = 0; i < G.size(); ++i) {
+            if (cudaSetDevice(G[i].dev) != cudaSuccess) {
+                (void) cudaGetLastError();
+                return false;
+            }
+            size_t fr = 0, tot = 0;
+            if (cudaMemGetInfo(&fr, &tot) != cudaSuccess) {
+                (void) cudaGetLastError();
+                return false;
+            }
+            free_b[i] = (double) fr;
+            // (the plan's row buffers are freed for the lend: only the larger chunk's difference is borrowed)
+            if (used[i]) {
+                const double base_rows = (double) row_bytes_at(G[i], (size_t) Tc_plan);
+                need_b[i] = std::max(0.0, (double) row_bytes_at(G[i], (size_t) Tb) - base_rows) +
+                            ((int) i == head_gpu ? mtp_b : 0.0);
+            }
+        }
+        for (size_t i = 0; i < G.size(); ++i) {
+            if (!used[i]) continue;
+            if (need_b[i] + margin > free_b[i] + lend_b[i]) {
+                borrow.why = "CUDA" + std::to_string(G[i].dev) + " needs " + std::to_string((long long) (need_b[i] / 1e6)) +
+                             " MB more, and its resident experts lend " + std::to_string((long long) (lend_b[i] / 1e6)) +
+                             " MB with " + std::to_string((long long) (free_b[i] / 1e6)) + " MB free";
+                return false;
+            }
+            // the compaction holds the kept rows beside the old array for a moment: the reserve must take one layer's
+            if (lend_b[i] > 0.0 && free_b[i] + margin < peak_b[i]) {
+                borrow.why = "CUDA" + std::to_string(G[i].dev) + " has " + std::to_string((long long) (free_b[i] / 1e6)) +
+                             " MB free, and a layer's experts take " + std::to_string((long long) (peak_b[i] / 1e6)) +
+                             " MB to compact";
+                return false;
+            }
+        }
+        std::vector<double> short_b(G.size(), 0.0), frac_b(G.size(), 0.0);
+        for (size_t i = 0; i < G.size(); ++i) {
+            short_b[i] = used[i] ? std::max(0.0, need_b[i] + margin - free_b[i]) : 0.0;
+            frac_b[i] = lend_b[i] > 0.0 ? std::min(1.0, short_b[i] / lend_b[i]) : 0.0;
+        }
+        // (the streams are idle before an expert array is freed - the last forward synced its head, and a draft its own)
+        for (const Gpu& gp : G) {
+            if (cudaSetDevice(gp.dev) != cudaSuccess) (void) cudaGetLastError();
+            if (cudaStreamSynchronize(gp.s) != cudaSuccess) (void) cudaGetLastError();
+        }
+        // the lend: every CPU-lane layer of a GPU that is short gives the same share of its slots, the tail ones
+        bool ok = true;
+        for (Layer& l : L) {
+            const double frac = frac_b[(size_t) l.gpu];
+            if (frac <= 0.0 || !can_lend(l)) continue;
+            int k = (int) std::ceil((double) l.n_res * frac);
+            if (k < 1) k = 1;
+            if (k > l.n_res) k = l.n_res;
+            std::string le;
+            if (!lend_layer(l, k, le)) {
+                if (le.empty()) le = "a layer could not compact its experts";
+                err = "the prompt scratch borrow: " + le;
+                ok = false;
+                break;
+            }
+            short_b[(size_t) l.gpu] = std::max(0.0, short_b[(size_t) l.gpu] - (double) k * (double) l.blob);
+        }
+        for (size_t i = 0; i < short_b.size(); ++i)
+            if (short_b[i] > 1.0) ok = false;   // (a byte's rounding: the lend from whole experts)
+        borrow.why = "the resident experts could not lend the prompt its rows";
+        // the plan's row buffers are dead while the lend is open: free them too (they come back at close), so the
+        // borrowed rows are only what the larger chunk needs beyond the plan's
+        if (ok) {
+            for (size_t i = 0; i < G.size() && ok; ++i) {
+                if (!used[i]) continue;
+                Gpu& b = G[i];
+                if (cudaSetDevice(b.dev) != cudaSuccess) {
+                    (void) cudaGetLastError();
+                    err = "the prompt scratch borrow: a GPU could not be selected";
+                    ok = false;
+                    break;
+                }
+                bool good = true;
+                row_bufs(b, (size_t) Tc_plan, [&](auto& p, size_t) {
+                    if (!good || p == nullptr) return;
+                    if (!gpu_release(b, p)) {
+                        good = false;
+                        return;
+                    }
+                    p = nullptr;
+                });
+                if (good) {
+                    borrow.base_freed[i] = 1;
+                    continue;
+                }
+                std::string e2;   // (a free failed: the plan's rows come back before the refusal)
+                if (!scratch_rows(b, (size_t) Tc_plan, e2)) {
+                    borrow.fatal = true;
+                    err = e2;
+                } else {
+                    err = "the prompt scratch borrow: the plan's row buffers did not free";
+                }
+                ok = false;
+            }
+        }
+        if (ok) {
+            borrow.gi.clear();
+            borrow.g.assign(G.size(), Gpu());
+            for (size_t i = 0; i < G.size() && ok; ++i) {
+                if (!used[i]) continue;
+                Gpu& b = borrow.g[i];
+                b = G[i];
+                b.allocs.clear();
+                b.used = 0;
+                borrow.gi.push_back((int) i);   // (its rows are the cleanup's even if the allocation does not finish)
+                std::string e2;
+                if (!scratch_rows(b, (size_t) Tb, e2)) {
+                    err = e2;
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        std::vector<void*> extra;
+        if (ok && M.mtp) {
+            if (cudaSetDevice(G[(size_t) head_gpu].dev) != cudaSuccess) (void) cudaGetLastError();
+            const size_t sizes[4] = {2 * (size_t) Tb * E, (size_t) Tb * E, (size_t) Tb * E, (size_t) Tb * E};
+            for (int q = 0; q < 4 && ok; ++q) {
+                void* p = nullptr;
+                if (cudaMalloc(&p, std::max<size_t>(sizes[q] * sizeof(float), 256)) != cudaSuccess) {
+                    (void) cudaGetLastError();
+                    ok = false;
+                    err = "the prompt scratch borrow: the MTP block's rows did not allocate";
+                    break;
+                }
+                extra.push_back(p);
+            }
+        }
+        void* hn[10] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+        if (ok) {
+            auto host = [&](int q, size_t bytes) {
+                if (cudaMallocHost(&hn[q], bytes) != cudaSuccess) {
+                    (void) cudaGetLastError();
+                    hn[q] = nullptr;
+                    ok = false;
+                    err = "the prompt scratch borrow: the host rows did not allocate";
+                }
+            };
+            const size_t hc = (size_t) g.hc;
+            host(0, sizeof(float) * (size_t) Tb * hc * E);
+            host(1, (size_t) std::max(1, pk.eg.modules) * (size_t) Tb * std::max(1, pk.eg.cols()) *
+                         std::max(1, pk.eg.head_dim));
+            host(2, sizeof(float) * (size_t) Tb);
+            if (eg_scale != nullptr) host(3, sizeof(float) * (size_t) pk.eg.modules * (size_t) Tb * pk.eg.cols());
+            host(4, sizeof(int) * 3 * (size_t) Tb);
+            if (h_ids != nullptr) host(5, sizeof(int) * (size_t) Tb * 16);
+            if (h_w != nullptr) host(6, sizeof(float) * (size_t) Tb * 16);
+            if (h_lat != nullptr) {
+                host(7, sizeof(float) * (size_t) Tb * (size_t) g.n_lat);
+                host(8, sizeof(float) * (size_t) Tb * (size_t) g.n_lat);
+            }
+            if (h_emb != nullptr) host(9, sizeof(float) * (size_t) Tb * E);
+        }
+        if (!ok) {   // (the lend undone; the plan's rows and experts are as they were)
+            for (int i : borrow.gi) {
+                Gpu& b = borrow.g[(size_t) i];
+                if (cudaSetDevice(b.dev) != cudaSuccess) (void) cudaGetLastError();
+                for (void* p : b.allocs) cudaFree(p);
+                b.allocs.clear();
+            }
+            borrow.gi.clear();
+            for (size_t i = 0; i < borrow.base_freed.size(); ++i)
+                if (borrow.base_freed[i]) {   // (the plan's row buffers back: the decode path is whole again)
+                    if (cudaSetDevice(G[i].dev) != cudaSuccess) (void) cudaGetLastError();
+                    std::string e2;
+                    if (!scratch_rows(G[i], (size_t) Tc_plan, e2)) {
+                        borrow.fatal = true;
+                        err = (err.empty() ? "" : err + "; ") + e2;
+                    } else {
+                        borrow.base_freed[i] = 0;
+                    }
+                }
+            if (cudaSetDevice(G[(size_t) head_gpu].dev) != cudaSuccess) (void) cudaGetLastError();
+            for (void* p : extra) cudaFree(p);
+            for (void*& p : hn)
+                if (p) {
+                    cudaFreeHost(p);
+                    p = nullptr;
+                }
+            std::string re;
+            const bool back = restore_lent(re);
+            if (!back) {
+                borrow.broken = true;
+                err = (err.empty() ? "" : err + "; ") + re;
+            } else if (!borrow.fatal) {   // (the plan's rows and experts are whole again: the prompt reads its own chunks)
+                if (!err.empty()) borrow.why = err;
+                err.clear();
+            }
+            return false;
+        }
+        // commit: the MTP block's rows and the host rows, then every view in place of its plan struct
+        borrow.extra = std::move(extra);
+        if (!borrow.extra.empty()) {
+            borrow.mtp_in0 = mtp_in;
+            borrow.mtp_cur0 = mtp_cur;
+            borrow.mtp_hin0 = mtp_hin;
+            borrow.mtp_out0 = mtp_out;
+            mtp_in = (float*) borrow.extra[0];
+            mtp_cur = (float*) borrow.extra[1];
+            mtp_hin = (float*) borrow.extra[2];
+            mtp_out = (float*) borrow.extra[3];
+        }
+        borrow.h_x0 = h_x;
+        h_x = (float*) hn[0];
+        borrow.h_eg0 = h_eg;
+        h_eg = (uint8_t*) hn[1];
+        borrow.h_valid0 = h_valid;
+        h_valid = (float*) hn[2];
+        borrow.h_egs0 = h_egs;
+        h_egs = (float*) hn[3];
+        borrow.h_pos0 = h_pos;
+        h_pos = (int*) hn[4];
+        borrow.h_ids0 = h_ids;
+        h_ids = (int*) hn[5];
+        borrow.h_w0 = h_w;
+        h_w = (float*) hn[6];
+        borrow.h_lat0 = h_lat;
+        h_lat = (float*) hn[7];
+        borrow.h_cpu0 = h_cpu;
+        h_cpu = (float*) hn[8];
+        borrow.h_emb0 = h_emb;
+        h_emb = (float*) hn[9];
+        for (int i : borrow.gi) {
+            Gpu t = G[(size_t) i];
+            G[(size_t) i] = borrow.g[(size_t) i];
+            borrow.g[(size_t) i] = t;
+        }
+        borrow.swapped = true;
+        borrow.rows = Tb;
+        borrow.open = true;
+        Tc = Tb;
+        return true;
+    }
+    // the prompt is read (or a decode window is next): the borrowed rows go, the host rows back, the plan's chunk, and
+    // every lent expert array at its planned rank and slots.  false: the state is not the plan's (fatal: the model must
+    // not run on); an error is always left in err
+    bool borrow_close(std::string& err) {
+        if (!borrow.open) return !borrow.fatal;
+        for (const Gpu& gp : G) {
+            if (cudaSetDevice(gp.dev) != cudaSuccess) (void) cudaGetLastError();
+            if (cudaStreamSynchronize(gp.s) != cudaSuccess) (void) cudaGetLastError();
+        }
+        Gpu t;
+        for (int i : borrow.gi) {
+            t = G[(size_t) i];
+            G[(size_t) i] = borrow.g[(size_t) i];
+            borrow.g[(size_t) i] = t;
+        }
+        borrow.swapped = false;
+        borrow.open = false;
+        Tc = Tc_plan;
+        if (!borrow.extra.empty()) {
+            mtp_in = borrow.mtp_in0;
+            mtp_cur = borrow.mtp_cur0;
+            mtp_hin = borrow.mtp_hin0;
+            mtp_out = borrow.mtp_out0;
+            borrow.mtp_in0 = borrow.mtp_cur0 = borrow.mtp_hin0 = borrow.mtp_out0 = nullptr;
+        }
+        for (int i : borrow.gi) {
+            Gpu& b = borrow.g[(size_t) i];
+            if (cudaSetDevice(b.dev) != cudaSuccess) (void) cudaGetLastError();
+            for (void* p : b.allocs) cudaFree(p);
+            b.allocs.clear();
+        }
+        borrow.gi.clear();
+        for (size_t i = 0; i < borrow.base_freed.size(); ++i)
+            if (borrow.base_freed[i]) {   // (the plan's row buffers back - the decode's own scratch)
+                if (cudaSetDevice(G[i].dev) != cudaSuccess) (void) cudaGetLastError();
+                std::string e2;
+                if (!scratch_rows(G[i], (size_t) Tc_plan, e2)) {
+                    borrow.fatal = true;
+                    err = (err.empty() ? "" : err + "; ") + e2;
+                } else {
+                    borrow.base_freed[i] = 0;
+                }
+            }
+        if (cudaSetDevice(G[(size_t) head_gpu].dev) != cudaSuccess) (void) cudaGetLastError();
+        for (void* p : borrow.extra) cudaFree(p);
+        borrow.extra.clear();
+        auto hback = [](auto** cur, auto* base) {
+            if (base == nullptr) return;
+            cudaFreeHost(*cur);
+            *cur = base;
+        };
+        hback(&h_x, borrow.h_x0);
+        hback(&h_eg, borrow.h_eg0);
+        hback(&h_valid, borrow.h_valid0);
+        hback(&h_egs, borrow.h_egs0);
+        hback(&h_pos, borrow.h_pos0);
+        hback(&h_ids, borrow.h_ids0);
+        hback(&h_w, borrow.h_w0);
+        hback(&h_lat, borrow.h_lat0);
+        hback(&h_cpu, borrow.h_cpu0);
+        hback(&h_emb, borrow.h_emb0);
+        borrow.h_x0 = nullptr;
+        borrow.h_eg0 = nullptr;
+        borrow.h_valid0 = nullptr;
+        borrow.h_egs0 = nullptr;
+        borrow.h_pos0 = nullptr;
+        borrow.h_ids0 = nullptr;
+        borrow.h_w0 = nullptr;
+        borrow.h_lat0 = nullptr;
+        borrow.h_cpu0 = nullptr;
+        borrow.h_emb0 = nullptr;
+        borrow.rows = 0;
+        std::string re;
+        const bool ok = restore_lent(re);
+        if (!re.empty()) err = (err.empty() ? "" : err + "; ") + "the prompt scratch borrow: " + re;
+        if (!ok) borrow.broken = true;
+        return ok && !borrow.fatal;
+    }
+
     bool window(const int* ids, int T, int64_t p0, int want, float* logits_out, std::string& err) {
         const int E = g.n_embd, hc = g.hc;
         win_t0 = now_s();
         cur_p0 = p0;
+        if (dfly.on()) dfly.begin_window(p0);
         // the embeddings, every stream a copy
         for (int t = 0; t < T; ++t) {
             const int id = ids[t];
@@ -3328,6 +4060,9 @@ struct Model::Impl {
         k::rmsnorm(hg.hcur, E, T, E, out_norm, g.eps, hg.hcur, E, hg.s);
         dbg("result_norm", -1, hg, hg.hcur + (size_t) (T - 1) * E, 1, E);
         k::store_rows(hg.hcur, T, E, hring, ring, hg.pos, hg.s);
+        if (dfly.on())
+            for (int t = std::max(0, T - kDflyTapRows); t < T; ++t)
+                dfly.hidden_at(p0 + t, hg.hcur + (size_t) t * E, hg.s);
         if (want > 0) {
             if (!mm(hg, out, hg.hcur + (size_t) (T - want) * E, E, want, hg.logits, g.n_vocab)) {
                 err = "output head: a GEMV the kernels do not take";
@@ -3979,16 +4714,48 @@ bool Model::forward(const int* ids, int n, int64_t pos0, int want, float* logits
         err = "logits of at most " + std::to_string(W) + " positions a call";
         return false;
     }
+    // The borrowed prompt scratch (HY4_SCRATCH_BORROW): a decode window or a run that does not continue where the last
+    // one stopped gives the experts back first; then a prompt longer than the plan's chunk borrows the rows of a chunk
+    // (its calls are read in chunks of them - a call larger than the rows is split, so one lend holds the prompt).
+    const bool new_run = n <= W || pos0 != m->end;
+    if (m->borrow.open && new_run) {
+        if (!m->borrow_close(err)) {
+            if (err.empty()) err = "the prompt scratch borrow: the borrowed state could not be put back";
+            return false;
+        }
+    }
+    if (new_run) m->borrow.skipped = false;   // (a refusal holds for one prompt only)
+    if (m->borrow.fatal) {
+        err = "the prompt scratch borrow: an expert array was not put back (the model cannot run on)";
+        return false;
+    }
     m->tokens.resize((size_t) pos0);
     m->mtp_done = std::min(m->mtp_done, pos0);
     m->tokens.insert(m->tokens.end(), ids, ids + n);
     m->end = pos0;
+    if (!m->borrow.open && !m->borrow.skipped && n > W && (int64_t) n > m->Tc_plan &&
+        n >= m->borrow_min_tokens()) {
+        std::string be;
+        if (!m->borrow_open((size_t) n, be)) {
+            m->borrow.skipped = true;
+            if (!be.empty()) {
+                err = be;
+                return false;
+            }
+            m->borrow_refused();
+        }
+    }
     // the last chunk takes the last min(n, Tc) tokens (the wanted rows among them), the ones before it chunks of Tc
     const int Tc = m->Tc, last = std::min(n, Tc), head = n - last;
     int done = 0;
     while (done < n) {
         const int T = done < head ? std::min(Tc, head - done) : last;
-        if (!m->window(ids + done, T, pos0 + done, done + T == n ? want : 0, logits_out, err)) return false;
+        if (!m->window(ids + done, T, pos0 + done, done + T == n ? want : 0, logits_out, err)) {
+            // (a failed prompt gives the borrowed rows back too: the next request must find the plan's own state)
+            std::string ce;
+            if (!m->borrow_close(ce) && !ce.empty()) err = (err.empty() ? "" : err + "; ") + ce;
+            return false;
+        }
         done += T;
         m->end = pos0 + done;
         m->st.tokens += T;
@@ -3999,12 +4766,12 @@ bool Model::forward(const int* ids, int n, int64_t pos0, int want, float* logits
 
 int Model::vocab() const { return m->g.n_vocab; }
 int64_t Model::max_ctx() const { return m->o.max_ctx; }
-int Model::chunk() const { return m->Tc; }
+int Model::chunk() const { return m->borrow_cap(); }
 bool Model::draft(int tok, int64_t pos, int n, float floor, std::vector<int>& d, std::vector<float>& c,
                   std::string& err) {
     return m->draft(tok, pos, n, floor, d, c, err);
 }
-bool Model::has_mtp() const { return m->M.mtp; }
+bool Model::has_mtp() const { return m->M.mtp || m->dfly.on(); }
 bool Model::pin(void* p, size_t bytes) {
     if (p == nullptr || bytes == 0) return false;
     if (cudaHostRegister(p, bytes, cudaHostRegisterPortable) != cudaSuccess) {

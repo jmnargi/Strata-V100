@@ -76,6 +76,21 @@ long-prompt speed for residency: using Basalt's ranking, a single
 233 tok/s with 4,096. Keep 4,096 for long reads. These runs did not use
 Basalt's per-layer slot weighting or temporary expert-slot borrowing.
 
+**Borrow prompt scratch:** set `HY4_SCRATCH_BORROW=1` and
+`HY4_SCRATCH_BORROW_CHUNK=4096` with `--chunk 1024` on a layer split.
+Long prompts temporarily make room by lending expert slots; the engine
+reloads the displaced experts before decode. On the same 6,220-token
+review and local routing profile, fixed 1,024 took 80.2 s, borrowing 50.1 s,
+and fixed 4,096 took 26.5 s (one run each, not interleaved).
+
+**DFly2:** pass `--dfly /path/to/Hy4-Flash-Maya-S-drafter.dfly2 --draft 5`
+instead of `--mtp`. This is opt-in and uses layer split. It used 0.97 GB
+on the head GPU and left room for 8,897 experts, against 7,339 with MTP.
+On one fresh 192-token coding reply at 32K with int8 KV, DFly2 and both
+plain controls emitted identical tokens. DFly2 accepted 122 of 199 drafts
+and decoded at 22.4 tok/s against 21.0–22.5 tok/s without drafting; no
+consistent decode improvement is established.
+
 ## Two cards, one request: what the layer split costs (2026-11-18)
 
 [sfnx](https://github.com/johnfink8/sfnx) is a separate engine for this same model

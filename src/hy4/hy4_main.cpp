@@ -852,7 +852,7 @@ int serve(hy4::Model& m, const std::vector<int>& eos, int n_draft, float floor0)
             state.clear();
             held.clear();
         }
-        if (spec && d_off > 0) std::fprintf(stderr, "maya hy4 serve: MTP kept %lld of %lld drafts\n", d_acc, d_off);
+        if (spec && d_off > 0) std::fprintf(stderr, "maya hy4 serve: kept %lld of %lld drafts\n", d_acc, d_off);
         stat_line();
         const double t2 = now() * 1e3;
         std::printf("DONE %lld %zu %.1f %.1f %s %lld %lld %zu 0 0\n", produced, r.ids.size(), t1 - t0, t2 - t1, finish,
@@ -1082,6 +1082,7 @@ int main(int argc, char** argv) {
         else if (a == "--bench-experts") bench_n = std::atoi(next().c_str());
         else if (a == "--bench-tokens") bench_t = std::atoi(next().c_str());
         else if (a == "--mtp") o.mtp = true;
+        else if (a == "--dfly") o.dfly = next();
         else if (a == "--draft") n_draft = std::atoi(next().c_str());
         else if (a == "--draft-floor") floor = (float) std::atof(next().c_str());
         else if (a == "--eos") eos = parse_list(next());
@@ -1111,6 +1112,10 @@ int main(int argc, char** argv) {
     }
     if (o.pack.empty()) {
         std::fprintf(stderr, "usage: maya-hy4 --pack <model>/maya-hy4 (--ids @file [--gen N] | --kld ref.kld)\n");
+        return 2;
+    }
+    if (o.mtp && !o.dfly.empty()) {
+        std::fprintf(stderr, "--mtp and --dfly cannot be combined\n");
         return 2;
     }
     if (bench_layer >= 0) return bench_lane(o.pack, bench_layer, bench_n, bench_t);
@@ -1203,7 +1208,7 @@ int main(int argc, char** argv) {
         const double t2 = now();
         for (size_t i = 0; i < out.size(); ++i) std::printf("%s%d", i ? "," : "", out[i]);
         std::printf("\n");
-        std::fprintf(stderr, "decode: %zu tokens in %.2f s (%.2f tok/s); %lld rounds, MTP kept %lld of %lld drafts "
+        std::fprintf(stderr, "decode: %zu tokens in %.2f s (%.2f tok/s); %lld rounds, kept %lld of %lld drafts "
                      "(%.1f tokens a round); a round: drafts %.1f ms, verify %.1f ms\n", out.size(), t2 - t1,
                      out.size() / (t2 - t1), rounds, acc, off, rounds ? (double) out.size() / rounds : 0.0,
                      rounds ? 1e3 * t_draft / rounds : 0.0, rounds ? 1e3 * t_verify / rounds : 0.0);
