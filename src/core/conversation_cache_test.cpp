@@ -108,6 +108,32 @@ void test_root_priority() {
               "only the root is evicted");
         check(cache.evict_oldest() && !cache.evict_oldest(),
               "explicit checkpoint pin remains protected when no victim is available");
+        check(cache.pinned_evictions() == 0, "the only pinned conversation is never a victim");
+    }
+    {   // leaked pins: conversations parked with a checkpoint pin and never resumed must not jam the cache
+        auto pinned_image = [](std::initializer_list<int32_t> live, std::initializer_list<int32_t> ck) {
+            auto s = image_with_checkpoint(live, ck);
+            s.checkpoints.back().pinned = true;
+            return s;
+        };
+        const size_t each = pinned_image({1, 2, 3}, {1, 2}).bytes();
+        ConversationCache cache(each * 64, 3);   // slot pressure: three entries
+        check(cache.put(pinned_image({1, 2, 3}, {1, 2})), "dead pinned conversation #1 parks");
+        check(cache.put(pinned_image({4, 5, 6}, {4, 5})), "dead pinned conversation #2 parks");
+        check(cache.put(pinned_image({7, 8, 9}, {7, 8})), "live pinned conversation parks");
+        check(cache.put(image({10, 11, 12})), "an ordinary park still fits when only pinned entries are left");
+        check(!cache.has({1, 2, 3}, {}, true) && cache.has({4, 5, 6}, {}, true) && cache.has({7, 8, 9}, {}, true),
+              "the oldest pinned conversation is evicted first");
+        check(cache.pinned_evictions() == 1, "one pinned eviction counted");
+        check(cache.put(image({13, 14, 15})), "the ordinary chat is the next victim, not a pin");
+        check(cache.has({4, 5, 6}, {}, true) && !cache.has({10, 11, 12}, {}, true),
+              "unpinned entries still go before pinned ones");
+        check(cache.put(image({16, 17, 18})) && cache.put(image({19, 20, 21})),
+              "repeated pressure keeps parking");
+        check(cache.has({7, 8, 9}, {}, true), "the most recently stored pinned conversation survives");
+        while (cache.evict_oldest()) {}
+        check(cache.size() == 1 && cache.has({7, 8, 9}, {}, true),
+              "evict_oldest stops at the newest pinned conversation");
     }
 }
 // A parked conversation and the fork of it share one physical prefix.  These are
