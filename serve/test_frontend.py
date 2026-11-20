@@ -177,6 +177,29 @@ class UnreadContentParts(unittest.TestCase):
                       self.template.render(msgs[0], tools=msgs[1], **msgs[2]))
 
 
+class ThinkingOffKeepsPreserveThinking(unittest.TestCase):
+    """chat_template_kwargs is read in the client's key order: `enable_thinking: false` after `preserve_thinking: true`
+    dropped preserve_thinking, the history's reasoning left the prompt and the prompt cache missed on every switch."""
+
+    def kwargs(self, ctk, **req):
+        return openai_to_messages({"messages": [{"role": "user", "content": "hi"}], "chat_template_kwargs": ctk, **req})[2]
+
+    def test_either_key_order_gives_the_same_kwargs(self):
+        want = {"enable_thinking": False, "preserve_thinking": True}
+        self.assertEqual(self.kwargs({"preserve_thinking": True, "enable_thinking": False}), want)
+        self.assertEqual(self.kwargs({"enable_thinking": False, "preserve_thinking": True}), want)
+        self.assertEqual(self.kwargs({"preserve_thinking": True, "enable_thinking": False}, reasoning_effort="medium"), want)
+
+    def test_nothing_else_changes(self):
+        self.assertEqual(self.kwargs({"enable_thinking": False}), {"enable_thinking": False})
+        self.assertEqual(self.kwargs({"preserve_thinking": False, "enable_thinking": False}), {"enable_thinking": False})
+        self.assertEqual(self.kwargs({"reasoning_effort": "low", "enable_thinking": False}), {"enable_thinking": False})
+        self.assertEqual(self.kwargs({"preserve_thinking": True}, reasoning_effort="medium"),
+                         {"reasoning_effort": "medium", "preserve_thinking": True})
+        self.assertEqual(self.kwargs({"preserve_thinking": True, "enable_thinking": True}, reasoning_effort="medium"),
+                         {"reasoning_effort": "medium", "preserve_thinking": True})
+
+
 if __name__ == "__main__":
     unittest.main()
 
