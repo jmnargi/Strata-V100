@@ -198,6 +198,56 @@ int main() {
         check(worst < 1e-4, "on, pending write: the write, then the projection");
     }
 
+    // ---- 5. a batch window's rows: each follows its own slot's switch, whatever the main session's says
+    std::printf("per slot\n");
+    {
+        const int rows[5] = {2, 0, 0, 1, 2};          // row t is slot rows[t]
+        const bool slot_on[3] = {false, true, false};
+        for (int b = 0; b < 3; ++b) k::cvec_set_slot_enabled(b, slot_on[b]);
+        check(!k::cvec_slot_enabled(0) && k::cvec_slot_enabled(1) && k::cvec_slot_enabled(7),
+              "cvec_slot_enabled() follows the slot's switch (never set: on)");
+        bool ok = true;
+        for (int write = 0; write < 2; ++write) {
+            // the references: every row with the main flag off [0] and on [1]
+            std::vector<float> ref[2];
+            for (int on = 0; on < 2; ++on) {
+                k::cvec_set_enabled(on != 0);
+                up(dR, R);
+                k::cvec_apply(dR, kLayer, T, D, write ? dbo : nullptr, write ? N : 0, write ? dinj : nullptr,
+                              write ? HC : 0, write != 0, nullptr);
+                ck(cudaDeviceSynchronize(), "per slot reference");
+                ref[on] = down(dR, R.size());
+            }
+            ok = ok && std::memcmp(ref[0].data(), ref[1].data(), R.size() * 4) != 0;
+            for (int main_on = 0; main_on < 2; ++main_on) {
+                k::cvec_set_enabled(main_on != 0);
+                up(dR, R);
+                k::cvec_apply_rows(dR, kLayer, T, D, write ? dbo : nullptr, write ? N : 0, write ? dinj : nullptr,
+                                   write ? HC : 0, write != 0, rows, nullptr);
+                ck(cudaDeviceSynchronize(), "per slot");
+                const auto got = down(dR, R.size());
+                for (int64_t t = 0; t < T; ++t)
+                    ok = ok && std::memcmp(got.data() + t * D, ref[slot_on[rows[t]] ? 1 : 0].data() + t * D, (size_t) D * 4) == 0;
+            }
+        }
+        check(ok, "each row is bitwise its own slot's setting, main flag on or off");
+        // the main session's rows do not read a slot's entry
+        k::cvec_set_enabled(true);
+        for (int b = 0; b < 3; ++b) k::cvec_set_slot_enabled(b, false);
+        up(dR, R);
+        k::cvec_apply(dR, kLayer, T, D, nullptr, 0, nullptr, 0, false, nullptr);
+        ck(cudaDeviceSynchronize(), "main rows");
+        const auto got = down(dR, R.size());
+        double worst = 0.0;
+        for (int64_t t = 0; t < T; ++t)
+            for (int64_t c = 0; c < HC; ++c) {
+                double after = 0.0;
+                for (int64_t j = 0; j < N; ++j) after += (double) got[(size_t) (t * D + c * N + j)] * dir[(size_t) (kLayer * N + j)];
+                worst = std::fmax(worst, std::fabs(after));
+            }
+        check(worst < 1e-3, "cvec_apply follows the main flag with every slot off");
+    }
+
     // ---- 2. add
     std::printf("add\n");
     for (int64_t j = 0; j < N; ++j) dir[(size_t) (kLayer * N + j)] *= 0.1f;   // d = 0.1 v, s = 1

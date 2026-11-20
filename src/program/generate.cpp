@@ -2171,7 +2171,8 @@ bool load_control_vectors(const Options& o, const strata::core::ModelGeometry& g
     summary = std::string(o.cvec_mode == 0 ? "project" : "add") + ":" + std::to_string(first) + "-" + std::to_string(last) +
               (single >= 0 ? ":single" + std::to_string(single) : "");
     // the line llama.cpp's patched build prints, so a log shows the same thing
-    std::fprintf(stderr, "strata generate: control vector mode = %s, dir = %s, layers %d..%d (%d steered)\n",
+    std::fprintf(stderr, "strata generate: control vector mode = %s, dir = %s, layers %d..%d (%d steered), "
+                         "switch per batch slot\n",
                  o.cvec_mode == 0 ? "project" : "add", single >= 0 ? "single" : "per-layer", first, last, steered);
     return true;
 }
@@ -17643,6 +17644,10 @@ int main(int argc, char** argv) {
                         sl.draft_ready = true;
                     }
                     sl.cvec = cvec_cached;
+                    // the slot's rows keep the setting its prompt was read with (the main session's flag follows the
+                    // next request from here on; one flag for the device steered every slot by the request admitted last)
+                    if (strata::kernels::cvec().loaded())
+                        strata::kernels::cvec_set_slot_enabled(admit_slot, strata::kernels::cvec_enabled());
                     sl.img = !live_imgs.empty();   // pictures: not matched again by tokens alone, so not cached
                     const ConvCheckpoint* best = nullptr;
                     size_t best_at = 0;   // its place in `checks` (STRATA_SLOT_CKPT_MOVE)
