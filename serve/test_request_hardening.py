@@ -156,6 +156,53 @@ class Hardening(unittest.TestCase):
                                                        "max_tokens": 8, "repeat_penalty": 1.1, "repeat_last_n": 64})
         self.assertEqual(code, 200, out)
 
+    def test_the_projection_switch_is_a_boolean_or_nothing(self):
+        """experimental_speed_projection (the control vector's per-request switch): only true turns it on.  Any other
+        type ("false", 0, 1, a list) is a 400 that names the field - unchecked, it replaced the configured default in
+        run()'s merge, projection_key dropped it, and the engine ran with its own default, which is ON."""
+        from serve.server import StrataEngine, check_request_sampling
+        key = "experimental_speed_projection"
+        for ok in ({}, {key: None}, {key: False}, {key: True}):
+            check_request_sampling(dict(ok))
+        for bad in ("false", "true", "", 0, 1, 1.0, [], [True], {"on": True}):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError) as e:
+                    check_request_sampling({key: bad})
+                self.assertTrue(str(e.exception).startswith(key + ":"), e.exception)
+        chat = {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 8}
+        responses = {"model": "m", "input": "hi", "store": False, "max_output_tokens": 8}
+        for path, body in (("/v1/chat/completions", {**chat, key: "false"}), ("/v1/chat/completions", {**chat, key: 0}),
+                           ("/v1/chat/completions", {**chat, key: 1}), ("/v1/messages", {**chat, key: "true"}),
+                           ("/v1/responses", {**responses, key: 0})):
+            with self.subTest(path=path, body=body[key]):
+                with mock.patch("builtins.print"):
+                    code, out = self.post(path, body)
+                self.assertEqual(code, 400, (path, body, out))
+                self.assertIn(key, json.dumps(out))
+        # what the engine is told, with the config's default off: absent, null and false are cvec=0, only true is cvec=1
+        engine, seen = self.svc.engine, []
+        real = engine.generate
+
+        def generate(ids, max_new, sampling, cancel, embeddings=None):
+            seen.append(StrataEngine.projection_key(dict(sampling or {})))
+            return real(ids, max_new, sampling, cancel, embeddings)
+
+        before = self.svc.sampling_defaults
+        self.svc.sampling_defaults = {key: False}
+        engine.generate = generate
+        try:
+            for extra, want in (({}, " cvec=0"), ({key: None}, " cvec=0"), ({key: False}, " cvec=0"),
+                                ({key: True}, " cvec=1")):
+                for path in ("/v1/chat/completions", "/v1/messages"):
+                    with self.subTest(path=path, extra=extra):
+                        del seen[:]
+                        code, out = self.post(path, {**chat, **extra})
+                        self.assertEqual(code, 200, out)
+                        self.assertEqual(seen, [want])
+        finally:
+            del engine.generate
+            self.svc.sampling_defaults = before
+
     def test_in_type_values_and_nulls_still_answer(self):
         chat = {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 8, "temperature": 0, "top_k": 0,
                 "seed": 7}
