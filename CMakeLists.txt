@@ -1122,6 +1122,12 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
   add_executable(fused_gr_bench src/kernels/fused_gr_bench.cpp)
   target_include_directories(fused_gr_bench PRIVATE ${_strata_gpu_include_directories})
   target_link_libraries(fused_gr_bench PRIVATE strata_kernels ${_strata_gpu_runtime_target})
+  add_executable(hc_graph_bench src/kernels/hc_graph_bench.cpp)
+  add_executable(mmvq_graph_bench src/kernels/mmvq_graph_bench.cpp)
+  target_include_directories(mmvq_graph_bench PRIVATE ${_strata_gpu_include_directories})
+  target_link_libraries(mmvq_graph_bench PRIVATE strata_kernels ${_strata_gpu_runtime_target})
+  target_include_directories(hc_graph_bench PRIVATE ${_strata_gpu_include_directories})
+  target_link_libraries(hc_graph_bench PRIVATE strata_kernels ${_strata_gpu_runtime_target})
   # STRATA_ROUTE_RESIDENT's swap, serial vs warp: the bench holds the pre-port serial kernel (so it is compiled as
   # CUDA, the one device-code file among the .cpp benches) and times the two forms on the same input in one run.
   # The chain modes above call the plain top-10 on a fully resident table, so they never reach the swap; this does.
