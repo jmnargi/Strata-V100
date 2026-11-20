@@ -1976,6 +1976,65 @@ __global__ void __launch_bounds__(S) gdn_out_norm_kernel(const float* __restrict
     y16[(size_t) t * ld16 + (size_t) head * S + col] = hf(v);   // (the FP32 normalized value is not stored: nothing reads it)
 }
 
+#if !defined(__HIPCC__)
+// One warp per head, four heads per CTA, inspired by Legion's gated_norm_w128.
+// Preserve the original four lane-zero butterfly sums and their left-to-right addition.
+__global__ void __launch_bounds__(128) gdn_out_norm_volta_kernel(
+    const float* __restrict__ z, const float* __restrict__ gamma, float eps,
+    const float* __restrict__ y, uint16_t* __restrict__ y16, int64_t ld16) {
+    static_assert(S == 128 && HV % 4 == 0);
+    const int lane = threadIdx.x & 31;
+    const int head = 4 * blockIdx.y + threadIdx.x / 32;
+    const size_t at = (size_t) blockIdx.x * HV * S + head * S + lane;
+    const size_t out = (size_t) blockIdx.x * ld16 + head * S + lane;
+    float oc[4], sum[4];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        oc[i] = y[at + i * 32];
+        sum[i] = warp_sum(oc[i] * oc[i]);
+    }
+    const float ss = __shfl_sync(0xffffffffu, sum[0] + sum[1] + sum[2] + sum[3], 0);
+    const float inv = rsqrtf(ss / (float) S + eps);
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        const int col = lane + i * 32;
+        y16[out + i * 32] = hf(oc[i] * inv * gamma[col] * sigm(z[at + i * 32]));
+    }
+}
+
+static bool gdn_out_norm_volta_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("STRATA_GDN_NORM_WARP");
+        return value && std::atoi(value) != 0;
+    }();
+    if (!enabled) return false;
+    thread_local int cached_dev = -1;
+    thread_local bool volta = false;
+    int dev;
+    if (cudaGetDevice(&dev) != cudaSuccess) return false;
+    if (dev != cached_dev) {
+        int major, minor;
+        if (cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev) != cudaSuccess ||
+            cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, dev) != cudaSuccess)
+            return false;
+        cached_dev = dev;
+        volta = major == 7 && minor == 0;
+    }
+    return volta;
+}
+#endif
+
+static void launch_gdn_out_norm(const float* z, const float* gamma, float eps, float* y, uint16_t* y16,
+                                int64_t T, int64_t ld16, cudaStream_t stream) {
+#if !defined(__HIPCC__)
+    if (gdn_out_norm_volta_enabled()) {
+        gdn_out_norm_volta_kernel<<<dim3((unsigned) T, HV / 4), 128, 0, stream>>>(z, gamma, eps, y, y16, ld16);
+        return;
+    }
+#endif
+    gdn_out_norm_kernel<<<dim3((unsigned) T, HV), S, 0, stream>>>(z, gamma, eps, y, y16, ld16);
+}
+
 // ---------------------------------------------------------------- MoE
 template <int REG>
 __global__ void route_kernel(const float* __restrict__ logits, int32_t* __restrict__ ids, float* __restrict__ wout,
@@ -2724,7 +2783,7 @@ void gdn_recurrence_variant(int variant, float* state, const float* h, const flo
         if (T > T64)
             gdn_rec_cols_pipe_kernel<<<HV * NCB, dim3(CB, RG), 0, (cudaStream_t) stream>>>(
                 state, h + T64 * C, gate + T64 * HV, beta + T64 * HV, y + T64 * (size_t) HV * S, T - T64);
-        gdn_out_norm_kernel<<<dim3((unsigned) T, HV), S, 0, (cudaStream_t) stream>>>(z, gamma, eps, y, y16, ld16);
+        launch_gdn_out_norm(z, gamma, eps, y, y16, T, ld16, (cudaStream_t) stream);
     } else if (warp_rec) {
         // =2: the 4-accumulator chain split on the pipelined structure (FP32-level, not bit-exact);
         // =1: the sync-free bit-exact warp reduction (measured slower - kept as the bitwise control)
@@ -2733,7 +2792,7 @@ void gdn_recurrence_variant(int variant, float* state, const float* h, const flo
                                                                                                 y, T);
         else
             gdn_rec_cols_warp_kernel<<<HV * NCB, S, 0, (cudaStream_t) stream>>>(state, h, gate, beta, y, T);
-        gdn_out_norm_kernel<<<dim3((unsigned) T, HV), S, 0, (cudaStream_t) stream>>>(z, gamma, eps, y, y16, ld16);
+        launch_gdn_out_norm(z, gamma, eps, y, y16, T, ld16, (cudaStream_t) stream);
     } else
 #endif
     if (serial || T <= 0 || variant == 2) {
@@ -2755,7 +2814,7 @@ void gdn_recurrence_variant(int variant, float* state, const float* h, const flo
             gdn_rec_cols_pipe_kernel<<<HV * NCB, dim3(CB, RG), 0, (cudaStream_t) stream>>>(state, h, gate, beta, y, T);
         else
             gdn_rec_cols_kernel<<<HV * NCB, dim3(CB, RG), 0, (cudaStream_t) stream>>>(state, h, gate, beta, y, T);
-        gdn_out_norm_kernel<<<dim3((unsigned) T, HV), S, 0, (cudaStream_t) stream>>>(z, gamma, eps, y, y16, ld16);
+        launch_gdn_out_norm(z, gamma, eps, y, y16, T, ld16, (cudaStream_t) stream);
     }
     check("gdn_recurrence");
 }
