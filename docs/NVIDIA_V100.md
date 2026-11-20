@@ -29,7 +29,7 @@ To serve text through Strata's API, save this configuration with absolute paths:
 {
   "exe": "/path/to/strata-v100/build-hy4/strata-hy4",
   "args": ["--pack", "/path/to/Maya-S/maya-hy4", "--gpus", "0,1",
-           "--max-context", "32768", "--vision", "off"],
+           "--tp", "0", "--max-context", "32768", "--vision", "off"],
   "tokenizer": "/path/to/Maya-S/maya-hy4/tokenizer",
   "model_name": "hy4-flash-maya-s"
 }
@@ -38,6 +38,17 @@ To serve text through Strata's API, save this configuration with absolute paths:
 Start it with `python -m serve.server --engine strata --config hy4.json --port 8091`.
 Use the Hy4 engine's own options, not the Qwen engine's `--spec`, KV or pipeline
 flags. The Maya-S DFlash2 file is not used by this engine.
+
+On two V100 PCIe 16 GB cards at 32K context, layer split loaded in 27.5 s
+with 29% of routed experts in VRAM. A 192-token code review decoded at
+7.9–9.8 tok/s without drafting and 11.0–11.3 tok/s with MTP (`--draft 4`,
+265/344 drafts accepted). These are two requests per mode, not a general
+throughput claim. Forced tensor parallel needed 27.93 GB per card even
+with Q8 KV and did not fit.
+
+For MTP, pass `--mtp /path/to/Hy4-Flash-mtp-BF16.gguf` to the packer and
+add `"--mtp", "--draft", "4"` to the engine arguments. This is Tencent's
+separate MTP GGUF, not the `.dfly2` file in the Maya-S folder.
 
 ## Two cards, one request: what the layer split costs (2026-11-18)
 
