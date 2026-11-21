@@ -5,12 +5,14 @@
 #include "strata/core/conversation_buffer.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
 #include <deque>
+#include <iterator>
 #include <utility>
 #include <vector>
 
@@ -459,6 +461,8 @@ public:
     size_t shared_bytes(const SavedConversation& image) const { return charged_shared(image); }
     size_t size() const { return entries_.size(); }
     size_t evictions() const { return evictions_; }
+    /// Evictions of a pinned conversation (evict_oldest's last resort, older pins than the newest).
+    size_t pinned_evictions() const { return pinned_evictions_; }
     bool pinned(size_t index) const { return entries_.at(index).pinned; }
     // A parked system-prompt prefix (the chain's root) is the same ids for every chat of a client.
     bool has(const std::vector<int32_t>& ids, const std::vector<ConversationImageKey>& imgs, bool cvec) const {
@@ -648,7 +652,7 @@ public:
         if (!enabled() || held > budget_ || incoming > budget_ - held) return false;
         if (bytes() > budget_ - held - incoming) release_reuse();
         while (!entries_.empty() && (entries_.size() >= slots_ || bytes() > budget_ - held - incoming)) {
-            // Evict ordinary conversations first, then roots. Explicit checkpoint pins stay protected.
+            // Evict ordinary conversations first, then roots, then older checkpoint pins if necessary.
             if (!evict_oldest()) return false;
         }
         return true;
@@ -670,14 +674,34 @@ public:
     // above glibc's mmap threshold, so dropping an entry returns the whole footprint to the kernel at
     // once - the next admission check reads it back from /proc/meminfo.  A piece another entry still
     // shares stays charged to that entry.
-    // False when none can go (empty, or only entries that hold a pinned shared prefix are left).
+    // If only conversations with pinned checkpoints remain, evict the oldest parked one, but keep the newest.
+    // A pin belongs to a conversation, so abandoned pinned conversations can otherwise fill the cache indefinitely.
+    // Park order is not a liveness signal: an older pin may still be in use by a client.
+    // False when none can go (empty, or only the newest pinned entry is left).
     bool evict_oldest() {
         auto victim = std::find_if(entries_.begin(), entries_.end(),
                                    [](const Entry& e) { return !e.pinned && !e.image.pinned(); });
         if (victim == entries_.end())
             victim = std::find_if(entries_.begin(), entries_.end(),
                                   [](const Entry& e) { return e.pinned && !e.image.pinned(); });
+        bool leaked_pin = false;
+        if (victim == entries_.end()) {
+            auto newest = std::find_if(entries_.rbegin(), entries_.rend(),
+                                       [](const Entry& e) { return e.image.pinned(); });
+            if (newest != entries_.rend()) {
+                const auto keep = std::prev(newest.base());
+                victim = std::find_if(entries_.begin(), keep, [](const Entry& e) { return e.image.pinned(); });
+                if (victim == keep) victim = entries_.end();
+                leaked_pin = victim != entries_.end();
+            }
+        }
         if (victim == entries_.end()) return false;
+        if (leaked_pin) {
+            ++pinned_evictions_;
+            std::fprintf(stderr, "strata serve: conversation cache: evicting an older pinned conversation (%zu tokens) "
+                                 "to make room; pinned_evictions=%zu\n",
+                         victim->image.live.ids.size(), pinned_evictions_);
+        }
         uncharge(victim->image);
         if (eviction_handler_)
             eviction_handler_(std::move(victim->image), victim->pinned, eviction_context_);
@@ -791,7 +815,7 @@ private:
         }
         ~Reservation() { if (!committed) owner.uncharge(image); }
     };
-    size_t budget_ = 0, slots_ = 0, private_ = 0, evictions_ = 0, superseded_ = 0;
+    size_t budget_ = 0, slots_ = 0, private_ = 0, evictions_ = 0, superseded_ = 0, pinned_evictions_ = 0;
     int64_t min_tokens_ = 0;   // --conversation-cache-min-tokens: 0 parks every conversation, whatever its size
     struct Entry {
         SavedConversation image;
