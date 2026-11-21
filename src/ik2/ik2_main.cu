@@ -1790,7 +1790,7 @@ void prefetch_layer(Model& M, int l, Work& W, ExpertCache& EC, int T, const Work
         if (++n % Work::kMissBatch == 0) CU(cudaEventRecord(W.pf_evs[pr][n / Work::kMissBatch - 1], g_cs));
     }
     if (n % Work::kMissBatch) CU(cudaEventRecord(W.pf_evs[pr][n / Work::kMissBatch], g_cs));
-    W.pf_layers[pr] = l;
+    if (n) W.pf_layers[pr] = l;
 }
 
 // Each token sums its experts in ascending expert order, exactly as the scalar scatter loop.
@@ -1855,6 +1855,10 @@ void run_prefill_moe(const Model& M, Layer& Ly, int l, int T, const uint16_t* xq
         wt[i] = w[i] * (Ly.scale[2].empty() ? 1.0f : Ly.scale[2][e]);
         wtr[row] = wt[i];
     }
+    static const bool batch_prefill = getenv("IK2_BATCH_PREFILL") && atoi(getenv("IK2_BATCH_PREFILL"));
+    if (batch_prefill && (g_ep || !Ly.tab_h.empty()) && T >= 64)
+        for (int t = 0; t < T; ++t)
+            std::sort(inv + t * c.K, inv + (t + 1) * c.K);
 
     // the experts on a GPU: d -1 all of them (one GPU), else the ones it owns (IK2_EP), into X.tmp
     auto exec = [&](int d, Work& X, ExpertCache& XC, const uint16_t* xin) {
@@ -1891,14 +1895,11 @@ void run_prefill_moe(const Model& M, Layer& Ly, int l, int T, const uint16_t* xq
         XC.t_up += now() - tu;
         g_pf.lap(g_pf.upload);
 
-        static const bool batch_prefill = getenv("IK2_BATCH_PREFILL") && atoi(getenv("IK2_BATCH_PREFILL"));
-        const bool batch = batch_prefill && d == -1 && !Ly.tab_h.empty() && n_miss == 0 && T >= 64 && C % 8 == 0 &&
+        // A cache hit can still have an outstanding prefetch copy.
+        const bool batch = batch_prefill && (g_ep || !Ly.tab_h.empty()) && n_miss == 0 &&
+                           X.pf_layers[l % Work::kPfRing] != l && T >= 64 && C % 8 == 0 &&
                            (size_t)S * (2 * std::max(C, F) + 4 * C) <= X.lg_cap * 4 &&
                            (size_t)S * 2 * F * sizeof(float) <= X.gu32_bytes;
-        if (batch) {
-            for (int t = 0; t < T; ++t)
-                std::sort(inv + t * c.K, inv + (t + 1) * c.K);
-        }
         CU(cudaMemcpyAsync(X.gidx, gidx, (size_t) S * 4, cudaMemcpyHostToDevice, g_s));
         CU(cudaMemcpyAsync(X.inv, inv, (size_t) S * 4, cudaMemcpyHostToDevice, g_s));
         CU(cudaMemcpyAsync(X.sg, sg, (size_t) S * 4, cudaMemcpyHostToDevice, g_s));
@@ -1923,6 +1924,11 @@ void run_prefill_moe(const Model& M, Layer& Ly, int l, int T, const uint16_t* xq
             // Attention has finished. Its temporary output is free until the next visit.
             uint16_t* sorted_input = (uint16_t*)X.lg;
             float* sorted_out = (float*)(sorted_input + (size_t)S * std::max(C, F));
+            // The grouped buffers still include slots owned by the other GPU.
+            if (d >= 0) {
+                CU(cudaMemsetAsync(X.gu32, 0, (size_t)S * 2 * F * sizeof(float), g_s));
+                CU(cudaMemsetAsync(sorted_out, 0, (size_t)S * C * sizeof(float), g_s));
+            }
             gather_f16_16_kernel<<<S, 256, 0, g_s>>>(xin, X.gidx, S, C, sorted_input);
             for (int e : X.hit_exps) {
                 const size_t offset = W.start[e];

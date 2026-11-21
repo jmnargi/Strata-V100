@@ -4,6 +4,7 @@
   "env": {
     "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
     "CUDA_VISIBLE_DEVICES": "0,1",
+    "IK2_BATCH_PREFILL": "1",
     "IK2_EP": "1",
     "IK2_EP_SPLIT": "0.85",
     "IK2_KV": "fp8"
