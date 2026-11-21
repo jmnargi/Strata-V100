@@ -222,6 +222,11 @@ struct Mat {
     uint8_t* raw = nullptr;     // IK2_DENSE=q8: the blocks, one token's products straight over them
     uint16_t* f16 = nullptr;    // else (the default): an FP16 copy, every product a cuBLAS GEMM - measured faster on an
     int type = 0, N = 0, K = 0; // RTX PRO 6000 (16 against 21 ms a token), for 4 GiB more VRAM
+    // IK2_SPLIT_DENSE: rows [N/2, N) copied to the second GPU, whose half runs beside this one's
+    const int8_t* hi_q8 = nullptr;
+    const uint16_t* hi_q8d = nullptr;
+    float* hi_y = nullptr;
+    int hi_n = 0;
 };
 
 struct Layer {
@@ -654,7 +659,51 @@ uint16_t* g_w16 = nullptr;   // a matrix's FP16 decode for the prompt path's GEM
 size_t g_w16_n = 0;          // values it holds
 // Y [T][N] = X [T][K] . W^T: one token straight over the blocks (x32), more through an FP16 decode and a GEMM (x16).
 // A matrix larger than the decode buffer (the head: its few rows of logits) goes a token at a time over its blocks.
+bool g_split_dense = false;          // the second GPU takes the upper half of the dense projections
+cudaEvent_t g_sp_x[2] = {}, g_sp_y[2] = {};
+cudaStream_t g_sp_stream[2] = {};
+float* g_sp_in = nullptr;            // the token, on the second GPU
+
+// rows [N/2, N) of a planar Q8 matrix onto the second GPU (called once, after the weights are in VRAM)
+void split_register(Mat& m) {
+    if (!m.q8 || m.N < 32 || m.K % 32 || m.hi_n) return;
+    const int n0 = m.N / 2, nh = m.N - n0;
+    int8_t* q = nullptr;
+    uint16_t* d = nullptr;
+    float* y = nullptr;
+    CU(cudaSetDevice(1));
+    CU(cudaMalloc(&q, (size_t) nh * m.K));
+    CU(cudaMalloc(&d, (size_t) nh * (m.K / 32) * 2));
+    CU(cudaMalloc(&y, (size_t) nh * 4));
+    CU(cudaSetDevice(0));
+    CU(cudaMemcpyPeer(q, 1, m.q8 + (size_t) n0 * m.K, 0, (size_t) nh * m.K));
+    CU(cudaMemcpyPeer(d, 1, m.q8d + (size_t) n0 * (m.K / 32), 0, (size_t) nh * (m.K / 32) * 2));
+    m.hi_q8 = q, m.hi_q8d = d, m.hi_y = y, m.hi_n = nh;
+}
+
+// T == 1: this GPU's rows [0, N/2) and the second GPU's [N/2, N) at once. The second GPU's rows come back as one copy.
+void matmul_split(const Mat& m, const float* x32, float* Y) {
+    const int n0 = m.N - m.hi_n;
+    int me = 0;
+    CU(cudaGetDevice(&me));                     // this GPU's own stream
+    cudaStream_t sh = g_s, so = g_sp_stream[1 - me];
+    CU(cudaMemcpyPeerAsync(g_sp_in, 1 - me, x32, me, (size_t) m.K * 4, sh));
+    CU(cudaEventRecord(g_sp_x[me], sh));
+    CU(cudaSetDevice(1 - me));
+    CU(cudaStreamWaitEvent(so, g_sp_x[me], 0));
+    k::mv_q8p(m.hi_q8, m.hi_q8d, m.hi_n, m.K, g_sp_in, m.hi_y, so);
+    CU(cudaEventRecord(g_sp_y[1 - me], so));
+    CU(cudaSetDevice(me));
+    k::mv_q8p(m.q8, m.q8d, n0, m.K, x32, Y, sh);
+    CU(cudaStreamWaitEvent(sh, g_sp_y[1 - me], 0));
+    CU(cudaMemcpyPeerAsync(Y + n0, me, m.hi_y, 1 - me, (size_t) m.hi_n * 4, sh));
+}
+
 void matmul(const Mat& m, const float* x32, const uint16_t* x16, int T, float* Y, int ldy) {
+    if (T == 1 && m.hi_n > 0 && ldy == m.N && x32) {
+        matmul_split(m, x32, Y);
+        return;
+    }
     if (m.f16) {
         gemm16(m.f16, m.N, m.K, x16, T, Y, ldy);
         return;
@@ -4185,6 +4234,7 @@ int main(int argc, char** argv) {
         g_group_exp = v == 1 || v >= 3, g_group_attn = v >= 2;
     }
     g_dense_q8 = getenv("IK2_DENSE") && std::string(getenv("IK2_DENSE")) == "q8";
+    g_split_dense = getenv("IK2_SPLIT_DENSE") && std::atoi(getenv("IK2_SPLIT_DENSE"));   // measured slower: off
     if (getenv("IK2_KV")) {
         const std::string kv = getenv("IK2_KV");
         if (kv == "f16" || kv == "fp16") g_kv_fp8 = false;
@@ -4641,6 +4691,28 @@ int main(int argc, char** argv) {
     for (int d = 0; d < n_gpu; ++d) {
         use_dev(d);
         CU(cudaMemGetInfo(&fr, &tot));
+        if (n_gpu == 2 && g_dense_q8 && g_split_dense && d == 0) {
+            for (int dd = 0; dd < 2; ++dd) {
+                CU(cudaSetDevice(dd));
+                CU(cudaEventCreateWithFlags(&g_sp_x[dd], cudaEventDisableTiming));
+                CU(cudaEventCreateWithFlags(&g_sp_y[dd], cudaEventDisableTiming));
+            }
+            CU(cudaSetDevice(0));
+            CU(cudaSetDevice(1));
+            CU(cudaMalloc(&g_sp_in, 8192 * 4));
+            g_sp_stream[1] = g_dev[1].s;
+            CU(cudaSetDevice(0));
+            g_sp_stream[0] = g_dev[0].s;
+            int n = 0;
+            for (auto& Ly : M.L) {
+                for (Mat* m : {&Ly.wqkvrg, &Ly.wqrg, &Ly.wq, &Ly.wk, &Ly.wv, &Ly.wr, &Ly.wgate, &Ly.wo,
+                               &Ly.wk_dyn, &Ly.wv_dyn})
+                    split_register(*m);
+                ++n;
+            }
+            split_register(M.out_w);
+            std::printf("dense projections split over both GPUs (rows [N/2, N) on GPU 1)\n");
+        }
         std::printf("dense weights in VRAM: %.1f s; GPU %d: %.1f GiB of %.1f free\n", now() - t_dense, d,
                     fr / 1073741824.0, tot / 1073741824.0);
         std::fflush(stdout);
