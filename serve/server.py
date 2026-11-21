@@ -8312,6 +8312,11 @@ def check_request_sampling(req) -> None:
         rl = req.get("repeat_last_n")
         if req.get("penalty_last_n") is None and isinstance(rl, int) and not isinstance(rl, bool) and rl > 0:
             req["penalty_last_n"] = rl      # 0 and -1 (off / the whole context) keep the engine's default window
+    # the control vector's switch: true or false only.  Any other type ("false", 0, 1, {}) used to replace the
+    # configured default in run()'s merge and projection_key dropped it, so the engine ran with its own default: ON
+    proj = (req or {}).get("experimental_speed_projection")
+    if proj is not None and not isinstance(proj, bool):
+        raise ValueError("experimental_speed_projection: true or false")
     for key, integer in (("temperature", False), ("top_p", False), ("min_p", False), ("presence_penalty", False),
                          ("frequency_penalty", False), ("repetition_penalty", False), ("top_k", True),
                          ("penalty_last_n", True), ("seed", True)):
