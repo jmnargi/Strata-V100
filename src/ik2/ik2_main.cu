@@ -256,6 +256,8 @@ struct Layer {
     uint8_t* tier_cold = nullptr;
     const uint8_t** tab_blob = nullptr;
     float* tab_sc[3] = {};
+    const uint8_t** ep_blob[2] = {};
+    float* ep_scale[2][3] = {};
     std::vector<const uint8_t*> tab_h;             // (tab_blob on the host: a short prompt's groups)
     // the state: of the visit being run (bind_visit)
     uint16_t *kc = nullptr, *vc = nullptr;         // FP16 [kv_cap][KV * D] (IK2_KV=f16)
@@ -1812,6 +1814,21 @@ __global__ void combine_prefill_groups(const float* y, const int* rows, const fl
     }
 }
 
+__global__ void resident_ep_route(const int* top, const float* weight, int K, const uint8_t* const* table,
+                                  const float* gate, const float* up, const float* down,
+                                  const uint8_t** blob, float* sg, float* su, int* rows, float* wt) {
+    const int i = threadIdx.x;
+    if (i >= K) return;
+    const int e = top[i];
+    blob[i] = table[e];
+    sg[i] = gate ? gate[e] : 1.0f;
+    su[i] = up ? up[e] : 1.0f;
+    if (rows) {
+        rows[i] = table[e] ? i : i + K;
+        wt[i] = weight[i] * (down ? down[e] : 1.0f);
+    }
+}
+
 void run_prefill_moe(const Model& M, Layer& Ly, int l, int T, const uint16_t* xq16, const int* top, const float* w,
                      const float* r_in, float* h_out, Work& W, ExpertCache& EC, double& t_exp) {
     const Config& c = M.c;
@@ -3142,6 +3159,30 @@ void forward(Model& M, const int* tok, int T, int pos0, bool all_logits, OutMode
         int* rtop = W.route_d;
         float* rw = (float*) (W.route_d + S);
         k::route(W.rlog, Ly.probs_b, T, c.E, c.K, c.route_scale, rtop, rw, g_s);
+        if (T == 1 && Ly.ep_blob[0] && !g_rec && dump.empty() && g_pop.empty()) {
+            CU(cudaEventRecord(g_ep_x, g_s));
+            for (int d = 1; d >= 0; --d) {
+                use_dev(d);
+                Work& X = dev_work(d);
+                if (d) {
+                    CU(cudaStreamWaitEvent(g_s, g_ep_x, 0));
+                    CU(cudaMemcpyPeerAsync(X.xq, 1, W.xq, 0, C * sizeof(float), g_s));
+                }
+                resident_ep_route<<<1, 32, 0, g_s>>>(rtop, rw, c.K, Ly.ep_blob[d], Ly.ep_scale[d][0],
+                    Ly.ep_scale[d][1], Ly.ep_scale[d][2], X.blob, X.sg, X.su, d ? nullptr : W.inv, W.wt);
+                k::experts_gate_up_swiglu(X.blob, nullptr, c.K, Ly.ty[0], Ly.ty[1], Ly.eb[0], X.xq, C, c.F,
+                                         X.sg, X.su, c.gate_cap, c.up_cap, X.h16, g_s);
+                k::experts_down(X.blob, c.K, Ly.ty[2], Ly.eb[0] + Ly.eb[1], X.h16, C, c.F, X.y32, g_s);
+                if (d) {
+                    CU(cudaMemcpyPeerAsync(W.y32 + (size_t)c.K * C, 0, X.y32, 1, (size_t)c.K * C * sizeof(float), g_s));
+                    CU(cudaEventRecord(g_ep_done, g_s));
+                }
+            }
+            CU(cudaStreamWaitEvent(g_s, g_ep_done, 0));
+            k::moe_combine_conv(W.y32, W.inv, W.wt, c.K, C, Ly.h_mlp, Ly.sc_mlp, W.r, W.h, g_s);
+            EC.hits += c.K;
+            continue;
+        }
         CU(cudaMemcpyAsync(W.route_h, W.route_d, (size_t) S * 8, cudaMemcpyDeviceToHost, g_s));
         const bool cpu_lane = g_pool && g_overlap && !g_prof && T <= 8 && Ly.ty[0] == k::kNVFP4 &&
                               Ly.ty[1] == k::kNVFP4 && Ly.ty[2] == k::kNVFP4;
@@ -3410,7 +3451,7 @@ void forward(Model& M, const int* tok, int T, int pos0, bool all_logits, OutMode
             dump_f("blk." + std::to_string(vis) + ".out", W.h, TC);
             continue;
         }
-        if (g_mv && S <= 64) {
+        if (g_mv && S <= 64 && !Ly.ep_blob[0]) {
             const double te0 = now();
             // the token path: each slot (token t's pick i) its expert's blob straight from the cache
             // The slots already in VRAM first, then the ones copied in now: the first group's experts run while the
@@ -5093,6 +5134,36 @@ int main(int argc, char** argv) {
         for (auto& D : g_dev) v += (double) f(D.EC);
         return v;
     };
+
+    if (g_ep && !g_pool && !g_prof && c.n_pass > 1 && getenv("IK2_EP_DEVICE") && atoi(getenv("IK2_EP_DEVICE"))) {
+        int peer[2] = {};
+        CU(cudaDeviceCanAccessPeer(&peer[0], 0, 1));
+        CU(cudaDeviceCanAccessPeer(&peer[1], 1, 0));
+        bool complete = peer[0] && peer[1];
+        for (int l = 0; complete && l < c.n_layer; ++l)
+            for (int e = 0; e < c.E; ++e)
+                complete &= dev_cache(ep_owner(l, e)).has(l, e);
+        if (complete) {
+            for (int d = 0; d < 2; ++d) {
+                use_dev(d);
+                const auto& cache = dev_cache(d);
+                for (int l = 0; l < c.n_layer; ++l) {
+                    auto& layer = M.L[l];
+                    const auto& pool = cache.pools[cache.layer_pool[l]];
+                    std::vector<const uint8_t*> table(c.E, nullptr);
+                    for (int e = 0; e < c.E; ++e)
+                        if (ep_owner(l, e) == d)
+                            table[e] = pool.data + (size_t)cache.loc[(size_t)l * c.E + e] * pool.slot_bytes;
+                    layer.ep_blob[d] = dalloc<const uint8_t*>(c.E);
+                    CU(cudaMemcpy(layer.ep_blob[d], table.data(), c.E * sizeof(table[0]), cudaMemcpyHostToDevice));
+                    for (int r = 0; r < (d ? 2 : 3); ++r)
+                        if (!layer.scale[r].empty()) layer.ep_scale[d][r] = dev_f32(layer.scale[r]);
+                }
+            }
+            use_dev(0);
+            std::printf("resident expert parallel: GPU-side decode routing\n");
+        }
+    }
 
     if (serve) {
         // --serve: requests on stdin, a line each - "GEN max_new temperature top_p seed stop,stop ids,ids,..." - and

@@ -2969,7 +2969,8 @@ __global__ void experts_gate_up_swiglu_kernel(const uint8_t* const* blob, const 
                                               const int* orow, int h_ld) {
     extern __shared__ float xs[];
     const int s = blockIdx.y;
-    load_xs_f32(x + (size_t) tok[s] * C, C, xs);
+    if (!blob[s]) return;
+    load_xs_f32(x + (tok ? (size_t)tok[s] * C : 0), C, xs);
     __syncthreads();
     const int warp = threadIdx.x >> 5;
     const uint8_t* bl = blob[s];
@@ -2998,6 +2999,7 @@ __global__ void experts_down_kernel(const uint8_t* const* blob, int ty_down, siz
                                     int C, int F, size_t rb_down, float* y) {
     extern __shared__ float xs[];
     const int s = blockIdx.y;
+    if (!blob[s]) return;
     load_xs_f16(h + (size_t) s * F, F, xs);
     __syncthreads();
     const int warp = threadIdx.x >> 5;
