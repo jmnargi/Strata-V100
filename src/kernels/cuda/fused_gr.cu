@@ -1264,6 +1264,7 @@ int down_tg(int ct) {
     return per_dev[dev] == 2 && (ct == 4 || ct == 6) ? 2 : 0;
 #endif
 }
+#if !defined(__HIPCC__)
 // ================================ the sm_70 down projection split along K ================================
 // The plain sm_70 read runs gr_down_multi2_kernel: 41 blocks per token, every token's blocks re-reading the 6.5 MB
 // w_down (35% of DRAM peak on a V100 at T 3).  Here the matrix is read once for the window: a block owns 16 rows
@@ -1730,17 +1731,27 @@ static unsigned* vf_counters(const void* key) {
     static std::mutex mu;
     static std::vector<const void*> keys[64];
     static unsigned* base[64] = {};
-    static int resident_ok[64] = {};   // 0 = not checked, 1 = all 160 blocks fit at T 6, -1 = they do not
+    static int resident_ok[64] = {};   // 0 = unchecked, 1 = every fused variant fits, -1 = one does not
     int dev = 0;
     cudaGetDevice(&dev);
     if (dev < 0 || dev >= 64) return nullptr;
     std::lock_guard<std::mutex> lk(mu);
     if (resident_ok[dev] == 0) {
-        int sms = 0, nb6 = 0, nb1 = 0;
+        int sms = 0;
         cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nb6, gr_fused_v100_kernel<6>, THREADS, 0);
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nb1, gr_fused_v100_kernel<1>, THREADS, 0);
-        const int nb = nb6 < nb1 ? nb6 : nb1;
+        int nb = VF_BLOCKS;
+        auto check = [&](auto kernel) {
+            int blocks = 0;
+            if (cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks, kernel, THREADS, 0) != cudaSuccess)
+                blocks = 0;
+            if (blocks < nb) nb = blocks;
+        };
+        check(gr_fused_v100_kernel<1>);
+        check(gr_fused_v100_kernel<2>);
+        check(gr_fused_v100_kernel<3>);
+        check(gr_fused_v100_kernel<4>);
+        check(gr_fused_v100_kernel<5>);
+        check(gr_fused_v100_kernel<6>);
         resident_ok[dev] = (long) nb * sms >= VF_BLOCKS ? 1 : -1;
         void* p = nullptr;
         if (resident_ok[dev] > 0 && cudaGetSymbolAddress(&p, g_vf_cnt) == cudaSuccess) base[dev] = (unsigned*) p;
@@ -1819,6 +1830,7 @@ static bool launch_single_v100(const FusedGrArgs& a, cudaStream_t st) {
     m.T = 1;
     return launch_fused_v100(m, st);
 }
+#endif
 
 void launch_multi(const GrMulti& m, int variant, cudaStream_t st, unsigned long long* stamp_buf, int stamp_i0) {
     const int n_tok = m.T;
@@ -1853,11 +1865,13 @@ void launch_multi(const GrMulti& m, int variant, cudaStream_t st, unsigned long 
 #endif
         if (is_sm70) {
             if (stamp_buf) gpu_stamp(stamp_buf, stamp_i0, (void*) st);
+#if !defined(__HIPCC__)
             if (hc_v100_on() && hc_v100_fused_on() && launch_fused_v100(m, st)) {
                 if (stamp_buf) gpu_stamp(stamp_buf, stamp_i0 + 1, (void*) st);   // sm_70: down + up in one launch
                 return;
             }
             if (!(hc_v100_on() && launch_down_v100(m, st)))   // sm_70: the K-split down
+#endif
                 gr_down_multi2_kernel<<<dim3(DOWN_BLOCKS + 1, n_tok), THREADS, 0, st>>>(m);
             if (stamp_buf) gpu_stamp(stamp_buf, stamp_i0 + 1, (void*) st);
 #if STRATA_GR_FAST_BUILD
@@ -3002,11 +3016,13 @@ void fused_gr_read(const FusedGrArgs& a, void* stream) {
         std::exit(1);
     }
     cudaStream_t st = (cudaStream_t) stream;
+#if !defined(__HIPCC__)
     if (launch_single_v100(a, st)) {
         const cudaError_t e1 = cudaGetLastError();
         if (e1 != cudaSuccess) { std::fprintf(stderr, "fused_gr_read v100: %s\n", cudaGetErrorString(e1)); std::exit(1); }
         return;
     }
+#endif
     if (a.s_down != nullptr) {   // STRATA_HC_REQ8
         gr_down_kernel<true><<<DOWN_BLOCKS + 1, THREADS, 0, st>>>(a);
         gr_up_kernel<true><<<UP_BLOCKS, THREADS, 0, st>>>(a);
