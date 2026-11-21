@@ -2,7 +2,7 @@
 
 Upstream Strata's ready-made engine and support matrix start at compute capability 7.5 (RTX 20).
 A V100 (7.0) runs the same engine compiled for it. This fork publishes a Linux x86-64
-CUDA 12.8 `sm_70` engine in [release v0.1.45.12](https://github.com/jmnargi/Strata-V100/releases/tag/v0.1.45.12).
+CUDA 12.8 `sm_70` engine in [release v0.1.45.13](https://github.com/jmnargi/Strata-V100/releases/tag/v0.1.45.13).
 It is community-tested, not an upstream-supported build. The binary needs an AVX2 CPU
 and the CUDA 12 runtime libraries; it does not include models, the server or the vision encoder.
 It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.

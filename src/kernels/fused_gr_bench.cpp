@@ -127,6 +127,10 @@ int main(int argc, char** argv) {
                     cudaMemcpy(p, dmix, (size_t) TM * N * 4, cudaMemcpyDeviceToHost);
                 }
                 const bool same = std::memcmp(out[0].data(), out[1].data(), out[0].size() * 4) == 0;
+                if (const char* dp = std::getenv("STRATA_BENCH_DUMP")) {   // sm_70: the outputs, for an error check
+                    FILE* f = std::fopen(dp, "ab");
+                    if (f) { std::fwrite(out[0].data(), 4, out[0].size(), f); std::fclose(f); }
+                }
                 double us[2] = {1e30, 1e30};
                 for (int round = 0; round < 3; ++round)
                     for (int f = 0; f < 2; ++f) {

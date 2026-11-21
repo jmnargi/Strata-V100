@@ -7,7 +7,7 @@
 # CUDA builds require compute capability 7.0 or newer.  Optional kernels with newer ISA requirements are
 # selected below so a binary never contains instructions its target GPU cannot execute.
 cmake_minimum_required(VERSION 3.24)
-project(strata VERSION 0.1.45.12 LANGUAGES CXX)
+project(strata VERSION 0.1.45.13 LANGUAGES CXX)
 # EXPERIMENTAL: the Intel Arc engine, the SYCL port in sycl/ (PR #423; icpx + oneMKL, docs/INTEL_ARC.md). It is its
 # own project that takes the unported sources from src/; with this on, nothing below is configured.
 option(STRATA_ENABLE_SYCL "EXPERIMENTAL: build the Intel Arc (SYCL) engine from sycl/ - docs/INTEL_ARC.md" OFF)
@@ -1122,6 +1122,12 @@ if(STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
   add_executable(fused_gr_bench src/kernels/fused_gr_bench.cpp)
   target_include_directories(fused_gr_bench PRIVATE ${_strata_gpu_include_directories})
   target_link_libraries(fused_gr_bench PRIVATE strata_kernels ${_strata_gpu_runtime_target})
+  add_executable(hc_graph_bench src/kernels/hc_graph_bench.cpp)
+  add_executable(mmvq_graph_bench src/kernels/mmvq_graph_bench.cpp)
+  target_include_directories(mmvq_graph_bench PRIVATE ${_strata_gpu_include_directories})
+  target_link_libraries(mmvq_graph_bench PRIVATE strata_kernels ${_strata_gpu_runtime_target})
+  target_include_directories(hc_graph_bench PRIVATE ${_strata_gpu_include_directories})
+  target_link_libraries(hc_graph_bench PRIVATE strata_kernels ${_strata_gpu_runtime_target})
   # STRATA_ROUTE_RESIDENT's swap, serial vs warp: the bench holds the pre-port serial kernel (so it is compiled as
   # CUDA, the one device-code file among the .cpp benches) and times the two forms on the same input in one run.
   # The chain modes above call the plain top-10 on a fully resident table, so they never reach the swap; this does.
