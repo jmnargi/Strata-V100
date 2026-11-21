@@ -1577,8 +1577,7 @@ void run_layer_attn(const Model& M, Layer& Ly, int l, int T, int pos0, const flo
         }
         conv_rec(Ly, 0, k_p, Ly.h_k, T, KD);
         conv_rec(Ly, 1, v_p, Ly.h_v, T, KD);
-        k::conv4(k_p, Ly.h_k, Ly.sc_k, nullptr, 0, T, KD, W.kconv, g_s);
-        k::conv4(v_p, Ly.h_v, Ly.sc_v, nullptr, 0, T, KD, W.vconv, g_s);
+        k::conv4_pair(k_p, Ly.h_k, Ly.sc_k, v_p, Ly.h_v, Ly.sc_v, T, KD, W.kconv, W.vconv, g_s);
     } else {
         if (Ly.wqrg.N > 0) {
             matmul(Ly.wqrg, in_q, W.x16, T, W.qkv, Ly.wqrg.N);

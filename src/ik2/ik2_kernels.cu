@@ -457,6 +457,46 @@ __global__ void conv4_fused_kernel(const float* x, float* hist, const float* w, 
     hist[(size_t) 2 * C + c] = h2;
 }
 
+// Two no-dynamic-tap short convs of one shape (a visit's K and V) in one launch: blockIdx.y picks the tensor, and each
+// element is summed in exactly the order conv4_fused_kernel uses, so the values are the same bits.
+__global__ void conv4_fused2_kernel(const float* x0, float* h0p, const float* w0p, const float* d0,
+                                    const float* x1, float* h1p, const float* w1p, const float* d1, int heads, int T,
+                                    int C, float* y0, float* y1) {
+    const int j = blockIdx.y, c = blockIdx.x * blockDim.x + threadIdx.x;
+    if (c >= C) return;
+    const float* x = j ? x1 : x0;
+    float* hist = j ? h1p : h0p;
+    const float* w = j ? w1p : w0p;
+    const float* dyn = j ? d1 : d0;
+    float* y = j ? y1 : y0;
+    float h0 = hist[c], h1 = hist[(size_t) C + c], h2 = hist[(size_t) 2 * C + c];
+    const float* wc = w + (size_t) c * 4;
+    const float w0 = wc[0], w1 = wc[1], w2 = wc[2], w3 = wc[3];
+    const float* dc_base = nullptr;
+    int d_stride = 0;
+    if (dyn) {
+        const int head = c / (C / heads);
+        dc_base = dyn + (size_t) head * 4;
+        d_stride = heads * 4;
+    }
+    for (int t = 0; t < T; ++t) {
+        const size_t tc = (size_t) t * C + c;
+        const float x_new = x[tc];
+        float a = w0 * h0 + w1 * h1 + w2 * h2 + w3 * x_new;
+        if (dc_base) {
+            const float* dc = dc_base + (size_t) t * d_stride;
+            a += dc[0] * x_new + dc[1] * h2 + dc[2] * h1 + dc[3] * h0;
+        }
+        y[tc] = a;
+        h0 = h1;
+        h1 = h2;
+        h2 = x_new;
+    }
+    hist[c] = h0;
+    hist[(size_t) C + c] = h1;
+    hist[(size_t) 2 * C + c] = h2;
+}
+
 // Channel-mapped tiled conv4 for large T (prefill): reads w and head once per tile, no hist writes.
 __global__ void conv4_tiled_kernel(const float* x, const float* hist, const float* w, const float* dyn, int heads,
                                    int T, int C, const float* residual, float* y) {
@@ -5231,6 +5271,19 @@ void conv4_res(const float* x, float* hist, const float* w, const float* dyn, in
     check("conv4_res");
     conv4_hist_kernel<<<grid(C), kBlk, 0, s>>>(x, hist, T, C);
     check("conv4_hist");
+}
+
+void conv4_pair(const float* x0, float* h0, const float* w0, const float* x1, float* h1, const float* w1, int T,
+                int C, float* y0, float* y1, cudaStream_t s) {
+    if (T <= 0) return;
+    if (T > kConvFusedMaxT) {   // (the prefill tiling keeps its own launches)
+        conv4(x0, h0, w0, nullptr, 0, T, C, y0, s);
+        conv4(x1, h1, w1, nullptr, 0, T, C, y1, s);
+        return;
+    }
+    conv4_fused2_kernel<<<dim3((unsigned) ((C + 127) / 128), 2), 128, 0, s>>>(x0, h0, w0, nullptr, x1, h1, w1,
+                                                                             nullptr, 0, T, C, y0, y1);
+    check("conv4_pair");
 }
 
 void conv4(const float* x, float* hist, const float* w, const float* dyn, int heads, int T, int C, float* y,

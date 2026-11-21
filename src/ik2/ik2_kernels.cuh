@@ -36,6 +36,8 @@ void l2clip(const float* x, const float* scale, int rows, int G, int D, float th
 /// (hist: the conv's last 3 inputs, oldest first; zeros at a sequence's start), taps = 4; with dyn [T][heads * 4]
 /// (a full layer's k / v) + sum_lag dyn[t][h(c) * 4 + lag] xp[t + 3 - lag][c], h(c) = c / (C / heads).
 /// Then hist = the last 3 rows of xp.  y must not alias x.
+void conv4_pair(const float* x0, float* h0, const float* w0, const float* x1, float* h1, const float* w1,
+                int T, int C, float* y0, float* y1, cudaStream_t s);
 void conv4(const float* x, float* hist, const float* w, const float* dyn, int heads, int T, int C, float* y,
            cudaStream_t s);
 /// Residual-fused short conv: same as conv4, plus residual[t][c] added to y[t][c] when residual != nullptr.
