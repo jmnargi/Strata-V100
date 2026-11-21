@@ -11,9 +11,14 @@
 // for l in [first, last].  `d` is the GGUF's `direction.<src>` times the file's scale (summed over files), with
 // src = l (per-layer) or one fixed layer (single:L, project mode only), exactly as llama.cpp's loader places it;
 // layer 0 has no direction.  Off unless a vector is loaded (--control-vector-scaled); a loaded one is switched
-// per request through a device flag, so the captured graphs are the same either way.  With the flag off the
+// per request through device flags, so the captured graphs are the same either way.  With the flag off the
 // result is bit-identical to the engine without a vector: the kernel then only applies the pending residual
 // write, with the fused read's own arithmetic.
+//
+// The flags are a small device table: entry 0 is the MAIN session's (the request whose prompt is being read, and a
+// decode without --batch), entry 1 + b is batch slot b's.  A batch window's rows each read their own slot's entry
+// (`cvec_apply_rows`), so a request admitted with the vector on does not steer the slots that are decoding with it
+// off, and the reverse: with one flag for the whole device, the rows of every slot followed the request admitted last.
 #pragma once
 
 #include <cstdint>
@@ -25,7 +30,7 @@ namespace strata::kernels {
 struct Cvec {
     const float* dir = nullptr;   ///< device, n_layers * n_embd: project = the unit v_l, add = d_l; zero rows elsewhere
     const float* s = nullptr;     ///< device, n_layers: project = s_l, add = 1; 0 = the layer is not steered
-    const int* on = nullptr;      ///< device int: 0 = this request runs the stock model
+    const int* on = nullptr;      ///< device ints (kCvecFlags): [0] the main session's request, [1 + b] batch slot b's; 0 = the stock model
     int mode = 0;                 ///< 0 = project, 1 = add
     int first = 0, last = -1;     ///< the steered layers, inclusive
     int64_t n_embd = 0, hc = 0;
@@ -47,10 +52,19 @@ bool cvec_upload(const std::vector<float>& dir, const std::vector<float>& s, int
 /// it runs on).  No-op without a vector or when this device has them already.
 bool cvec_replicate(std::string& err);
 
-/// The per-request switch, on every device that holds the vector.  Synchronizes them when it changes, so call it
-/// between requests.
+/// The per-request switch of the MAIN session (the prompt read, and every window that is not a batch window), on
+/// every device that holds the vector.  Synchronizes them when it changes, so call it between requests.
 void cvec_set_enabled(bool on);
 bool cvec_enabled();
+
+/// The flags `cvec_apply_rows` can address: the main session's and kCvecSlots batch slots'.
+inline constexpr int kCvecFlags = 256;
+inline constexpr int kCvecSlots = kCvecFlags - 1;
+/// Batch slot `slot`'s own switch (0 <= slot < kCvecSlots), on every device that holds the vector: set when a request
+/// is admitted to the slot, read by that slot's rows only.  Starts ON like the main one.  Synchronizes the devices
+/// when it changes, so call it while the slot has no window in flight.
+void cvec_set_slot_enabled(int slot, bool on);
+bool cvec_slot_enabled(int slot);
 
 /// The CURRENT device's tables (dir n_layers x n_embd, s n_layers, the request flag), for a caller that applies the
 /// vector inside its own kernel (the prompt path's STRATA_CVEC_FUSE).  False without a vector on this device.
@@ -61,5 +75,10 @@ bool cvec_tables(const float** dir, const float** s, const int** on);
 /// whose writes are folded into the next layer's read; without it, R must already hold the layer's output.
 void cvec_apply(float* R, int64_t layer, int64_t T, int64_t r_ld, const float* bo, int64_t bo_ld, const float* inj,
                 int64_t inj_ld, bool write, void* stream);
+
+/// The same for a batch window's rows: row t follows batch slot `slots[t]`'s switch instead of the main session's
+/// (T <= 8 rows, the window's most; the slots are fixed when a graph is captured, their flags are read when it runs).
+void cvec_apply_rows(float* R, int64_t layer, int64_t T, int64_t r_ld, const float* bo, int64_t bo_ld,
+                     const float* inj, int64_t inj_ld, bool write, const int* slots, void* stream);
 
 }  // namespace strata::kernels
