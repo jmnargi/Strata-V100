@@ -564,7 +564,12 @@ def openai_to_messages(req: dict) -> tuple[list[dict], list[dict] | None, dict]:
     # the vLLM / llama.cpp convention: {"chat_template_kwargs": {"enable_thinking": false, "reasoning_effort": "low"}}
     for k, v in (req.get("chat_template_kwargs") or {}).items():
         if k == "enable_thinking" and not v:
+            # thinking off drops the effort, never a `preserve_thinking` given before it: with it lost the history's
+            # reasoning left the prompt, so every thinking on / off switch read the conversation again (cache miss)
+            keep = kwargs.get("preserve_thinking") is True
             kwargs = {"enable_thinking": False}
+            if keep:
+                kwargs["preserve_thinking"] = True
         elif k == "reasoning_effort" and "enable_thinking" not in kwargs:
             kwargs.update(effort_kwargs(v))
         elif k == "preserve_thinking" and v is True:
