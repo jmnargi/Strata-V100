@@ -1785,13 +1785,14 @@ greedy answer was the same text as the full read. Without the flag nothing chang
 A request can say where the document ends: `"strata_prefix": {"messages": 1}` (the first message is the document),
 `{"message": 0, "chars": 210000}` (the first 210,000 characters of message 0, for a client that sends the document and
 the question in one message) or `{"tokens": 12345}`. The engine reads the prompt in two parts there, keeps the checkpoint
-at the boundary pinned (retention never evicts it, a parked conversation holding it stays parked, `SAVE` keeps it) and,
-when a later question resumes from it, does not park the question it leaves. So the next question starts at the end of
-the document, and 20 questions cost one read of it. Without the field the server's checkpoints are where they were: the
+at the boundary pinned (`SAVE` keeps it), and when a later question resumes from it, does not park the question it
+leaves. If the parked cache needs room and has no unpinned checkpoint entries to evict, it can evict older parked
+conversations with pins, but keeps the most recently parked pinned conversation. If a pin is evicted, the next
+question may need to read the document again. Without the field the server's checkpoints are where they were: the
 last turn's start, the system prompt's end and every `--prompt-cache-every` tokens, so a question that follows a long
 document in the same chat re-reads up to 16K tokens of it (55 s at 262K on a Tesla P100). The field is checked against the
 prompt's own ids (the prefix is always the longest common start), a prefix that cannot be marked is said in the server's
-window and ignored, and a malformed field is a 400. One pinned prefix at a time per engine (a new one replaces it);
+window and ignored, and a malformed field is a 400. A new pin replaces the previous one in the same conversation;
 it needs `--prompt-cache 3` or more. `tools/research_run.py` runs a document and a question list against a server with and
 without it. The engine's own key is `pin=N` on the `GEN` line.
 

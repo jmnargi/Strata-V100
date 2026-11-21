@@ -652,7 +652,7 @@ public:
         if (!enabled() || held > budget_ || incoming > budget_ - held) return false;
         if (bytes() > budget_ - held - incoming) release_reuse();
         while (!entries_.empty() && (entries_.size() >= slots_ || bytes() > budget_ - held - incoming)) {
-            // Evict ordinary conversations first, then roots. Explicit checkpoint pins stay protected.
+            // Evict ordinary conversations first, then roots, then older checkpoint pins if necessary.
             if (!evict_oldest()) return false;
         }
         return true;
@@ -674,11 +674,9 @@ public:
     // above glibc's mmap threshold, so dropping an entry returns the whole footprint to the kernel at
     // once - the next admission check reads it back from /proc/meminfo.  A piece another entry still
     // shares stays charged to that entry.
-    // Last resort (leaked pins): when only entries that hold a pinned checkpoint are left, the oldest of them
-    // goes - except the most recently stored one, the live pinned conversation.  A pin is "one at a time" only
-    // within one conversation's checkpoints, so a conversation parked with a pin and never resumed (a client that
-    // pinned and went away) would otherwise stay protected forever: once such dead pins fill
-    // the budget, every later park is refused until a restart.
+    // If only conversations with pinned checkpoints remain, evict the oldest parked one, but keep the newest.
+    // A pin belongs to a conversation, so abandoned pinned conversations can otherwise fill the cache indefinitely.
+    // Park order is not a liveness signal: an older pin may still be in use by a client.
     // False when none can go (empty, or only the newest pinned entry is left).
     bool evict_oldest() {
         auto victim = std::find_if(entries_.begin(), entries_.end(),
