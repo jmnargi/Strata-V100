@@ -1,10 +1,26 @@
 """Chat history normalization before rendering the model's prompt."""
 import copy
 from pathlib import Path
+import threading
 import unittest
 
 from serve.frontend import ChatTemplate, anthropic_to_messages, openai_to_messages
 from serve.server import ByteTokenizer, MockEngine, Service
+from tools.strata_tokenizer import BYTE_TO_UNICODE, Tokenizer
+
+
+class InklingGeneration(unittest.TestCase):
+    def test_ordinary_tokens_do_not_end_an_inkling_answer(self):
+        marks = ("<|content_thinking|>", "<|end_message|>", "<|content_text|>", "<|content_model_end_sampling|>")
+        tok = Tokenizer(list(BYTE_TO_UNICODE.values()) + list(marks), [], [1] * 256 + [3] * len(marks),
+                        pre="inkling2")
+        template = ChatTemplate(Path(__file__).resolve().parents[1] / "tools/ik2/chat_template.jinja")
+        engine = MockEngine(tok, marks[0] + "plan" + marks[1] + marks[2] + "self._clock" + marks[3] + "ignored")
+        service = Service(engine, tok, template)
+        events = [item for kind, item in service.run(tok.encode("code"), False, None, 64, {}, threading.Event())
+                  if kind == "event"]
+        self.assertEqual("".join(e.text for e in events if e.kind == "reasoning"), "plan")
+        self.assertEqual("".join(e.text for e in events if e.kind == "content"), "self._clock")
 
 
 class EmptyAssistantHistory(unittest.TestCase):

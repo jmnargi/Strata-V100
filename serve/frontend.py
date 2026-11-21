@@ -51,6 +51,7 @@ class ChatTemplate:
         env.filters["tojson"] = tojson
         env.globals["raise_exception"] = raise_exception
         self.source = Path(path).read_text(encoding="utf-8")
+        self.inkling = "<|content_model_end_sampling|>" in self.source
         self.template = env.from_string(self.source)
         self.caps = self._detect_caps()
 
@@ -91,6 +92,14 @@ class ChatTemplate:
             replies = [f"strata_caps_result_{i}" for i in range(count)]
             messages += [{"role": "tool", "content": reply} for reply in replies] + [user]
             prompt = render(messages, tools)
+            if self.inkling:
+                bodies = re.findall(r"<\|content_invoke_tool_json\|>(.*?)<\|end_message\|>", prompt, re.S)
+                try:
+                    parsed = [json.loads(body) for body in bodies]
+                except ValueError:
+                    return False
+                return parsed == [{"name": call["name"], "args": call["arguments"]} for call in calls] \
+                    and all(reply in prompt for reply in replies)
             # Instructions include example XML and literal tag names, which are not model output. Parse only
             # complete calls to our probe functions, using the same body parser as OutputParser.
             bodies = re.findall(r"<tool_call>\s*(<function=strata_caps_call_\d+>.*?</function>)\s*</tool_call>",
@@ -104,8 +113,9 @@ class ChatTemplate:
 
         history = [user, {"role": "assistant", "content": "strata_caps_answer",
                           "reasoning_content": "strata_caps_reasoning"}, user]
+        tool_marks = ("tool_declare", "<|content_xml|>") if self.inkling else ("<tool_call>", "<function=")
         return {"supports_tools": all(s in tool_prompt for s in
-                                      ("strata_caps_call_0", "strata_caps_description", "<tool_call>", "<function=")),
+                                      ("strata_caps_call_0", "strata_caps_description", *tool_marks)),
                 "supports_tool_calls": calls_supported(1),
                 "supports_system_role": "strata_caps_system" in render(
                     [{"role": "system", "content": "strata_caps_system"}, user]),
@@ -1487,3 +1497,54 @@ class OutputParser:
         self._reset_scan()
         self.state, self.lead = "content", True
         return [Event("tool_call", call=call)]
+
+
+class InklingOutputParser(OutputParser):
+    """Read Inkling's typed segments. Each delimiter is one vocabulary token."""
+
+    def __init__(self, *, tools: list[dict] | None = None):
+        super().__init__(thinking=False, tools=tools)
+        self.segment = "text"
+
+    def feed(self, delta: str) -> list[Event]:
+        if delta == "<|content_thinking|>":
+            self.segment, self.state = "text", "reasoning"
+            return []
+        if delta in ("<|content_text|>", "<|content_tool_error|>", "<|content_invoke_tool_text|>"):
+            self.segment, self.state = "text", "content"
+            return []
+        if delta == "<|message_model|>":
+            self.segment = "name"
+            return []
+        if delta == "<|content_invoke_tool_json|>":
+            self.segment, self.state, self.buf = "call", "content", ""
+            return []
+        if delta in ("<|end_message|>", "<|content_model_end_sampling|>"):
+            events = self._inkling_call() if self.segment == "call" else []
+            self.segment, self.state = "between", "content"
+            return events
+        if self.segment == "call":
+            self.buf += delta
+            return []
+        return [Event(self.state, delta)] if self.segment == "text" and delta else []
+
+    def _inkling_call(self) -> list[Event]:
+        body, self.buf = self.buf, ""
+        try:
+            value = json.loads(body)
+        except ValueError:
+            value = None
+        if isinstance(value, dict):
+            name, args = value.get("name"), value.get("args")
+            if isinstance(name, str) and name in self.schemas and isinstance(args, dict):
+                return [Event("tool_call", call=ToolCall(name=name, arguments=args))]
+        return [Event("content", body)] if body else []
+
+    def finish(self, reason: str | None = None) -> list[Event]:
+        if self.segment == "call":
+            self.segment = "between"
+            if reason in (None, "stop"):
+                return self._inkling_call()
+            body, self.buf = self.buf, ""
+            return [Event("content", body)] if body else []
+        return []
