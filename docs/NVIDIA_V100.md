@@ -9,6 +9,8 @@ It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.
 Build from source for other platforms or a mix of GPU architectures. The measurements
 below state their hardware and do not establish performance on every V100 system.
 
+For the separate Inkling 2 Mini Q4 engine, see [Inkling 2 Mini on two V100s](INKLING2_V100.md).
+
 ## Two cards, one request: what the layer split costs (2026-11-18)
 
 [sfnx](https://github.com/johnfink8/sfnx) is a separate engine for this same model

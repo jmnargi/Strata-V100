@@ -65,6 +65,18 @@ QWEN35_PATTERN = (
     r"|\s+"
 )
 
+# Inkling's GGUFs use different names for the same o200k tokenizer.
+INKLING_PRE_TYPES = ("gpt-4o", "inkling", "inkling2")
+O200K_PATTERN = (
+    r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?"
+    r"|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?"
+    r"|\p{N}{1,3}"
+    r"| ?[^\s\p{L}\p{N}]+[\r\n/]*"
+    r"|\s*[\r\n]+"
+    r"|\s+(?!\S)"
+    r"|\s+"
+)
+
 
 class Tokenizer:
     def __init__(self, tokens: list[str], merges: list[str], token_types: list[int] | None = None,
@@ -88,7 +100,8 @@ class Tokenizer:
             if parts[0] not in self.ids or parts[1] not in self.ids:
                 raise ValueError("merge %d names a token outside the vocabulary: %r" % (i, m))
             self.ranks[(parts[0], parts[1])] = i
-        self._re = regex.compile(QWEN35_PATTERN)
+        self._ignore_merges = pre in INKLING_PRE_TYPES
+        self._re = regex.compile(O200K_PATTERN if self._ignore_merges else QWEN35_PATTERN)
 
         # The literals matched directly instead of being run through BPE.  GGUF token types: 3 = CONTROL,
         # 4 = USER_DEFINED.  The two classes behave DIFFERENTLY and llama.cpp's own tokenizer settled which:
@@ -227,12 +240,16 @@ class Tokenizer:
             got = cache.get(piece)
             if got is None:
                 mapped = "".join(BYTE_TO_UNICODE[b] for b in piece.encode("utf-8"))
-                got = []
-                for tok in self._bpe(mapped):
-                    i = self.ids.get(tok)
-                    if i is None:
-                        raise KeyError("BPE produced a token outside the vocabulary: %r" % tok)
-                    got.append(i)
+                whole = self.ids.get(mapped) if self._ignore_merges else None
+                if whole is not None:
+                    got = [whole]
+                else:
+                    got = []
+                    for tok in self._bpe(mapped):
+                        i = self.ids.get(tok)
+                        if i is None:
+                            raise KeyError("BPE produced a token outside the vocabulary: %r" % tok)
+                        got.append(i)
                 if len(cache) < self.PIECE_CACHE_MAX:
                     cache[piece] = got
             out.extend(got)
@@ -437,8 +454,9 @@ def extract(gguf_path, out_dir) -> dict:
         "add_bos_token": False,
         # The pattern is SHIPPED, not recomputed by the reader: it is transcribed from llama.cpp for the
         # declared `pre` type, and a C++ port that re-derived it would be free to get `\p{M}` wrong again.
-        "pre_pattern": QWEN35_PATTERN,
-        "pre_pattern_source": ".ref/llama.cpp src/llama-vocab.cpp L396 (LLAMA_VOCAB_PRE_TYPE_QWEN35)",
+        "pre_pattern": O200K_PATTERN if tk.pre in INKLING_PRE_TYPES else QWEN35_PATTERN,
+        "pre_pattern_source": ("GPT-4o o200k" if tk.pre in INKLING_PRE_TYPES else
+                               ".ref/llama.cpp src/llama-vocab.cpp L396 (LLAMA_VOCAB_PRE_TYPE_QWEN35)"),
     }
     (out / "vocab.json").write_text(json.dumps(tk.ids, ensure_ascii=False), encoding="utf-8")
     (out / "merges.txt").write_text("\n".join("%s %s" % k for k, _ in

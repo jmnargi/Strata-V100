@@ -60,7 +60,7 @@ from urllib.parse import parse_qs, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))   # run as a script (run-<model>.bat) as well as a module
-from serve.frontend import (THINK_END, ChatTemplate, Event, OutputParser, anthropic_to_messages,  # noqa: E402
+from serve.frontend import (THINK_END, ChatTemplate, Event, InklingOutputParser, OutputParser, anthropic_to_messages,  # noqa: E402
                             forced_call, images_of, literal_tags, mark_think_literals, openai_to_messages,
                             strip_reasoning, tool_choice_of, unmark_think_literals)
 from serve.mcp import McpCancelled, hub_from_config  # noqa: E402
@@ -3828,8 +3828,13 @@ class Service:
         self.tool_call_recovery = False                   # opt-in: tool calls in forms next to the template's
         self.images = None                                # serve/images.py's ImageGen when the config has "images"
         self.restore_after_load = None                    # a session file an image job saved before it unloaded
-        self.stop_ids = set(tokenizer.encode(IM_END, parse_special=True) +
-                            tokenizer.encode("<|endoftext|>", parse_special=True))
+        if getattr(template, "inkling", False):
+            # The Qwen stop marker decomposes into ordinary Inkling tokens such as "_".
+            special = getattr(tokenizer, "special_tokens", {})
+            self.stop_ids = {special[m] for m in ("<|content_model_end_sampling|>", "<|endoftext|>") if m in special}
+        else:
+            self.stop_ids = set(tokenizer.encode(IM_END, parse_special=True) +
+                                tokenizer.encode("<|endoftext|>", parse_special=True))
         # #567: a prompt re-encodes only what follows the last special token it shares with a recent prompt (the
         # same ids as a full encode: tools/strata_tokenizer.py PromptEncoder).  Tokenizers without resume points
         # encode in full.
@@ -4853,6 +4858,8 @@ class Service:
         writes it once the thinking is over."""
         # `cancel` (#1999): set when the client hangs up; the downloads, the wait for the turn and the encodes stop
         # between pictures and raise ClientGone
+        if force and getattr(self.template, "inkling", False):
+            raise ValueError("Inkling supports automatic tool calls, not a forced tool_choice")
         self.req_ctx.pending = None
         fetched = self._note_unreadable_tool_images(messages, cancel)
         ids = encoded_ids = self.encode_prompt(messages, tools, kwargs)
@@ -5207,7 +5214,9 @@ class Service:
             {"role": "user", "content": "\u0000warm"}
         marked, marked_tools, changed = mark_think_literals(messages + [dummy], ctx["tools"], self.literals)
         prompt = self.render_history(marked, marked_tools, ctx["kwargs"])
-        prompt = prompt[:prompt.rindex("<|im_start|>")]      # the dummy turn is the last one: drop it entirely
+        marker = ("<|message_tool|>" if reply.get("tool_calls") else "<|message_user|>") \
+            if getattr(self.template, "inkling", False) else "<|im_start|>"
+        prompt = prompt[:prompt.rindex(marker)]             # drop the last dummy turn
         ids = self._encode_rendered(prompt, changed)
         if ctx.get("image_counts") is not None:              # the history's images, as the request expanded them
             ids = self._expand_images(ids, ctx["image_counts"])
@@ -5287,7 +5296,9 @@ class Service:
                 print(f"[strata] thinking capped at {max_new - reserve} of max_tokens {max_new} to leave room for "
                       f"the answer (budget {budget})", flush=True)
                 budget = max(1, max_new - reserve)
-        parser = OutputParser(thinking=thinking, tools=tools, stream_tools=True, recover=self.tool_call_recovery)
+        parser = (InklingOutputParser(tools=tools)
+                  if getattr(self.template, "inkling", False)
+                  else OutputParser(thinking=thinking, tools=tools, stream_tools=True, recover=self.tool_call_recovery))
         detok, n, finish = Detokenizer(self.tok), 0, "length"
         run_tok, run_len, repeated = None, 0, False     # #606: the current run of one repeated token
         thinking_n = 0                                  # tokens written while thinking (Responses' reasoning_tokens)
@@ -8579,7 +8590,10 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
             tokens[i] = t
         merges = (tpath / "merges.txt").read_text(encoding="utf-8").split("\n")
         types = json.loads((tpath / "token_type.json").read_text())
-        tok = ST.Tokenizer(tokens, merges, types)
+        meta_path = tpath / "tokenizer.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+        tok = ST.Tokenizer(tokens, merges, types, pre=meta.get("pre", "qwen35"),
+                           special_ids=meta.get("special_ids"))
     hub = hub_from_config(cfg, a.mcp_config)            # before the minutes of loading: a bad entry stops here
     if a.offline and (hub is not None or cfg.get("before_load") or a.before_load):
         ap.error("--offline requires MCP servers and before_load commands to be disabled in this profile")
