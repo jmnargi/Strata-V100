@@ -1,6 +1,6 @@
 {
   "exe": "build-ik2/strata-ik2",
-  "args": ["--model", "models/inkling2-mini/Inkling-2-Mini-UD-Q4_K_XL.gguf", "--gpus", "2", "--max-context", "524288", "--chunk", "512", "--eos", "200006,199999"],
+  "args": ["--model", "models/inkling2-mini/Inkling-2-Mini-UD-Q4_K_XL.gguf", "--gpus", "2", "--max-context", "524288", "--chunk", "1536", "--eos", "200006,199999"],
   "env": {
     "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
     "CUDA_VISIBLE_DEVICES": "0,1",

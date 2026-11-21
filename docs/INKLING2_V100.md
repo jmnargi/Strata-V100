@@ -45,6 +45,8 @@ For one active session, use the same server command with `--config docs/inkling2
 
 The 524K profile enables grouped expert prefill (`IK2_BATCH_PREFILL=1`). On the same 11,252-token source prompt, an interleaved A/B/B/A run improved whole-prompt throughput from 564 to 592 tok/s (+5.0%). Expert-phase time fell from 3.02 to 2.20 s (27%). All four runs generated the same token IDs; decode stayed at about 42.7 tok/s.
 
+Increasing the grouped prefill chunk from 512 to 1,536 raised throughput on that source prompt from 587–593 to 808 tok/s (19.0–19.2 s to 13.9 s). All 3,072 experts still fit with the 524K FP8 cache, with zero misses and identical generated token IDs. A 2,048-token chunk reached 858 tok/s but evicted experts, so the profile uses 1,536. Decode remained about 43 tok/s at this prompt depth.
+
 The 21.3 GiB `UD-Q8_K_XL` is the highest-precision [Unsloth GGUF](https://unsloth.ai/docs/models/inkling-2-mini). The [original checkpoint](https://huggingface.co/thinkingmachines/Inkling-2-Mini) is already mixed NVFP4 and MXFP8; the GGUF name does not mean it promotes all the experts to 8-bit precision. This Strata engine does not load the BF16 experts in that file. The [Unsloth CUDA 12 llama.cpp build](https://github.com/unslothai/llama.cpp/releases/tag/b12588-mix-c0c3de8) supports the GGUF and splits the KV by layer instead of keeping it all on the first GPU.
 
 RAM prompt caching can park idle sessions and reload them when they resume. It does not increase the GPU KV available for active requests. Several shorter requests can share a 524K token pool; two distinct full 524K sessions cannot both fit alongside Q8_K_XL. Keep active KV on the cards to avoid reading it over PCIe on each output token.
