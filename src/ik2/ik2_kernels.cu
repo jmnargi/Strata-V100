@@ -5503,7 +5503,7 @@ void loop_gates(const LoopGate* gt, int n, int T, int C, int R, float eps, float
     else
         loop_gate_dots_kernel<false><<<dots, 128, 0, s>>>(a, T, C, R, sc);
     check("loop_gates (dots)");
-    static const int tile = getenv("IK2_GATE_TILE") ? atoi(getenv("IK2_GATE_TILE")) : 0;
+    static const int tile = getenv("IK2_GATE_TILE") ? atoi(getenv("IK2_GATE_TILE")) : 128;
     const bool fixed = T == 1 && R == 64 && (tile == 32 || tile == 64 || tile == 128);
     const int threads = fixed ? tile : kBlk;
     const dim3 apply((C + threads - 1) / threads, n, T);
