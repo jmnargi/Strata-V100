@@ -4970,9 +4970,9 @@ int main(int argc, char** argv) {
     }
     ExpertCache& EC = g_dev[d].EC;
     CU(cudaMemGetInfo(&fr, &tot));
-    // (what is left free: 2 GiB beside a cache that streams experts in and out; a quarter of one when every expert
-    //  stays in VRAM - nothing more is allocated but a token's graph)
-    const size_t room = g_fast_want ? (size_t) 256 << 20 : (size_t) 2 << 30;
+    // Expert parallel has already allocated its prompt/decode workspaces on both GPUs.
+    // Leave room for CUDA and conversation snapshots without displacing owned experts.
+    const size_t room = (size_t)(g_fast_want ? 256 : g_ep ? 1536 : 2048) << 20;
     const size_t budget = std::min((size_t) (cache_gb * 1073741824.0), fr > room ? fr - room : (size_t) 0);
     EC.tp = g_tp ? d : -1;
     EC.init(M.L, dual() ? -1 : d, c.n_layer, c.E, budget, g_ep ? d : -1);
