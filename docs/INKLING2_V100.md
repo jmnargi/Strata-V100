@@ -37,6 +37,20 @@ The profile is for text chat, one generation at a time. It does not configure vi
 
 On two V100 PCIe 16 GB cards, the arithmetic request returned `17` at 54.3 generated tokens/s. A coding request generated 1,536 reasoning tokens at 51.3 tokens/s and hit the cap before a final answer. These are short-prompt measurements with FP16 KV and an 8K configured window, not quality or long-context benchmarks.
 
+### Prefill and decode by context, both cards
+
+Measured on the V100 pair with the 524K profile's settings: `IK2_EP=1`, `IK2_EP_SPLIT=0.85`, `IK2_EP_DEVICE=1`, `IK2_KV=fp8`, `IK2_DENSE=q8`, `IK2_BATCH_PREFILL=1`, `--chunk 3072`, `--max-context 524288`, UD-Q4_K_XL. The prompt is 11,252 tokens of source text cycled to the stated length, and each run generates 127 greedy tokens, so prefill and decode are read at the same depth. One run per row.
+
+| Prompt tokens | Prefill tok/s | Decode tok/s |
+| ---: | ---: | ---: |
+| 2,048 | 1,193 | 53.6 |
+| 8,192 | 1,281 | 50.8 |
+| 16,384 | 1,208 | 48.4 |
+| 32,768 | 1,022 | 43.1 |
+| 65,536 | 622 | 35.4 |
+
+All five runs kept every one of the 3,072 experts in VRAM across the pair: zero expert-cache misses and 0.0 GiB copied. Prefill falls from its 8K peak as attention reads the accumulated keys, and decode falls with depth from 53.6 to 35.4 tok/s for the same reason. The 64K read moved 65,536 tokens in 105.3 s; expert work was 2.6 s of that, so the rest is attention, dense projections and chunk scheduling at depth.
+
 ## 524,288 tokens and concurrent clients
 
 Inkling has eight full-attention layer visits. At 524,288 tokens their KV alone uses 16 GiB in FP16, 8 GiB in FP8, or 8.5 GiB in Q8_0. The sliding-window states and workspace are extra. FP16 KV plus the 16.4 GiB Q4 GGUF already exceeds the pair's 32 GiB.
