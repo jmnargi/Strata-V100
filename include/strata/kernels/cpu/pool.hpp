@@ -229,6 +229,17 @@ public:
     /// Other pool methods and destruction must not overlap these calls.
     void run_split_multi_native(const NativeFmt& f, ExpertJobMulti* jobs, int n);
 
+    /// **ONE BATCH PER NATIVE LAYER CALL, NO PHASE BARRIER (`STRATA_POOL_DEP=1`, opt-in).**  The two row phases of
+    /// `run_split_multi_native` end in a barrier: every worker waits for the slowest gate/up row before the host
+    /// quantizes an expert's intermediate that another worker needs for its down rows, and the call reports the
+    /// whole layer as its slowest expert.  With the switch set the call is published as one batch (mode 8): the
+    /// experts' gate/up row ranges first, then their down row ranges.  A down task waits only for its own expert's
+    /// gate/up tasks (a counter), and the first worker that reaches it quantizes that expert's intermediate once.
+    /// Every gate/up task has a lower index than every down task and never waits, so a spinning down task always
+    /// waits for a task another worker can claim.  The rows are computed by the same kernels from the same bytes,
+    /// so the outputs are the two-phase batch's bits.  Upstream measured it bit-exact (20 repetitions, 124,656
+    /// checks) and 2.9 % off the CPU pool's own window.  `=0` or unset keeps the two-phase batch.
+    static bool dep_requested();
     /// The activation rows a native CPU prefill stage must quantize before `run_split_multi_native`,
     /// described so the pool can spread them across its threads instead of the submitting thread doing
     /// them serially. `need` is one byte per row (non-zero: the CPU's experts read that row). `actq`
@@ -366,6 +377,17 @@ private:
     const NativeFmt* nfmt_ = nullptr;
     const ActRows* arows_ = nullptr;   // mode 7: the row batch `quant_act_rows` is quantizing
     std::vector<SplitBufMulti> split_multi_;
+    // mode 8 (`STRATA_POOL_DEP`): one native layer call as a batch of gate/up then down row tasks, a down task
+    // waiting only for its own expert's gate/up tasks.  `gu_left` counts the expert's gate/up tasks not yet
+    // finished; `quant` is 0 (no one quantizing its intermediate), 1 (some worker is) or 2 (done).
+    struct DepExpert {
+        std::atomic<int> gu_left{0};
+        std::atomic<int> quant{0};
+    };
+    bool dep_on_ = false;
+    std::unique_ptr<DepExpert[]> dep_;
+    int dep_nb_ = 0, dep_k_gu_ = 0, dep_k_dn_ = 0;
+    void dep_task(int i);
     ThreadAffinity submission_affinity_;
     PoolAffinity affinity_ = PoolAffinity::All;
     CpuTopology topo_;

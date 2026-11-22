@@ -14,6 +14,16 @@
 
 namespace cpu = strata::kernels::cpu;
 
+// set/unset an environment variable for the pools built below (Windows has no setenv/unsetenv)
+static void env_set(const char* key, const char* value) {
+#if defined(_WIN32)
+    _putenv_s(key, value);
+#else
+    if (value) setenv(key, value, 1);
+    else unsetenv(key);
+#endif
+}
+
 int main(int argc, char** argv) {
     if (argc != 1 && argc != 4) return 2;
     // its activation quantiser is the AVX one at least (act_quant_any): a CPU without AVX (Westmere) would stop on an illegal instruction
@@ -65,27 +75,38 @@ int main(int argc, char** argv) {
             }
         }
         { // The default partition is the arithmetic reference; inactive token slots remain zero.
+            // STRATA_POOL_DEP is unset here so the reference is the two-phase batch even when this program runs
+            // with the switch set (the ctest for the dependency queue does).
+            env_set("STRATA_POOL_DEP", nullptr);
             cpu::ExpertPool baseline(3, false);
             baseline.run_split_multi_native(f, jobs.data(), n);
         }
         const auto ref = out;
         for (float v : ref) if (!std::isfinite(v)) return 1;
-        for (bool host : {false, true}) for (int workers : {1, 3})
-            for (int tasks : {0, 1, 41, 128, 192, 256, cpu::ExpertPool::kMaxTasks}) {
-                cpu::ExpertPool pool(workers, false, host, cpu::PoolAffinity::All, tasks);
-                for (int repeat = 0; repeat < 2; ++repeat) {
-                    std::fill(out.begin(), out.end(), 0.0f);
-                    for (const auto& job : jobs) for (int t = 0; t < job.nt; ++t)
-                        std::fill(job.out[t], job.out[t] + cpu::H, std::numeric_limits<float>::quiet_NaN());
-                    pool.run_split_multi_native(f, jobs.data(), n);
-                    if (std::memcmp(ref.data(), out.data(), out.size() * sizeof(float)) != 0) {
-                        std::fprintf(stderr, "mismatch n=%d workers=%d host=%d tasks=%d repeat=%d\n",
-                                     n, workers, host, tasks, repeat);
-                        return 1;
+        // Two-phase pools (the default path), then the per-expert dependency batch (STRATA_POOL_DEP=1), both
+        // against the same reference: the dependency queue must be the two-phase batch's bits, at every worker,
+        // host and task count and across a batch boundary (n = kMaxSplitMulti + 1).
+        const char* dep_env[] = {nullptr, "1"};
+        for (const char* dep : dep_env) {
+            env_set("STRATA_POOL_DEP", dep);
+            for (bool host : {false, true}) for (int workers : {1, 3})
+                for (int tasks : {0, 1, 41, 128, 192, 256, cpu::ExpertPool::kMaxTasks}) {
+                    cpu::ExpertPool pool(workers, false, host, cpu::PoolAffinity::All, tasks);
+                    for (int repeat = 0; repeat < 2; ++repeat) {
+                        std::fill(out.begin(), out.end(), 0.0f);
+                        for (const auto& job : jobs) for (int t = 0; t < job.nt; ++t)
+                            std::fill(job.out[t], job.out[t] + cpu::H, std::numeric_limits<float>::quiet_NaN());
+                        pool.run_split_multi_native(f, jobs.data(), n);
+                        if (std::memcmp(ref.data(), out.data(), out.size() * sizeof(float)) != 0) {
+                            std::fprintf(stderr, "mismatch n=%d dep=%s workers=%d host=%d tasks=%d repeat=%d\n",
+                                         n, dep ? dep : "off", workers, host, tasks, repeat);
+                            return 1;
+                        }
+                        ++checks;
                     }
-                    ++checks;
                 }
-            }
+        }
+        env_set("STRATA_POOL_DEP", nullptr);
     }
     std::printf("pool tasks: %d bitwise comparisons passed\n", checks);
     return 0;
