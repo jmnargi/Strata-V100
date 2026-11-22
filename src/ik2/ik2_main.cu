@@ -5091,7 +5091,9 @@ int main(int argc, char** argv) {
     CU(cudaMemGetInfo(&fr, &tot));
     // Expert parallel has already allocated its prompt/decode workspaces on both GPUs.
     // Leave room for CUDA and conversation snapshots without displacing owned experts.
-    const size_t room = (size_t)(g_fast_want ? 256 : g_ep ? 1536 : 2048) << 20;
+    const size_t room = (size_t)(g_fast_want ? 256
+                               : getenv("IK2_EP_ROOM_MIB") ? std::max(256, atoi(getenv("IK2_EP_ROOM_MIB")))
+                               : g_ep ? 1024 : 2048) << 20;   // (1 GiB still leaves 0 misses at a 2048-token chunk)
     const size_t budget = std::min((size_t) (cache_gb * 1073741824.0), fr > room ? fr - room : (size_t) 0);
     EC.tp = g_tp ? d : -1;
     EC.init(M.L, dual() ? -1 : d, c.n_layer, c.E, budget, g_ep ? d : -1);
