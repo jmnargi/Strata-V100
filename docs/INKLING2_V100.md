@@ -45,6 +45,8 @@ For one active session, use the same server command with `--config docs/inkling2
 
 The 524K profile enables grouped expert prefill (`IK2_BATCH_PREFILL=1`). On the same 11,252-token source prompt, an interleaved A/B/B/A run improved whole-prompt throughput from 564 to 592 tok/s (+5.0%). Expert-phase time fell from 3.02 to 2.20 s (27%). All four runs generated the same token IDs; decode stayed at about 42.7 tok/s.
 
+Prefill attention now takes the logits-and-cuBLAS path instead of the fused kernel (`IK2_FLASH=1` selects the fused one). The fused path runs on this port's `m16n8k16` emulation, which reaches about 0.7 TFLOP/s on Volta and was 41% of an 11,252-token read. Paired A/B on that prompt: **818 to 1,069 tok/s (+31%)**, decode unchanged at 50.4, generated tokens identical. With the faster attention, a 2,048-token chunk reads the same prompt at 1,163 tok/s (+9% more) but spills 99 experts and costs 2.6% of decode; the profile keeps 1,536 for its zero misses.
+
 Increasing the grouped prefill chunk from 512 to 1,536 raised throughput on that source prompt from 587–593 to 808 tok/s (19.0–19.2 s to 13.9 s). All 3,072 experts still fit with the 524K FP8 cache, with zero misses and identical generated token IDs. A 2,048-token chunk reached 858 tok/s but evicted experts, so the profile uses 1,536. Decode remained about 43 tok/s at this prompt depth.
 
 Dual-GPU single-token decode now routes experts on the device: each card picks its own half from a device-side table, so a visit needs no host round trip for routing. Paired A/B on a 288-token prompt with 383 greedy tokens and all experts resident: 46.2 to 48.3 tok/s (+4.4%), identical generated tokens. `IK2_EP_DEVICE=1` turns it on.

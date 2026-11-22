@@ -4225,7 +4225,9 @@ int main(int argc, char** argv) {
         else die("unknown argument " + a);
     }
     g_prof = getenv("IK2_PROF") && std::atoi(getenv("IK2_PROF"));
-    g_flash = !(getenv("IK2_FLASH") && !std::atoi(getenv("IK2_FLASH")));
+    // (the fused FP16 attention is built on this port's m16n8k16 emulation, which measures 0.7 TFLOP/s on Volta: the
+    //  logits-and-cuBLAS path is 31% faster on an 11,252-token prompt for the same tokens. IK2_FLASH=1 selects it.)
+    g_flash = getenv("IK2_FLASH") && std::atoi(getenv("IK2_FLASH"));
     g_mv = !getenv("IK2_MV") || std::atoi(getenv("IK2_MV"));
     g_group = !getenv("IK2_GROUP") || std::atoi(getenv("IK2_GROUP"));
     if (getenv("IK2_GROUP")) {
