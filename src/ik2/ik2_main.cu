@@ -1862,18 +1862,19 @@ __global__ void combine_prefill_groups(const float* y, const int* rows, const fl
     }
 }
 
-__global__ void resident_ep_route(const int* top, const float* weight, int K, const uint8_t* const* table,
+__global__ void resident_ep_route(const int* top, const float* weight, int S, int K, const uint8_t* const* table,
                                   const float* gate, const float* up, const float* down,
-                                  const uint8_t** blob, float* sg, float* su, int* rows, float* wt) {
-    const int i = threadIdx.x;
-    if (i >= K) return;
-    const int e = top[i];
-    blob[i] = table[e];
-    sg[i] = gate ? gate[e] : 1.0f;
-    su[i] = up ? up[e] : 1.0f;
-    if (rows) {
-        rows[i] = table[e] ? i : i + K;
-        wt[i] = weight[i] * (down ? down[e] : 1.0f);
+                                  const uint8_t** blob, float* sg, float* su, int* tok, int* rows, float* wt) {
+    for (int i = threadIdx.x; i < S; i += blockDim.x) {
+        const int e = top[i];
+        blob[i] = table[e];
+        sg[i] = gate ? gate[e] : 1.0f;
+        su[i] = up ? up[e] : 1.0f;
+        tok[i] = i / K;
+        if (rows) {
+            rows[i] = table[e] ? i : i + S;
+            wt[i] = weight[i] * (down ? down[e] : 1.0f);
+        }
     }
 }
 
@@ -2218,9 +2219,13 @@ void run_head(const Model& M, int T, bool all_logits, OutMode out_mode, int nb, 
 // (W.pos), so a token's launches do not change from one token to the next and are replayed as one CUDA graph.  The
 // dense weights are the GGUF's blocks (IK2_DENSE=q8, the default when the experts fit), one product a launch.
 bool g_fast = false;        // set at load: every expert resident, one GPU, the dense weights as blocks (IK2_FAST=0: no)
+bool g_ep_window = false;   // (IK2_EP_DRAFT: the drafter's verify window over the expert-parallel pair)
 bool g_fast_want = false;
 bool g_graph = true;        // IK2_GRAPH=0: the resident path's launches one by one
 bool g_block = true;        // IK2_BLOCK=0: a verify window through forward() instead of the block path
+// (IK2_EP_DRAFT=1 and --gpus 2: a verify window over the expert-parallel pair, each card's slots computed from its own
+//  device-side table, so the window's products are the token path's)
+inline bool ep_window() { return g_ep && g_ep_window; }
 int g_attn_mma = 1;         // a token's attention on the tensor cores (IK2_ATTN_MMA=0: the scalar kernels; 2: the
                             // layers without a window only)
 int g_mma_split = 1;        // its blocks a K / V head (k::attn_decode_mma_blocks: the device filled once)
@@ -2828,6 +2833,35 @@ void fast_block_launches(Model& M, Work& W, int T, OutMode out_mode) {
         int* rtop = W.route_d;
         float* rw = (float*) (W.route_d + S);
         k::route_rows(W.rlog, Ly.probs_b, T, c.E, c.K, c.route_scale, rtop, rw, g_s);
+        if (g_ep && Ly.ep_blob[0] && !g_rec && g_pop.empty() && S <= 64) {
+            // expert parallel: each card computes the window's slots it owns, from the device-side table, and its
+            // products are the token path's (the slot kernels), so a verified token is the one plain decoding draws.
+            CU(cudaEventRecord(g_ep_x, g_s));
+            for (int d = 1; d >= 0; --d) {
+                use_dev(d);
+                Work& X = dev_work(d);
+                if (d) {
+                    CU(cudaStreamWaitEvent(g_s, g_ep_x, 0));
+                    CU(cudaMemcpyPeerAsync(X.xq, 1, W.xq, 0, (size_t) T * C * 4, g_s));
+                    CU(cudaMemcpyPeerAsync(X.route_d, 1, W.route_d, 0, (size_t) S * 8, g_s));
+                }
+                resident_ep_route<<<1, 64, 0, g_s>>>(rtop, rw, S, c.K, Ly.ep_blob[d], Ly.ep_scale[d][0],
+                    Ly.ep_scale[d][1], Ly.ep_scale[d][2], X.blob, X.sg, X.su, X.tok, d ? nullptr : W.inv, W.wt);
+                k::experts_gate_up_swiglu(X.blob, X.tok, S, Ly.ty[0], Ly.ty[1], Ly.eb[0], X.xq, C, c.F, X.sg, X.su,
+                                          c.gate_cap, c.up_cap, X.h16, g_s);
+                k::experts_down(X.blob, S, Ly.ty[2], Ly.eb[0] + Ly.eb[1], X.h16, C, c.F, X.y32, g_s);
+                if (d) {
+                    CU(cudaMemcpyPeerAsync(W.y32 + (size_t) S * C, 0, X.y32, 1, (size_t) S * C * 4, g_s));
+                    CU(cudaEventRecord(g_ep_done, g_s));
+                }
+            }
+            use_dev(0);
+            CU(cudaStreamWaitEvent(g_s, g_ep_done, 0));
+            k::moe_combine_f32(W.y32, W.inv, W.wt, T, c.K, C, W.tmp, false, g_s);
+            k::conv_block(W.tmp, C, Ly.h_mlp, Ly.sc_mlp, nullptr, 0, 0, T, C, W.r, C, W.h, C, Ly.rec_old[3],
+                          Ly.rec_x[3], g_s);
+            continue;
+        }
         k::group_route(rtop, rw, S, c.K, Ly.tab_blob, Ly.tab_sc[0], Ly.tab_sc[1], Ly.tab_sc[2], g_blk.blob, g_blk.n,
                        g_blk.tok, g_blk.row, g_blk.sg, g_blk.su, g_blk.wt, g_blk.inv, g_s);
         if (k::experts_mma_fits(Ly.ty[0], Ly.ty[1], Ly.ty[2], C, c.F)) {
@@ -2895,7 +2929,7 @@ void fast_block(Model& M, const int* tok, int T, int pos0, OutMode out_mode, std
         k::decode_host(M.embd_type, M.embd + (size_t) tok[t] * rb, c.C, g_blk.emb_h + (size_t) t * c.C);
         g_blk.pos_h[t] = pos0 + t;
     }
-    if (!g_graph) {
+    if (!g_graph || ep_window()) {   // (a graph cannot hold the peer copies a window's expert exchange needs)
         fast_block_launches(M, W, T, out_mode);
     } else {
         FastGraph& G = g_bgraph[T][(int) out_mode];
@@ -3216,9 +3250,10 @@ void forward(Model& M, const int* tok, int T, int pos0, bool all_logits, OutMode
                     CU(cudaStreamWaitEvent(g_s, g_ep_x, 0));
                     CU(cudaMemcpyPeerAsync(X.xq, 1, W.xq, 0, C * sizeof(float), g_s));
                 }
-                resident_ep_route<<<1, 32, 0, g_s>>>(rtop, rw, c.K, Ly.ep_blob[d], Ly.ep_scale[d][0],
-                    Ly.ep_scale[d][1], Ly.ep_scale[d][2], X.blob, X.sg, X.su, d ? nullptr : W.inv, W.wt);
-                k::experts_gate_up_swiglu(X.blob, nullptr, c.K, Ly.ty[0], Ly.ty[1], Ly.eb[0], X.xq, C, c.F,
+                resident_ep_route<<<1, 32, 0, g_s>>>(rtop, rw, c.K, c.K, Ly.ep_blob[d], Ly.ep_scale[d][0],
+                    Ly.ep_scale[d][1], Ly.ep_scale[d][2], X.blob, X.sg, X.su, X.tok,
+                    d ? nullptr : W.inv, W.wt);
+                k::experts_gate_up_swiglu(X.blob, X.tok, c.K, Ly.ty[0], Ly.ty[1], Ly.eb[0], X.xq, C, c.F,
                                          X.sg, X.su, c.gate_cap, c.up_cap, X.h16, g_s);
                 k::experts_down(X.blob, c.K, Ly.ty[2], Ly.eb[0] + Ly.eb[1], X.h16, C, c.F, X.y32, g_s);
                 if (d) {
@@ -4408,6 +4443,7 @@ int main(int argc, char** argv) {
     // (IK2_FAST=0: off; IK2_GRAPH=0: its launches one by one instead of a CUDA graph a token).
     g_graph = !(getenv("IK2_GRAPH") && !std::atoi(getenv("IK2_GRAPH")));
     g_block = !(getenv("IK2_BLOCK") && !std::atoi(getenv("IK2_BLOCK")));
+    g_ep_window = getenv("IK2_EP_DRAFT") && std::atoi(getenv("IK2_EP_DRAFT"));
     g_attn_mma = c.D == 128 && c.H / c.KV <= 8 ? (getenv("IK2_ATTN_MMA") ? std::atoi(getenv("IK2_ATTN_MMA")) : 1) : 0;
     g_mma_split = k::attn_decode_mma_blocks(c.KV);
     if (n_gpu == 1 && getenv("IK2_KV_MANAGED") && atoi(getenv("IK2_KV_MANAGED"))) {
@@ -4904,13 +4940,15 @@ int main(int argc, char** argv) {
     ik2::draft::Drafter* drafter = nullptr;
     uint16_t* draft_head = M.out_w.f16;
     if (!draft_path.empty()) {
-        if (n_gpu != 1) die("--draft: one GPU only so far");
+        if (n_gpu != 1 && !(g_ep && (getenv("IK2_EP_DRAFT") && std::atoi(getenv("IK2_EP_DRAFT")))))
+            die("--draft: one GPU only so far (IK2_EP_DRAFT=1 tries the expert-parallel window)");
         if (!draft_head && M.out_w.q8) {   // (a Q8_0 head: an FP16 copy for the drafter's base logits and its fold)
             const size_t n = (size_t) c.n_rows * c.C;
             draft_head = dalloc<uint16_t>(n);
             k::decode_q8p_f16(M.out_w.q8, M.out_w.q8d, n, draft_head, g_s);
         }
         if (!draft_head) die("--draft: the output head is neither FP16 nor planar Q8_0");
+        use_dev(0);   // (the drafter's streams and its products are the first GPU's: the cache loop above may have left the last one current)
         g_final_tap = c.n_pass == 1 ? 7 : 3;
         const double t0 = now();
         try {
@@ -5385,7 +5423,8 @@ int main(int argc, char** argv) {
         // speculative decoding (--draft, the resident path): the controller decides each step; IK2_DRAFT_WIDTH the
         // widest window, IK2_DRAFT_ADAPT=0 always that wide
         SpecCtl sctl;
-        const bool spec_on = drafter && g_fast && g_block;
+        const bool spec_on = drafter && g_block && (g_fast || (g_ep && drafter && getenv("IK2_EP_DRAFT") &&
+                                                               std::atoi(getenv("IK2_EP_DRAFT"))));
         sctl.wmax = getenv("IK2_DRAFT_WIDTH") ? std::clamp(atoi(getenv("IK2_DRAFT_WIDTH")), 2, kBlockMax) : 5;
         sctl.adapt = !(getenv("IK2_DRAFT_ADAPT") && !atoi(getenv("IK2_DRAFT_ADAPT")));
         while (next_line(line)) {
@@ -5888,7 +5927,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "suffix: %d target forwards verified %d inputs, accepted %d/%d proposals\n",
                      suffix_stats.forwards, suffix_stats.inputs, suffix_stats.accepted, suffix_stats.offered);
     SpecCtl ctl;
-    if (drafter && g_fast && g_block) {
+    if (drafter && g_block && (g_fast || ep_window())) {
         // (the resident path: the controller picks plain tokens or a window; greedy, as the CLI's generation is)
         ctl.wmax = getenv("IK2_DRAFT_WIDTH") ? std::clamp(atoi(getenv("IK2_DRAFT_WIDTH")), 2, kBlockMax) : 5;
         ctl.adapt = !(getenv("IK2_DRAFT_ADAPT") && !atoi(getenv("IK2_DRAFT_ADAPT")));
@@ -5944,7 +5983,7 @@ int main(int argc, char** argv) {
             logits.clear();
             std::vector<int> ag;
             const bool need_logits = n_steps < verify_check || margin_check;
-            const bool use_block = g_fast && g_block && !need_logits;
+            const bool use_block = g_block && !need_logits && (g_fast || ep_window());
             if (use_block && n_steps < block_check) {
                 // (IK2_BLOCK_CHECK=n: the first n windows through both paths, their logits compared; forward()'s
                 //  then taken)
