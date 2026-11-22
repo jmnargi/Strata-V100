@@ -83,6 +83,40 @@ reloads the displaced experts before decode. On the same 6,220-token
 review and local routing profile, fixed 1,024 took 80.2 s, borrowing 50.1 s,
 and fixed 4,096 took 26.5 s (one run each, not interleaved).
 
+**Bias the picks toward the experts in VRAM.** `--route-resident <bonus>`
+adds `bonus` (in probability) to an expert's router score when that expert
+has a VRAM slot, before the top 16 are taken; the weights stay the expert's
+own sigmoid, so an expert the bonus brings in is used with its smaller
+weight. `0` is the default and the model's own routing; any other value
+changes which experts compute and therefore the output. The expert profile
+(`--profile`) still decides which experts get the slots; the bias decides
+how often they are picked.
+
+On this pair at 32K, int8 KV, `--chunk 1024`, a two-prompt local profile
+and MTP (`--draft 4`), the same 192-token coding reply, warm, interleaved:
+
+|`--route-resident`|decode|a verify round|CPU lane|
+|---:|---:|---:|---:|
+|0|17.0–18.0 tok/s|190–202 ms|57.0 % (without MTP)|
+|0.04|26.0–26.7 tok/s|131–134 ms|23.1 % (without MTP)|
+|0.08|29.9 tok/s|115 ms|—|
+|0.15|38.2 tok/s|87 ms|—|
+|0.30|43.5 tok/s|76 ms|—|
+
+A 6,220-token source review at `--chunk 4096` read at 115 tok/s with the
+bias off, 369 tok/s at 0.15 and 467 tok/s at 0.30, because the prompt
+chunks stream 15,198 experts instead of 33,267. `--reserve-gb 0.35` with
+the bias at 0.04 held 7,298 slots (35 %) and decoded at 28.2 tok/s; that
+leaves 0.35 GB free a card, so it was measured but not made a default.
+
+Quality: four short prompts (arithmetic, a capital, an explanation, a
+definition) and the 192-token code reply were generated at 0 and at 0.30.
+All were correct, with the same answer or slightly shorter wording at 0.30.
+That is a smoke check, not a quality benchmark: a large bonus turns the
+router into "prefer a resident expert" even where the model ranked a
+CPU-lane one much higher, so start at 0.04–0.15 and compare outputs there.
+`--profile-out` now writes the profile at the end of a `--mtp` run too.
+
 **DFly2:** pass `--dfly /path/to/Hy4-Flash-Maya-S-drafter.dfly2 --draft 5`
 instead of `--mtp`. This is opt-in and uses layer split. It used 0.97 GB
 on the head GPU and left room for 8,897 experts, against 7,339 with MTP.
