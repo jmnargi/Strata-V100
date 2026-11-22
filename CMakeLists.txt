@@ -1605,6 +1605,19 @@ if(STRATA_INKLING2)
       target_link_libraries(strata-ik2 PRIVATE OpenMP::OpenMP_CXX)
     endif()
   endif()
+  # the upstream Inkling 2 path (GGUF architecture inkling2), a second, separately tuned engine
+  add_library(strata_inkling2 STATIC src/inkling2/inkling2_engine.cu src/inkling2/inkling2_compat.cpp
+                             src/inkling2/inkling2_quant_compat.cpp)
+  target_include_directories(strata_inkling2 PUBLIC include PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES} src/inkling2)
+  target_link_libraries(strata_inkling2 PRIVATE strata_prefill strata_kernels strata_warnings
+                                             strata_ik2_kernels CUDA::cudart CUDA::cublas)
+  if(STRATA_NATIVE_EXPERTS)
+    target_link_libraries(strata_inkling2 PRIVATE strata_kernels_cpu)
+    target_compile_definitions(strata_inkling2 PRIVATE STRATA_INKLING2_CPU_POOL=1)
+  endif()
+  add_executable(strata-inkling2 src/inkling2/inkling2_main.cpp)
+  target_link_libraries(strata-inkling2 PRIVATE strata_inkling2 CUDA::cudart)
+
   if(STRATA_BUILD_TESTS)
     add_executable(ik2_kernels_test tests/ik2_kernels_test.cu)
     target_link_libraries(ik2_kernels_test PRIVATE strata_ik2_kernels)

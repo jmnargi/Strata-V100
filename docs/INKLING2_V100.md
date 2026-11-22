@@ -97,6 +97,12 @@ Q8_K_XL with Q8_0 or FP8 KV failed to allocate the 524K compute buffers in the t
 
 The measured split uses PCI bus order (`CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VISIBLE_DEVICES=0,1`). The 32 GiB RAM cache is for reuse of idle prompts, not part of the active token pool. Current 1Cat-vLLM does not list Inkling in its [model registry](https://github.com/1CatAI/1Cat-vLLM/blob/63b1eaf9b0cfd9d32d4d733b2b8aa96417838d5a/vllm/model_executor/models/registry.py).
 
+## A second engine: `strata-inkling2`
+
+The branch also carries the upstream Strata Inkling 2 engine path (`src/inkling2`, `strata-inkling2`) beside `strata-ik2`. It is the more deeply tuned of the two on Volta: measured on a 32 GB V100 with `UD-Q4_K_M`, `dspark`, int8 KV and 3,072 experts resident it reads 1,349 tok/s at a 512-token prompt and decodes 130 tok/s there, and holds 910 tok/s prefill / 83.5 tok/s decode at 524,288 tokens. It is one card's engine: it makes no per-device calls, so it does not split experts across the pair.
+
+Its VRAM need is experts (13.76 GiB for this model) + dense + KV + workspace, so a 16 GB card is about 1 GiB short at a short context, and the engine refuses with `expert placement failed`. The two ways out are a 32 GB card, or its host expert pool, which this tree's CPU lane does not yet compute for SITU activations. The engine builds here as `strata-inkling2` (`-DSTRATA_INKLING2=ON`) and loads this GGUF; the port adds `include/strata/inkling2/`, `include/strata/quant/` and `src/inkling2/`, the `Inkling2` model family and its header check, and the four host-side quant entry points its loader uses (over the block decoder `strata-ik2` already carries). Two hooks the engine asks for are not present in this build: the grouped WMMA expert kernel answers "not available" so the engine takes its own fallback, and the BF16 tensor-core reservation is a no-op because this prefill has no such path.
+
 ## Volta path
 
 Volta's native FP16 Tensor Core instructions replace the Ampere matrix instructions. Tile loads use Volta-compatible shared-memory loads and synchronous copies. The two GPUs split experts, and each cache is sized only for that GPU's share. Attention, dense weights and KV stay on the first visible GPU. The profile does not need NVLink.

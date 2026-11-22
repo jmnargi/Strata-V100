@@ -42,6 +42,7 @@ public:
     /// STRATA_BF16_TC=1), Pascal widens both to fp32 (cublasSgemm); see gemm.cu.
     /// `x_f16`: X holds, instead of BF16, the FP16 values the Turing tensor-core path would convert it to
     /// (prefill's xn16 with its f16img writers): that path skips the conversion; any other converts back.
+    void reserve_bf16_tc(int64_t w_elems, int64_t x_elems);   // (a no-op without a BF16 tensor-core path)
     void bf16(const uint16_t* X, const uint16_t* W, float* Y, int64_t T, int64_t N, int64_t K, int64_t ldy = 0,
               float beta = 0.0f, int64_t ldx = 0, bool x_f16 = false);
     /// true when bf16() runs its products through FP16 tensor cores here (Turing, STRATA_BF16_TC): where X may be FP16
