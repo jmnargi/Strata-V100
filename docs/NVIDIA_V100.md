@@ -621,6 +621,33 @@ Open PRs created or updated since October 29 were also checked:
   model engines were not ported. PLE RAM/mmap compaction and copy-stream
   changes require IQ4_NL; this model's PLE table is Q8_0.
   No DFlash or rejected Unsloth model was downloaded or restored.
+- Upstream 0.2.19 (engine 0.1.65) adds the Inkling-2-Mini engine and AMD
+  RDNA3, Blackwell, Ada and Ampere work. Two of its shared-engine changes were
+  ported and measured here, and both were neutral, so neither was kept.
+  The CUDA cuBLAS warm thread (its "2.4-3.8x TTFT", 210-490 ms) left the first
+  2,048-token read at 1,798 / 1,814 ms with it off and 1,815 / 1,800 ms with it
+  on; the first read's extra 195 ms was the same in both arms, because that
+  cost is the PLE table's cold read (the host PLE phase was 347 ms of a 1,228 ms
+  first stage against 31 ms on the warm repeat), not cuBLAS's one-time load.
+  The parallel PLE prompt gather (up to 8 threads above 2,048 rows) read 2,049
+  tokens in 1,831 / 1,824 ms (first, cold) and 1,686 / 1,665 ms (warm) against
+  1,838 / 1,825 and 1,660 / 1,651 serial, and 8,192 tokens in 5,032 / 5,054 ms
+  warm against 5,071 / 5,068 (cold 6,499-6,522 against 6,513-6,515); the host
+  PLE phase was 61 / 63 ms against 55 / 86. What it threads is the dequant, and
+  the exposed cost is the page-cache I/O and the per-row `madvise` hints. The
+  hints stay: without them (`--no-ple-prefetch`) a 2,048-token read whose pages
+  were all cold took 14,014 ms against 2,067 ms with them, and on a warm repeat
+  they cost about 40 ms (1,606 with, 1,566 without).
+  The release's other items do not apply to this rig: the bit-plane LM head is
+  sm_80+ (it wants INT8 tensor cores); the dense INT8 tensor-core GEMM and the
+  >8-column MMVQ split act from 9 rows or on sm_80+, and this profile's verify
+  windows are 6 rows or fewer; the new defaults tables are for sm_86 and newer;
+  the PLE `madvise` skip needs `--ple-io ram` (this service reads the table
+  mapped); and device-side hit planning was measured slower here before.
+  Wiring `native_mmvq_il` into the shared expert was checked with
+  `mmvq_graph_bench 8 2560 640 2 6`: the interleaved kernel reads 6.35-7.42 us
+  a call against the plain one's 6.37-7.44 (234-274 GB/s both), so there is no
+  gain to wire on V100.
 
 ### Verification and reproduction limits
 
