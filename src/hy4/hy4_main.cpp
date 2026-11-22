@@ -16,6 +16,9 @@
 // --route-resident: the picks prefer the experts that are in VRAM - an expert with a slot gets that much probability
 // added to the router's own score before the top n_used (its weight is still its own sigmoid, so it enters the sum
 // smaller); 0 (the default) is the model's own routing.  It changes which experts compute, and so the output.
+// --route-skip R: a pick ranked R or lower (0-based) that is on the CPU lane gets weight 0 - its part is not run and
+// the sum is not renormalised. 0 (the default) computes every pick.  Costs a little accuracy; the low ranks carry
+// the traffic, the tail does not.
 // --profile-out: where the routings this run counts (with the profile's) are written, after each request when serving
 // and at the end otherwise.
 //
@@ -1069,6 +1072,7 @@ int main(int argc, char** argv) {
         }
         else if (a == "--vram-experts") o.vram_experts = std::atof(next().c_str());
         else if (a == "--route-resident") o.route_resident = std::atof(next().c_str());
+        else if (a == "--route-skip") o.route_skip = std::atoi(next().c_str());
         else if (a == "--cpu-threads") o.cpu_threads = std::atoi(next().c_str());
         else if (a == "--profile") o.profile = next();
         else if (a == "--tp") {

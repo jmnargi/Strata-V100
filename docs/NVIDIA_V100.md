@@ -117,6 +117,24 @@ router into "prefer a resident expert" even where the model ranked a
 CPU-lane one much higher, so start at 0.04–0.15 and compare outputs there.
 `--profile-out` now writes the profile at the end of a `--mtp` run too.
 
+**Drop the tail's CPU-lane picks:** `--route-skip R` gives weight 0 to a
+pick ranked R or lower that is on the CPU lane, so neither the lane nor a
+streamed chunk runs it (the sum is not renormalised). It is off by default
+(0) and changes the output. On this pair at `--route-resident 0.15`, a
+192-token reply's verify round went from 83.6 ms at 0 to 79.3 ms at 7 and
+67–82 ms at 5, i.e. 39.8 tok/s without it against 40.3 (7) and 36.2–43.8
+(5) with it: run-to-run noise, not an established gain, because the bias
+has already moved the traffic to the resident experts. The four smoke
+prompts above stayed correct at 7. Keep it for machines whose lane share
+is high (no profile, or a small VRAM budget).
+
+**Per-layer slot weighting was tried and dropped.** Allocating the same
+total slots by each layer's profile counts (Basalt's `layer_slots` idea)
+read a two-prompt profile as nearly flat, fit 6,847 slots against 7,011
+uniform because the uneven counts pack worse across the layer split, and
+measured no decode gain (33.8–39.1 against 36.6–38.3 tok/s). A longer,
+harness-specific trace may change that; the uniform plan stays.
+
 **DFly2:** pass `--dfly /path/to/Hy4-Flash-Maya-S-drafter.dfly2 --draft 5`
 instead of `--mtp`. This is opt-in and uses layer split. It used 0.97 GB
 on the head GPU and left room for 8,897 experts, against 7,339 with MTP.

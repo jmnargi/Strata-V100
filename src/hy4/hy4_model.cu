@@ -2853,7 +2853,7 @@ struct Model::Impl {
         cudaStream_t s = gp.s;
         std::vector<char> used((size_t) ne, 0);
         for (int i = 0; i < T * nu; ++i)
-            if (l.slot_of[(size_t) h_ids[i]] < 0) used[(size_t) h_ids[i]] = 1;
+            if (l.slot_of[(size_t) h_ids[i]] < 0 && h_w[i] != 0.0f) used[(size_t) h_ids[i]] = 1;
         std::vector<int> u;
         for (int e = 0; e < ne; ++e)
             if (used[(size_t) e]) u.push_back(e);
@@ -2924,7 +2924,7 @@ struct Model::Impl {
             ok = mm(gp, l.router, gp.xf, E, T, gp.rl, g.n_expert);
             dbg("ffn_moe_logits", l.il, gp, gp.rl, T, g.n_expert);
             k::router(gp.rl, T, g.n_expert, l.router_b, nu, g.w_norm, g.w_scale, gp.ids, gp.rw, s, l.slot_d,
-                      (float) o.route_resident);
+                      (float) o.route_resident, o.route_skip);
             if (dump) {
                 cudaStreamSynchronize(s);
                 std::vector<int> hid((size_t) T * nu);
@@ -2999,7 +2999,7 @@ struct Model::Impl {
                     int n_ent = 0;
                     std::vector<char> used((size_t) g.n_expert, 0);
                     for (int i = 0; i < T * nu; ++i)
-                        if (l.slot_of[(size_t) h_ids[i]] < 0) {
+                        if (l.slot_of[(size_t) h_ids[i]] < 0 && h_w[i] != 0.0f) {
                             ++n_ent;
                             used[(size_t) h_ids[i]] = 1;
                         }
@@ -3026,7 +3026,9 @@ struct Model::Impl {
                 for (int t = 0; t < T; ++t)
                     for (int j = 0; j < nu; ++j) {
                         const int e = h_ids[t * nu + j];
-                        if (l.slot_of[(size_t) e] < 0) lane_entries.push_back({t, e, h_w[t * nu + j]});
+                        // (--route-skip: a tail pick the router zeroed is not run at all)
+                        if (l.slot_of[(size_t) e] < 0 && h_w[t * nu + j] != 0.0f)
+                            lane_entries.push_back({t, e, h_w[t * nu + j]});
                     }
                 const double tc = now_s();
                 cpu_experts(*lane, l.cex, lane_entries, h_lat, T, h_cpu);
