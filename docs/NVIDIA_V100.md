@@ -139,11 +139,11 @@ harness-specific trace may change that; the uniform plan stays.
 a 63.5 GB table, so each first touch pulls in the kernel's readahead
 window; `MADV_RANDOM` on the table's range measured 47.94 against 47.92
 tok/s over 320 tokens, with 0 MB read from the NVMe in either run (the hot
-pages stay cached after the first pass), so it was reverted. A second
-staging buffer, with half-passes of 64 experts and the expert copies on a
-side stream while the sets run, was built and crashed with SIGILL on the
-first streamed layer's copy; it is not in this change. The bounce
-overlap above is the part that measured.
+pages stay cached after the first pass), so it was reverted. The
+copy/sets pipeline above first trapped (`SIGILL`) because its send lambda
+fell off the end after `CK(...)` (a bool-returning lambda with no
+`return true`); an explicit return fixed it, and six runs then agreed to
+0.1 s.
 
 **The MTP window is 3 drafts, not 4.** With the bias on, the window size
 trades acceptance against expert work per round: every draft row is a full
@@ -161,16 +161,19 @@ the real token) is also neutral here: 39.6 (6) and 39.4 (8) against 39.8
 (off), 31.2 (4, one noisy run). It is off by default.
 
 **A bigger prompt chunk is slower once the bias is on.** At
-`--route-resident 0.30`, the 6,220-token review read at 476 tok/s with
+`--route-resident 0.30`, the 6,220-token review read at 483 tok/s with
 `--chunk 4096` and at 302 / 382 tok/s with `--chunk 8192`; the larger
 chunk held fewer experts (20,783 streamed against 15,198) and the window
 after it ran at 370 ms against 79 ms. `--chunk 1024` with
 `HY4_SCRATCH_BORROW=1 HY4_SCRATCH_BORROW_CHUNK=4096` reads the same
-prompt at **506.5 tok/s** (10,382 streamed, two runs within 0.03 s), and
-keeps the higher residency for decode. The streamed passes now fill the
-next pass's pinned bounce while this pass's expert sets run on the GPU
-(2.7 s of the read is bounce copies), which took the read from 490.9 to
-506.5 tok/s and chunk 4096 from 467 to 476. `--reserve-gb 0.35`
+prompt at **521.0 tok/s** (10,376 streamed, two runs within 0.1 s), and
+keeps the higher residency for decode. The streamed passes now run in two
+halves over the same pinned and device staging, the next half's copy on a
+side stream while this half's sets run, and the host fills the next half's
+bounce while the sets run: 490.9 → 506.5 tok/s for the bounce overlap and
+506.5 → 521.0 for the copy/sets overlap, with chunk 4096 at 483 (467
+before). 2.7 s of the read is still the bounce copies themselves.
+`HY4_STAGE2=0` keeps the serial passes. `--reserve-gb 0.35`
 with `--chunk 4096` fails in the warm-up (`the light sets' scratch
 (64 MB) failed`): keep at least 0.75 GB a card there.
 
