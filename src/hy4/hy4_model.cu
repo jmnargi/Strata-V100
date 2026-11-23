@@ -2859,8 +2859,9 @@ struct Model::Impl {
             if (used[(size_t) e]) u.push_back(e);
         const CpuExperts& cx = l.cex;
         const size_t gb = cx.g_stride, db = cx.d_stride;
-        for (size_t p0 = 0; p0 < u.size(); p0 += (size_t) kStage) {
-            const int np = (int) std::min(u.size() - p0, (size_t) kStage);
+        // (the bounce for the next pass is filled while this pass's sets run on the GPU: the pinned image is free as
+        //  soon as its copy to the device has landed, and experts_sets waits on that copy itself)
+        auto fill = [&](size_t p0, int np) {
             const double tc = now_s();
             lane->parallel_for(np * 3, [&](int it) {
                 const int i = it / 3, role = it % 3, e = u[p0 + (size_t) i];
@@ -2870,12 +2871,18 @@ struct Model::Impl {
                 std::memcpy(dst, src, role == 2 ? db : gb);
             });
             st.stream_ms += (now_s() - tc) * 1e3;
+        };
+        if (!u.empty()) fill(0, (int) std::min(u.size(), (size_t) kStage));
+        for (size_t p0 = 0; p0 < u.size(); p0 += (size_t) kStage) {
+            const int np = (int) std::min(u.size() - p0, (size_t) kStage);
             CK(cudaMemcpyAsync(gp.stage, h_stage, (size_t) np * l.blob, cudaMemcpyHostToDevice, s));
             for (int e = 0; e < ne; ++e) h_pmap[e] = -1;
             for (int i = 0; i < np; ++i) h_pmap[u[p0 + (size_t) i]] = i;
             CK(cudaMemcpyAsync(gp.pmap, h_pmap, sizeof(int) * ne, cudaMemcpyHostToDevice, s));
             if (!experts_sets(l, gp, T, err, gp.pmap, gp.stage, np, true)) return false;
-            CK(cudaStreamSynchronize(s));   // (the bounce and the map are the next pass's)
+            if (p0 + (size_t) np < u.size())
+                fill(p0 + (size_t) np, (int) std::min(u.size() - p0 - (size_t) np, (size_t) kStage));
+            CK(cudaStreamSynchronize(s));   // (the device stage and the map are the next pass's)
             st.streamed += np;
         }
         return true;

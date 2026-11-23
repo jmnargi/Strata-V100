@@ -151,13 +151,16 @@ the real token) is also neutral here: 39.6 (6) and 39.4 (8) against 39.8
 (off), 31.2 (4, one noisy run). It is off by default.
 
 **A bigger prompt chunk is slower once the bias is on.** At
-`--route-resident 0.30`, the 6,220-token review read at 467 tok/s with
+`--route-resident 0.30`, the 6,220-token review read at 476 tok/s with
 `--chunk 4096` and at 302 / 382 tok/s with `--chunk 8192`; the larger
 chunk held fewer experts (20,783 streamed against 15,198) and the window
 after it ran at 370 ms against 79 ms. `--chunk 1024` with
 `HY4_SCRATCH_BORROW=1 HY4_SCRATCH_BORROW_CHUNK=4096` reads the same
-prompt at 490.9 tok/s (10,382 streamed, reproduced to the millisecond on
-two runs), and keeps the higher residency for decode. `--reserve-gb 0.35`
+prompt at **506.5 tok/s** (10,382 streamed, two runs within 0.03 s), and
+keeps the higher residency for decode. The streamed passes now fill the
+next pass's pinned bounce while this pass's expert sets run on the GPU
+(2.7 s of the read is bounce copies), which took the read from 490.9 to
+506.5 tok/s and chunk 4096 from 467 to 476. `--reserve-gb 0.35`
 with `--chunk 4096` fails in the warm-up (`the light sets' scratch
 (64 MB) failed`): keep at least 0.75 GB a card there.
 
