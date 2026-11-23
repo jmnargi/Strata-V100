@@ -135,6 +135,16 @@ uniform because the uneven counts pack worse across the layer split, and
 measured no decode gain (33.8–39.1 against 36.6–38.3 tok/s). A longer,
 harness-specific trace may change that; the uniform plan stays.
 
+**Two I/O experiments did not pay.** Engram rows are random 4 KB pages of
+a 63.5 GB table, so each first touch pulls in the kernel's readahead
+window; `MADV_RANDOM` on the table's range measured 47.94 against 47.92
+tok/s over 320 tokens, with 0 MB read from the NVMe in either run (the hot
+pages stay cached after the first pass), so it was reverted. A second
+staging buffer, with half-passes of 64 experts and the expert copies on a
+side stream while the sets run, was built and crashed with SIGILL on the
+first streamed layer's copy; it is not in this change. The bounce
+overlap above is the part that measured.
+
 **The MTP window is 3 drafts, not 4.** With the bias on, the window size
 trades acceptance against expert work per round: every draft row is a full
 row of the verify forward and re-runs 16 experts a layer. On this pair, a
