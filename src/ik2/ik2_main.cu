@@ -352,6 +352,7 @@ int g_pop_E_ep = 0;
 // expert e of every layer belongs to GPU e & 1, each GPU with its own cache over all layers and its own PCIe link.
 // In decode a layer's picks go to their GPUs at once, both links copying the misses side by side.
 bool g_ep = false;
+int g_attn_gqa = 0;         // IK2_ATTN_GQA=1: a full layer's decode reads each key once for its three query heads
 cudaEvent_t g_ep_x, g_ep_cp[2], g_ep_done;
 // IK2_TP=1 with --gpus 2: the experts tensor-parallel instead. GPU d holds half of every expert: rows [d F/2, ..) of
 // gate and up and rows [d C/2, ..) of down, so every miss is half on each link. A layer: each GPU its half of h
@@ -1663,8 +1664,12 @@ void run_layer_attn(const Model& M, Layer& Ly, int l, int T, int pos0, const flo
     const int attn_kv_cap = Ly.sliding ? Ly.kv_cap : 0;
     if (T == 1) {
         if (g_kv_fp8) {
-            k::attn_decode_fp8(q_p, r_p, sink_p, Ly.kc8, Ly.vc8, attn_kv_cap, c.H, c.KV, c.D, k0, nk, pos0,
-                               qk_scale * k_inv, v_inv, Ly.rel_proj, c.d_rel, extent, window, W.lg, W.o, g_s);
+            if (g_attn_gqa && !Ly.sliding)
+                k::attn_decode_gqa3_fp8(q_p, r_p, sink_p, Ly.kc8, Ly.vc8, attn_kv_cap, c.H, c.KV, k0, nk, pos0,
+                                        qk_scale * k_inv, v_inv, Ly.rel_proj, c.d_rel, extent, window, W.lg, W.o, g_s);
+            else
+                k::attn_decode_fp8(q_p, r_p, sink_p, Ly.kc8, Ly.vc8, attn_kv_cap, c.H, c.KV, c.D, k0, nk, pos0,
+                                   qk_scale * k_inv, v_inv, Ly.rel_proj, c.d_rel, extent, window, W.lg, W.o, g_s);
         } else {
             k::attn_decode_f16(q_p, r_p, sink_p, Ly.kc, Ly.vc, attn_kv_cap, c.H, c.KV, c.D, k0, nk, pos0, qk_scale,
                                Ly.rel_proj, c.d_rel, extent, window, W.lg, W.o, g_s);
@@ -4445,6 +4450,7 @@ int main(int argc, char** argv) {
     g_block = !(getenv("IK2_BLOCK") && !std::atoi(getenv("IK2_BLOCK")));
     g_ep_window = getenv("IK2_EP_DRAFT") && std::atoi(getenv("IK2_EP_DRAFT"));
     g_attn_mma = c.D == 128 && c.H / c.KV <= 8 ? (getenv("IK2_ATTN_MMA") ? std::atoi(getenv("IK2_ATTN_MMA")) : 1) : 0;
+    g_attn_gqa = getenv("IK2_ATTN_GQA") && std::atoi(getenv("IK2_ATTN_GQA"));
     g_mma_split = k::attn_decode_mma_blocks(c.KV);
     if (n_gpu == 1 && getenv("IK2_KV_MANAGED") && atoi(getenv("IK2_KV_MANAGED"))) {
         int concurrent = 0;

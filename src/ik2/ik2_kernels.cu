@@ -3728,6 +3728,113 @@ __global__ void attn_split_kernel(const float* q, const float* r, const KV* kc, 
     pp[2 + tid] = o;
 }
 
+// One block a KV head, two keys a warp (a half-warp each): the three query heads that share the head
+// (H == 3 * Hkv) read every key's K and V once, and a half-warp's 16 lanes cover the head's 128 values
+// eight each, so a key costs four shuffle steps a dot instead of five.  The partials are
+// attn_combine_kernel's (130 floats a (query head, split)).
+__device__ __forceinline__ float hsum16(float v, unsigned mask) {
+#pragma unroll
+    for (int o = 8; o > 0; o >>= 1) v += __shfl_xor_sync(mask, v, o, 16);
+    return v;
+}
+
+__global__ void attn_split_gqa3_kernel(const float* q, const float* r, const uint8_t* kc, const uint8_t* vc, int kv_cap,
+                                       int H, int Hkv, int k0, int nk, int qpos, float qk_scale, const float* proj,
+                                       int d_rel, int extent, int window, float* part) {
+    extern __shared__ float smem[];
+    float* sm_o = smem;                     // [8][3][128]
+    float* sm_m = sm_o + 8 * 3 * 128;       // [8][3]
+    float* sm_s = sm_m + 8 * 3;             // [8][3]
+    const int g = blockIdx.x, p = blockIdx.y, P = gridDim.y;
+    const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    const int half = lane >> 4, l16 = lane & 15, grp = warp * 2 + half;
+    const unsigned hmask = half ? 0xffff0000u : 0x0000ffffu;   // (the two halves are independent: a key's
+                                                               //  keys can be filtered on one and not the other)
+    const int KD = Hkv * 128;
+    const int len = (nk + P - 1) / P, j0 = p * len, j1 = min(nk, j0 + len);
+    float qv[3][8];
+    float rv[3][2] = {};
+    const int d0 = l16 * 8;
+#pragma unroll
+    for (int j = 0; j < 3; ++j) {
+        const float* qh = q + (size_t) (g * 3 + j) * 128;
+        *(float4*) &qv[j][0] = __ldg((const float4*) (qh + d0));
+        *(float4*) &qv[j][4] = __ldg((const float4*) (qh + d0 + 4));
+        const float* rh = r + (size_t) (g * 3 + j) * d_rel;
+        if (l16 < d_rel) rv[j][0] = __ldg(rh + l16);
+        if (l16 + 16 < d_rel) rv[j][1] = __ldg(rh + l16 + 16);
+    }
+    float m_w[3] = {-INFINITY, -INFINITY, -INFINITY}, s_w[3] = {0.0f, 0.0f, 0.0f};
+    float o_w[3][8] = {};
+    for (int j = j0 + grp; j < j1; j += 8) {
+        const int pos = k0 + j;
+        const int dist = qpos - pos;
+        if (dist < 0 || dist >= window) continue;
+        const int slot = kv_cap > 0 ? pos % kv_cap : pos;
+        const size_t off = (size_t) slot * KD + (size_t) g * 128 + d0;
+        const uint2 kb = __ldg((const uint2*) (kc + off));
+        const uint2 vb = __ldg((const uint2*) (vc + off));   // (in flight beside the key)
+        const float2 k0f = e4m3fnx2_to_f2((uint16_t) kb.x), k1f = e4m3fnx2_to_f2((uint16_t) (kb.x >> 16));
+        const float2 k2f = e4m3fnx2_to_f2((uint16_t) kb.y), k3f = e4m3fnx2_to_f2((uint16_t) (kb.y >> 16));
+        const float k[8] = {k0f.x, k0f.y, k1f.x, k1f.y, k2f.x, k2f.y, k3f.x, k3f.y};
+        const float* pr = proj + (size_t) dist * d_rel;
+        float bs[3] = {0.0f, 0.0f, 0.0f};
+        if (dist < extent) {
+#pragma unroll
+            for (int jh = 0; jh < 3; ++jh) {
+                float b = 0.0f;
+                if (l16 < d_rel) b += rv[jh][0] * __ldg(pr + l16);
+                if (l16 + 16 < d_rel) b += rv[jh][1] * __ldg(pr + l16 + 16);
+                bs[jh] = hsum16(b, hmask);
+            }
+        }
+        const float2 v0f = e4m3fnx2_to_f2((uint16_t) vb.x), v1f = e4m3fnx2_to_f2((uint16_t) (vb.x >> 16));
+        const float2 v2f = e4m3fnx2_to_f2((uint16_t) vb.y), v3f = e4m3fnx2_to_f2((uint16_t) (vb.y >> 16));
+        const float v[8] = {v0f.x, v0f.y, v1f.x, v1f.y, v2f.x, v2f.y, v3f.x, v3f.y};
+#pragma unroll
+        for (int jh = 0; jh < 3; ++jh) {
+            float a = 0.0f;
+#pragma unroll
+            for (int u = 0; u < 8; ++u) a += qv[jh][u] * k[u];
+            const float l = hsum16(a, hmask) * qk_scale + bs[jh];
+            const float m_new = fmaxf(m_w[jh], l);
+            const float alpha = (m_w[jh] == -INFINITY) ? 0.0f : expf(m_w[jh] - m_new);
+            const float beta = expf(l - m_new);
+            m_w[jh] = m_new;
+            s_w[jh] = s_w[jh] * alpha + beta;
+#pragma unroll
+            for (int u = 0; u < 8; ++u) o_w[jh][u] = o_w[jh][u] * alpha + v[u] * beta;
+        }
+    }
+#pragma unroll
+    for (int jh = 0; jh < 3; ++jh) {
+        if (l16 == 0) sm_m[grp * 3 + jh] = m_w[jh], sm_s[grp * 3 + jh] = s_w[jh];
+#pragma unroll
+        for (int u = 0; u < 8; ++u) sm_o[(grp * 3 + jh) * 128 + d0 + u] = o_w[jh][u];
+    }
+    __syncthreads();
+#pragma unroll
+    for (int jh = 0; jh < 3; ++jh) {
+        float M = -INFINITY;
+#pragma unroll
+        for (int gr = 0; gr < 8; ++gr) M = fmaxf(M, sm_m[gr * 3 + jh]);
+        float sum = 0.0f, o = 0.0f;
+        if (M > -INFINITY) {
+#pragma unroll
+            for (int gr = 0; gr < 8; ++gr) {
+                const float mg = sm_m[gr * 3 + jh];
+                if (mg == -INFINITY) continue;
+                const float f = expf(mg - M);
+                sum += sm_s[gr * 3 + jh] * f;
+                o += sm_o[(gr * 3 + jh) * 128 + tid] * f;
+            }
+        }
+        float* pp = part + ((size_t) (g * 3 + jh) * P + p) * 130;
+        if (tid == 0) pp[0] = M, pp[1] = sum;
+        pp[2 + tid] = o;
+    }
+}
+
 __global__ void attn_combine_kernel(const float* sink, const float* part, int H, int P, float v_inv_scale, float* out) {
     const int h = blockIdx.x, qi = blockIdx.y, tid = threadIdx.x;
     const float* pp = part + ((size_t) qi * H + h) * P * 130;
@@ -6003,6 +6110,28 @@ void attn_decode_impl(const float* q, const float* r, const float* sink, const K
     check("attn_decode_split");
     attn_combine_kernel<<<dim3(H, 1), 128, 0, s>>>(sink, part, H, P, v_inv_scale, out);
     check("attn_decode_combine");
+}
+
+// attn_decode_fp8's GQA path: when three query heads share each KV head (H == 3 * Hkv, Inkling 2's 24 / 8),
+// one block reads a key's K and V once for all three.  IK2_ATTN_GQA=1 selects it; anything else keeps the
+// per-head split path, byte for byte.
+void attn_decode_gqa3_fp8(const float* q, const float* r, const float* sink, const uint8_t* kc, const uint8_t* vc,
+                          int kv_cap, int H, int Hkv, int k0, int nk, int qpos, float qk_scale, float v_inv_scale,
+                          const float* proj, int d_rel, int extent, int window, float* scratch, float* out,
+                          cudaStream_t s) {
+    static const int p_env = getenv("IK2_ATTN_SPLIT") ? std::atoi(getenv("IK2_ATTN_SPLIT")) : 0;
+    const int P = p_env > 0 ? p_env : std::min(128, std::max(1, (nk + 63) / 64));
+    if (H != 3 * Hkv || d_rel > 32 || P == 1) {
+        attn_decode_impl<uint8_t>(q, r, sink, kc, vc, kv_cap, H, Hkv, 128, k0, nk, qpos, qk_scale, v_inv_scale, proj,
+                                  d_rel, extent, window, scratch, out, s);
+        return;
+    }
+    const size_t smem = (size_t) (8 * 3 * 128 + 8 * 3 * 2) * sizeof(float);
+    attn_split_gqa3_kernel<<<dim3((unsigned) Hkv, (unsigned) P), 128, smem, s>>>(
+        q, r, kc, vc, kv_cap, H, Hkv, k0, nk, qpos, qk_scale, proj, d_rel, extent, window, scratch);
+    check("attn_decode_gqa3");
+    attn_combine_kernel<<<dim3((unsigned) H, 1), 128, 0, s>>>(sink, scratch, H, P, v_inv_scale, out);
+    check("attn_decode_gqa3 (combine)");
 }
 
 void attn_decode(const float* q, const float* r, const float* sink, const float* kc, const float* vc, int H, int Hkv,

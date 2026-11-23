@@ -20,7 +20,8 @@
     "IK2_EP_DEVICE": "1",
     "IK2_EP_SPLIT": "0.85",
     "IK2_KV": "fp8",
-    "IK2_DENSE": "q8"
+    "IK2_DENSE": "q8",
+    "IK2_ATTN_GQA": "1"
   },
   "tokenizer": "models/inkling2-mini/tokenizer",
   "model_name": "inkling-2-mini",

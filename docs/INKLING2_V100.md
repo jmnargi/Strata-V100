@@ -49,6 +49,8 @@ Measured on the V100 pair with the 524K profile's settings: `IK2_EP=1`, `IK2_EP_
 | 32,768 | 1,022 | 43.1 |
 | 65,536 | 622 | 35.4 |
 
+`IK2_ATTN_GQA=1` measures 42.2 tok/s of decode at 65,536 and 41.4 with `IK2_ATTN_SPLIT=512`; the rows above predate it.
+
 All five runs kept every one of the 3,072 experts in VRAM across the pair: zero expert-cache misses and 0.0 GiB copied. Prefill falls from its 8K peak as attention reads the accumulated keys, and decode falls with depth from 53.6 to 35.4 tok/s for the same reason. The 64K read moved 65,536 tokens in 105.3 s; expert work was 2.6 s of that, so the rest is attention, dense projections and chunk scheduling at depth.
 
 ## 524,288 tokens and concurrent clients
@@ -116,6 +118,52 @@ The measured split uses PCI bus order (`CUDA_DEVICE_ORDER=PCI_BUS_ID`, `CUDA_VIS
 The branch also carries the upstream Strata Inkling 2 engine path (`src/inkling2`, `strata-inkling2`) beside `strata-ik2`. It is the more deeply tuned of the two on Volta: measured on a 32 GB V100 with `UD-Q4_K_M`, `dspark`, int8 KV and 3,072 experts resident it reads 1,349 tok/s at a 512-token prompt and decodes 130 tok/s there, and holds 910 tok/s prefill / 83.5 tok/s decode at 524,288 tokens. It is one card's engine: it makes no per-device calls, so it does not split experts across the pair.
 
 Its VRAM need is experts (13.76 GiB for this model) + dense + KV + workspace, so a 16 GB card is about 1 GiB short at a short context, and the engine refuses with `expert placement failed`. The two ways out are a 32 GB card, or its host expert pool, which this tree's CPU lane does not yet compute for SITU activations. The engine builds here as `strata-inkling2` (`-DSTRATA_INKLING2=ON`) and loads this GGUF; the port adds `include/strata/inkling2/`, `include/strata/quant/` and `src/inkling2/`, the `Inkling2` model family and its header check, and the four host-side quant entry points its loader uses (over the block decoder `strata-ik2` already carries). Two hooks the engine asks for are not present in this build: the grouped WMMA expert kernel answers "not available" so the engine takes its own fallback, and the BF16 tensor-core reservation is a no-op because this prefill has no such path.
+
+## Which quant fits the pair at 524,288
+
+The profile runs Unsloth's `UD-Q4_K_XL` (16.42 GiB, sha256 `e62d463c…`) with FP8 E4M3 KV at the full
+524,288-token window and every one of the model's 3,072 experts in VRAM: 431 slots (2.1 GiB) on the first card
+and 2,641 (12.6 GiB) on the second; the 14.7 GiB of experts are read from the GGUF through pinned host
+memory and copied to the cards (about 10 s). The engine is ready 18 s after start; GPU 0 then holds 14.2 GiB of its 16.4 and GPU 1 15.1, leaving 2.2 and 1.3 GiB.
+
+That file is not a uniform Q4: 20 of its 24 expert blocks are the checkpoint's NVFP4 experts (10.68 GiB), four
+are Q8_0 (4.13 GiB), and the dense, attention and output tensors are Q8_0. `UD-Q8_K_XL` keeps the same NVFP4
+blocks but stores the four high-precision blocks as BF16 (8.0 GiB against 4.13) and the dense tensors as BF16:
+21.30 GiB. With 8.31 GiB of FP8 KV that is 29.6 GiB before any workspace, against 32 GiB of VRAM and the 3.5 GiB
+this profile has free, so it cannot stay fully resident at 524,288; the engine also has no BF16 expert path.
+llama.cpp b12588 ran it at 524,288 only with a Q5_0 cache and 65 MiB of headroom, and never with a prompt that
+filled the window. `UD-Q4_K_XL` is therefore the highest-quality quant that fits fully on the pair at this window.
+
+Unsloth's 2026-11-23 update moved the root GGUFs to mainline llama.cpp's `inkling2_loop` layout: the loop tensors
+are renamed (`loop_q_ctrl_down` against `loop_q_down`), the metadata keys are `inkling2_loop.*` and the file has
+744 tensors instead of 734. The tensor bytes are unchanged (the first 64 KiB of `output.weight` hashes equal in
+both), and the Unsloth layout this engine reads is still published under `Old_Support/`. Load the
+`Old_Support` file (rename the `.gguf_file`) or the earlier revision; the speed claims in that update are for
+Unsloth's own prebuilt, not for a different quant.
+
+## GQA decode attention
+
+Eight of the 48 layer visits are full-attention layers, and Inkling 2 gives each KV head three query heads (24
+heads on 8). `IK2_ATTN_GQA=1` (the expert-parallel token path) runs one block per KV head for those visits: a half-warp covers one key's 128
+values eight apiece (four shuffle steps a dot instead of five) and the key's K and V are read once for all three
+query heads, with the V load issued beside the K load. On a 64K prompt this cut the eight full visits from
+about 10.1 to 6.1 ms a token (nsys: 768 us a visit) and decode from 35.5 to 42.2 tok/s (+19 %). Short-context
+decode is unchanged (55.8 tok/s at 512 tokens) and the 128 greedy tokens of a 512-token prompt are identical
+with the flag on and off. `IK2_ATTN_SPLIT` overrides the 128 splits a KV head; 512 measured 41.4 tok/s at 64K,
+so the default stays.
+
+## Deep prompts
+
+A 262,144-token prompt with `IK2_FLASH=1` read at 178.7 tok/s (1,466.8 s) and then decoded 8 tokens at 28.5
+tok/s at that depth; the same flag is slower at 64K (490 against 622 tok/s), so the profiles leave it off. A
+524,000-token prompt with the default path did not finish its prefill inside 3,600 s, so a prompt that fills the
+window is not practical yet. The flash path alone grows at about the 1.7 power of the prompt length (64K
+133.7 s, 256K 1,466.8 s), which is why the full window costs close to an hour: the KV cache lives on the first
+card, and the default path also unpacks each FP8 KV row to FP16 twice per chunk per full layer. A faster deep
+prefill needs the upstream engine's FA2 prefill kernel in this path.
+
+Quality at depth: a 35,467-token request with the code `4815162342` in a note at the middle of the document
+returned `4815162342`.
 
 ## Volta path
 
