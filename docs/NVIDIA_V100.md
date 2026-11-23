@@ -135,6 +135,32 @@ uniform because the uneven counts pack worse across the layer split, and
 measured no decode gain (33.8–39.1 against 36.6–38.3 tok/s). A longer,
 harness-specific trace may change that; the uniform plan stays.
 
+**The MTP window is 3 drafts, not 4.** With the bias on, the window size
+trades acceptance against expert work per round: every draft row is a full
+row of the verify forward and re-runs 16 experts a layer. On this pair, a
+192-token reply, warm, interleaved: `--draft 3` 41.9 / 41.8 tok/s at
+`--route-resident 0.15` and 46.3 / 46.3 at 0.30 (verify 73 / 61 ms, 3.3 /
+3.1 tokens a round); `--draft 4` 39.7 / 39.7 and 45.7 / 45.8 (verify 84 /
+72 ms, 3.6 tokens a round); `--draft 2` 39.6 (62 ms, 2.6); `--draft 6`
+36.9 (106 ms, 4.3). `--draft 3` is the setting to use with the bias; 5 %
+more at 0.15, equal at 0.30. `--draft-floor` 0.2/0.6 and `HY4_MTP_EAGER=1`
+measured 36.2/39.9/39.4 tok/s against 39.8, i.e. nothing.
+
+`--route-skip-draft R` (the tail skip on the speculative rows only, row 0
+the real token) is also neutral here: 39.6 (6) and 39.4 (8) against 39.8
+(off), 31.2 (4, one noisy run). It is off by default.
+
+**A bigger prompt chunk is slower once the bias is on.** At
+`--route-resident 0.30`, the 6,220-token review read at 467 tok/s with
+`--chunk 4096` and at 302 / 382 tok/s with `--chunk 8192`; the larger
+chunk held fewer experts (20,783 streamed against 15,198) and the window
+after it ran at 370 ms against 79 ms. `--chunk 1024` with
+`HY4_SCRATCH_BORROW=1 HY4_SCRATCH_BORROW_CHUNK=4096` reads the same
+prompt at 490.9 tok/s (10,382 streamed, reproduced to the millisecond on
+two runs), and keeps the higher residency for decode. `--reserve-gb 0.35`
+with `--chunk 4096` fails in the warm-up (`the light sets' scratch
+(64 MB) failed`): keep at least 0.75 GB a card there.
+
 **DFly2:** pass `--dfly /path/to/Hy4-Flash-Maya-S-drafter.dfly2 --draft 5`
 instead of `--mtp`. This is opt-in and uses layer split. It used 0.97 GB
 on the head GPU and left room for 8,897 experts, against 7,339 with MTP.

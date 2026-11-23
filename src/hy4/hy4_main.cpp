@@ -19,6 +19,9 @@
 // --route-skip R: a pick ranked R or lower (0-based) that is on the CPU lane gets weight 0 - its part is not run and
 // the sum is not renormalised. 0 (the default) computes every pick.  Costs a little accuracy; the low ranks carry
 // the traffic, the tail does not.
+// --route-skip-draft R: --route-skip's rank for the speculative rows of a token window only (row 0 is the real token).
+// The window's own argmax decides which drafts are kept, so the accepted tokens are what this cheaper window computes;
+// they can differ from a full-window run, and that has to be compared on the answers.
 // --profile-out: where the routings this run counts (with the profile's) are written, after each request when serving
 // and at the end otherwise.
 //
@@ -1073,6 +1076,7 @@ int main(int argc, char** argv) {
         else if (a == "--vram-experts") o.vram_experts = std::atof(next().c_str());
         else if (a == "--route-resident") o.route_resident = std::atof(next().c_str());
         else if (a == "--route-skip") o.route_skip = std::atoi(next().c_str());
+        else if (a == "--route-skip-draft") o.route_skip_draft = std::atoi(next().c_str());
         else if (a == "--cpu-threads") o.cpu_threads = std::atoi(next().c_str());
         else if (a == "--profile") o.profile = next();
         else if (a == "--tp") {

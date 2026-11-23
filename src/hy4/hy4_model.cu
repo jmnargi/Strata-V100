@@ -2924,7 +2924,7 @@ struct Model::Impl {
             ok = mm(gp, l.router, gp.xf, E, T, gp.rl, g.n_expert);
             dbg("ffn_moe_logits", l.il, gp, gp.rl, T, g.n_expert);
             k::router(gp.rl, T, g.n_expert, l.router_b, nu, g.w_norm, g.w_scale, gp.ids, gp.rw, s, l.slot_d,
-                      (float) o.route_resident, o.route_skip);
+                      (float) o.route_resident, o.route_skip, T <= W ? o.route_skip_draft : 0);
             if (dump) {
                 cudaStreamSynchronize(s);
                 std::vector<int> hid((size_t) T * nu);
