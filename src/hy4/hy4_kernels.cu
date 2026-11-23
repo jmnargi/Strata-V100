@@ -627,10 +627,12 @@ __global__ void add_kernel(float* y, const float* x, size_t n) {
 __global__ void __launch_bounds__(1024) router_kernel(const float* __restrict__ logits, int n_exp,
                                                       const float* __restrict__ bias, int n_used, int norm, float scale,
                                                       int* __restrict__ ids, float* __restrict__ wout,
-                                                      const int* __restrict__ slot, float bonus, int skip) {
+                                                      const int* __restrict__ slot, float bonus, int skip,
+                                                      int skip_draft) {
     __shared__ float sv[1024], sp[1024];
     __shared__ int si[1024];
     const int t = blockIdx.x, i = threadIdx.x;
+    const int sk = (skip_draft > 0 && t > 0) ? skip_draft : skip;
     const float* lr = logits + (size_t) t * n_exp;
     if (i < n_exp) {
         const float p = sigmoidf_(lr[i]);
@@ -667,7 +669,7 @@ __global__ void __launch_bounds__(1024) router_kernel(const float* __restrict__ 
         if (i < n_used) {
             const int e = si[i];
             ids[(size_t) t * n_used + i] = e;
-            wout[(size_t) t * n_used + i] = (skip > 0 && i >= skip && slot && slot[e] < 0) ? 0.0f : p / den * scale;
+            wout[(size_t) t * n_used + i] = (sk > 0 && i >= sk && slot && slot[e] < 0) ? 0.0f : p / den * scale;
         }
     }
 }
@@ -677,8 +679,10 @@ template <int PER>
 __global__ void __launch_bounds__(32) router_warp_kernel(const float* __restrict__ logits, int n_exp,
                                                         const float* __restrict__ bias, int n_used, int norm,
                                                         float scale, int* __restrict__ ids, float* __restrict__ wout,
-                                                        const int* __restrict__ slot, float bonus, int skip) {
+                                                        const int* __restrict__ slot, float bonus, int skip,
+                                                        int skip_draft) {
     const int t = blockIdx.x, lane = threadIdx.x;
+    const int sk = (skip_draft > 0 && t > 0) ? skip_draft : skip;
     const float* lr = logits + (size_t) t * n_exp;
     float v[PER];
 #pragma unroll
@@ -720,7 +724,7 @@ __global__ void __launch_bounds__(32) router_warp_kernel(const float* __restrict
     const float den = norm ? fmaxf(sum, 6.103515625e-5f) : 1.0f;
     if (lane < n_used) {
         ids[(size_t) t * n_used + lane] = mine;
-        wout[(size_t) t * n_used + lane] = (skip > 0 && lane >= skip && slot && slot[mine] < 0) ? 0.0f : p / den * scale;
+        wout[(size_t) t * n_used + lane] = (sk > 0 && lane >= sk && slot && slot[mine] < 0) ? 0.0f : p / den * scale;
     }
 }
 // ... 512 candidates at most, 16 picks at most: a thread a candidate, each warp sorting its 32 (a register bitonic
@@ -739,10 +743,12 @@ __device__ __forceinline__ void rk_step(float& v, int& i, int j, bool up, int la
 __global__ void __launch_bounds__(512) router_bitonic_kernel(const float* __restrict__ logits, int n_exp,
                                                              const float* __restrict__ bias, int n_used, int norm,
                                                              float scale, int* __restrict__ ids, float* __restrict__ wout,
-                                                             const int* __restrict__ slot, float bonus, int skip) {
+                                                             const int* __restrict__ slot, float bonus, int skip,
+                                                             int skip_draft) {
     __shared__ float lv[16][16];
     __shared__ int li[16][16];
     const int t = blockIdx.x, e = threadIdx.x, w = e >> 5, lane = e & 31;
+    const int sk = (skip_draft > 0 && t > 0) ? skip_draft : skip;
     const float* lr = logits + (size_t) t * n_exp;
     float v = e < n_exp ? sigmoidf_(lr[e]) + (bias ? bias[e] : 0.0f) + (slot && slot[e] >= 0 ? bonus : 0.0f)
                         : -INFINITY;
@@ -777,7 +783,7 @@ __global__ void __launch_bounds__(512) router_bitonic_kernel(const float* __rest
         const float den = norm ? fmaxf(sum, 6.103515625e-5f) : 1.0f;
         if (lane < n_used) {
             ids[(size_t) t * n_used + lane] = pick;
-            wout[(size_t) t * n_used + lane] = (skip > 0 && lane >= skip && slot && slot[pick] < 0) ? 0.0f : p / den * scale;
+            wout[(size_t) t * n_used + lane] = (sk > 0 && lane >= sk && slot && slot[pick] < 0) ? 0.0f : p / den * scale;
         }
     }
 }
@@ -1533,7 +1539,7 @@ void add(float* y, const float* x, size_t n, cudaStream_t s) {
     check("add");
 }
 void router(const float* logits, int T, int n_exp, const float* bias, int n_used, bool norm, float scale, int* ids,
-            float* w, cudaStream_t s, const int* slot, float bonus, int skip_rank) {
+            float* w, cudaStream_t s, const int* slot, float bonus, int skip_rank, int skip_draft) {
     if (n_exp > 1024 || n_used > 16) {
         std::fprintf(stderr, "maya-hy4 router: %d experts, %d a token (1024 / 16 at most)\n", n_exp, n_used);
         g_err.fetch_add(1);
@@ -1542,18 +1548,19 @@ void router(const float* logits, int T, int n_exp, const float* bias, int n_used
     static const bool sort = std::getenv("HY4_ROUTER_SORT") != nullptr;   // (the block-wide sort: the earlier kernel)
     static const bool warp = std::getenv("HY4_ROUTER_WARP") != nullptr;   // (the one-warp picks)
     const int skip = skip_rank < 1 || skip_rank > n_used ? 0 : skip_rank;
+    const int skd = skip_draft < 1 || skip_draft > n_used ? 0 : skip_draft;
     if (!sort && !warp && n_exp <= 512 && n_used <= 16)
         router_bitonic_kernel<<<(unsigned) T, 512, 0, s>>>(logits, n_exp, bias, n_used, norm ? 1 : 0, scale, ids, w,
-                                                           slot, bonus, skip);
+                                                           slot, bonus, skip, skd);
     else if (!sort && n_exp <= 512 && n_used <= 32)
         router_warp_kernel<16><<<(unsigned) T, 32, 0, s>>>(logits, n_exp, bias, n_used, norm ? 1 : 0, scale, ids, w,
-                                                           slot, bonus, skip);
+                                                           slot, bonus, skip, skd);
     else if (!sort && n_used <= 32)
         router_warp_kernel<32><<<(unsigned) T, 32, 0, s>>>(logits, n_exp, bias, n_used, norm ? 1 : 0, scale, ids, w,
-                                                           slot, bonus, skip);
+                                                           slot, bonus, skip, skd);
     else
         router_kernel<<<(unsigned) T, 1024, 0, s>>>(logits, n_exp, bias, n_used, norm ? 1 : 0, scale, ids, w, slot, bonus,
-                                                    skip);
+                                                    skip, skd);
     check("router");
 }
 void group_experts(const int* ids, int T, int n_used, int n_exp, const uint8_t* base, size_t stride,
