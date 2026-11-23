@@ -76,6 +76,16 @@ long-prompt speed for residency: using Basalt's ranking, a single
 233 tok/s with 4,096. Keep 4,096 for long reads. These runs did not use
 Basalt's per-layer slot weighting or temporary expert-slot borrowing.
 
+**Tuning the expert kernels.** The grouped expert GEMM takes the tensor-core path on sm_70 (`MAYA_DS4_NO_TC=1` is 25 % slower: 390 against 520 tok/s). `DS4_IQ_TC_RM=2` (a block's rows 2 x 64 for sets whose busiest expert has more than 64 rows) reads the 6,220-token review at **537-540 tok/s** against 520 and leaves decode at 46.2. `MAYA_DS4_NO_LIGHT=1` (540), `DS4_IQ_RP=4`, `DS4_IQ_AHEAD=1`, `MAYA_DS4_PREFILL_FUSED=1`, `MAYA_DS4_IQ_PERSIST=1` and `MAYA_DS4_EXPERT_MMQ=1` measured 520-521, i.e. nothing; `HY4_GEMV_OLD=1` is 46.2 tok/s decode. DFly2 with the bias holds 40 % of the experts (8,487 slots) but decodes at 41.6-44.3 tok/s against MTP's 46.3, its drafts costing 8.6-11.3 ms a round.
+
+**What the two numbers stop at.** One x16 card alone reads the review at 241 tok/s and decodes at 22.0 (residency 4 %), so the layer split is worth 2.2x and 2.1x. The pair reads 6,220 tokens in 11.6 s, 5.1 TFLOP/s of the 59 TFLOP the sparse expert GEMMs need, and decodes 3.1 tokens a 61 ms window. The cards take turns by layer, so one is idle while the other computes. Going past this needs one of:
+- alternating layer assignment (layer i on card i % 2) with two micro-batches offset by one layer, both cards
+  computing at once. Alternating alone, without the second micro-batch, was built and measured: 4,264 slots
+  (20 %), 290 tok/s read and 35.6 tok/s decode, against 7,011 / 538 / 46.3 for the contiguous split, because two
+  GPUs that each hold every other layer cannot pack their expert sets as tightly and pay a peer copy per layer.
+  A pipeline would need per-GPU independent slot counts first;
+- expert parallel (each layer's experts split by card, dense weights replicated on both): 6 GB of dense + 10 GB of experts a card fits in 16 GB, every layer uses both cards, about 2x, but the members need the partial expert plan the TP path refuses today.
+
 **Borrow prompt scratch:** set `HY4_SCRATCH_BORROW=1` and
 `HY4_SCRATCH_BORROW_CHUNK=4096` with `--chunk 1024` on a layer split.
 Long prompts temporarily make room by lending expert slots; the engine
