@@ -239,6 +239,22 @@ change, with the existing parity tests as the gate):
 
 That is a re-architecture of the window, not a switch; the measured 1.5-2x is what it buys.
 
+What a 2-way split actually costs, measured on this rig (one V100, `mmvq_graph_bench` and the grouped
+expert timing, T 2-3, the pack's own widths; `0.5x` would be a perfect halving):
+
+| kernel class | shape | a part costs |
+| --- | --- | ---: |
+| dense output split, wide | Q6_K 4096 x 4096 -> 4096 x 2048 | 0.57x (T2), 0.53x (T3) |
+| dense output split, narrow | IQ4_NL 4096 x 1280 -> 4096 x 640 | 0.72x (T2), 0.70x (T3) |
+| dense K split, wide | Q6_K 2048 x 4096 -> 1024 x 4096 | 0.60x (T2), 0.60x (T3) |
+| dense K split, narrow | IQ4_NL 1280 x 4096 -> 640 x 4096 | 0.89x (T2), 0.86x (T3) |
+| grouped experts (16 groups x 3) | gate/up columns + down K | 0.59x |
+
+So the output splits are worth 1.4-1.9x and the narrow K splits almost nothing: at half width the
+kernel is latency-bound (IQ4_NL 640-wide reads at 147-160 GB/s against 253-284 at 1280). A composite over
+this window's mix lands nearer **1.4-1.6x** than 2x. Part 1 of the kernel work (gate/up column blocks and
+the down K range) is in `src/kernels/cuda/iq_kernels.cu` with its parity in `native_expert_parity`.
+
 `STRATA_HC_V100=1` (the opt-in K-split hyper-connection read, which reads the down matrix once for a
 window) used to hang this rig: 43 tokens at 1-4 tok/s, then `verify: timed out at layer 17 ... the GPU
 did not finish within 5 s (#267)`. The hang is the *fused* variant's grid-wide spin, which needs all 160
