@@ -239,6 +239,22 @@ change, with the existing parity tests as the gate):
 
 That is a re-architecture of the window, not a switch; the measured 1.5-2x is what it buys.
 
+How close the decode kernels are to this pair's memory ceiling (one V100-PCIE-16GB, 175 W, probes in
+`/tmp`; the dense matvecs from `mmvq_graph_bench` at 4096 x 4096, two columns):
+
+| read | GB/s |
+| --- | ---: |
+| card peak, 16-byte `float4` streaming read | **889** |
+| the same bytes as 8-byte loads, contiguous | 879 |
+| one 210-byte block a warp, 8 bytes a lane (the kernel's own layout) | 707-740 |
+| `native_mmvq_il`: Q6_K / Q5_K / Q4_K / IQ4_XS | 479 / 509 / 464 / 454 |
+
+So the dense class is byte-bound at about 480 GB/s whatever the format (values a second differ 1.46x across
+the four, GB/s do not), the 210-byte block layout costs 20 %, and the loop itself another 32 % against the
+pattern's 707-740. The arithmetic is not the limit (dp4a stays under 5 % of the card's integer rate at these
+widths), so the remaining ~1.45x is in how the loop keeps weight loads in flight beside the activation
+reads. `ncu` would name the stall, but GPU counters need admin here (`ERR_NVGPUCTRPERM`).
+
 What a 2-way split actually costs, measured on this rig (one V100, `mmvq_graph_bench` and the grouped
 expert timing, T 2-3, the pack's own widths; `0.5x` would be a perfect halving):
 
