@@ -210,6 +210,29 @@ with the per-layer handshakes (`wait_flag_ge` 11.2 %) they are most of the rest 
 window; sfnx measured 1.5-2x for that on this box) are the two remaining levers. Nothing in the
 configuration space moves decode further.
 
+How a per-layer split would be built here, in the order the pieces have to land (each is its own
+change, with the existing parity tests as the gate):
+
+1. **Weights: no new pack format.** GGUF and native tensors are row-major by output row, so an output
+   split (qkv, gate/up, router, the LM head) is a contiguous row range and a K split (down, the output
+   projections, the hyper-connection read) is a block range inside every row: the kernels already carry
+   the row stride (`L.gu_row`, `L.up_off`), so a half-width read is a pointer and a grid change, not a
+   repack.
+2. **Decode window:** both cards run every layer on the same rows. The output-split parts need no
+   exchange; the K-split parts need one per-row sum, about 4 MiB a window in each direction (2.3 rows x
+   4096 floats x 48 layers x 2 B), which fits the existing pinned split ring and can be issued one layer
+   ahead, in the captured graph.
+3. **State:** K/V and attention split by head (each card keeps its heads' pages, the pool layout already
+   pages by position), the GDN recurrence split by head/state, the draft layer on the card that holds
+   the head.
+4. **What has to be rebuilt:** the stage graph (`stage_of(l)` becomes two half-stages per layer), weight
+   loading into row ranges, the resident plan and the expert cache's (layer, expert) indexing into
+   (layer, expert, half), and the checkpoint/session state per card. The `gr_parity`,
+   `native_expert_parity`, `mmvq_*` and `qsa_*` tests already compare against the plain paths at every
+   width, which is how each step can be proved before the next.
+
+That is a re-architecture of the window, not a switch; the measured 1.5-2x is what it buys.
+
 `STRATA_HC_V100=1` (the opt-in K-split hyper-connection read, which reads the down matrix once for a
 window) used to hang this rig: 43 tokens at 1-4 tok/s, then `verify: timed out at layer 17 ... the GPU
 did not finish within 5 s (#267)`. The hang is the *fused* variant's grid-wide spin, which needs all 160
