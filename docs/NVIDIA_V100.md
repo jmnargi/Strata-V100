@@ -273,6 +273,22 @@ loads with two lanes on each 210-byte block instead of 32 lanes over a 256-byte 
 lane owns which values, hence the warp reduction's order, so it is a rounding-level change and has to be
 opt-in with its own tolerance gate rather than the bitwise `mmvq_il_parity`.
 
+The one alignment defect found, and what it is worth: a Q6_K block is 210 bytes (`Q6KBlock`, `alignof` 2), so every
+4-byte weight word is read by `load_int_b2` as **two u16 loads**. Copying the block to 212 bytes (4 x 53) makes every
+word one u32 load with the same bytes, so the result is bitwise. A prototype (`Q6KBlock4`, `Q6KTraits4`, 
+`native_mmvq_il_q6k_padded`, a padded mode in `mmvq_graph_bench`) measures, on this pair:
+
+| shape | raw | 212-byte copy |
+| --- | ---: | ---: |
+| 4096 x 4096, 2 columns | 28.7 us | 29.2 us (-1 %) |
+| 4096 x 4096, 3 columns | 36.1 us | **33.1 us (+8.3 %)** |
+| 4096 x 4096, 4 columns | 38.4 us | **35.3 us (+8.1 %)** |
+| 4096 x 2048, 3 columns | 19.6 us | **17.4 us (+11 %)** |
+
+Bitwise equal to the raw kernel at 2, 3 and 4 columns. It is not wired into the engine: Q6_K is 12 % of a decode
+window and this workload's windows sit at T ~2.3, so the whole-model gain would be under 1 % against a padded copy in
+the dense loader and a routing rule at every call site. The prototype sits on `perf/q6k-padded-loads-20261125`.
+
 What a 2-way split actually costs, measured on this rig (one V100, `mmvq_graph_bench` and the grouped
 expert timing, T 2-3, the pack's own widths; `0.5x` would be a perfect halving):
 
