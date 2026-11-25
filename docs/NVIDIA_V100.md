@@ -183,8 +183,14 @@ knob per arm, greedy, 3,000- and 20,000-token prompts, three fresh prompts a row
 
 Moving four layers to the x4 card buys decode and costs a third of the prompt read: on the daily
 agentic workload (30-50K-token prompts) the extra TTFT is larger than the decode gain, so 16 stays.
+The other direction is no better: splits 12 and 14 measured 73.4 / 78.1 and 72.5 / 76.2 tok/s decode
+(3K / 20K means of four, same prompts) against 74.6 / 83.1 at 16, and their prompt reads were equal. A
+smaller stage 0 is not a free lunch because the later stage's dense weights grow with its layer count:
+at split 10, stage 1 (layers 10-47) keeps only 1,693 expert slots (3.27 GiB) and the engine did not come
+up in time. 16 is the balance point on this pair, measured from both sides.
 Static residency costs 19 %: the adaptive tier is doing real work. More pool workers cost 11 % (the
-pool is not worker-limited). Neither PCIe mode moves decode outside noise. The shipped profile is at
+pool is not worker-limited). Neither PCIe mode moves decode outside noise. `--spec-min-p` 0.85 and 0.90
+are inside the spread at 3K and no better at 20K; 0.95 loses 22 % at 20K. The shipped profile is at
 its local optimum for this workload.
 
 Wider windows lose for the reason the cap exists: `--spec 6 --spec-min-p 0.30 --mtp-max-t 6` with
