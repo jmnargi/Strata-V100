@@ -325,7 +325,11 @@ What that is worth, measured with the pipeline off (12 requests an arm, 3K and 2
 
 So the pairing costs about 5 %: the device plan is real, but it cannot run beside the pipeline without pausing the
 adaptive tier's swaps inside a request (the tier's table is what the plan reads, and it must not move while the
-window's plan is on the device).
+window's plan is on the device). That trade was built and measured (`perf/device-plan-paused-adapt-20261125`, the
+tier's rounds moved to the request's end and the pipelined verifiers planning on the device instead of publishing):
+**14.5 against 13.3 ms a token over 12 requests an arm, i.e. 9 % slower**, and no residency mismatch was reported. The
+in-flight adaptation is worth more than the host round trip it would buy back, which is why every pipelined verifier
+publishes. Do not retry this pairing without a different way to keep the tier's table current.
 
 What a 2-way split actually costs, measured on this rig (one V100, `mmvq_graph_bench` and the grouped
 expert timing, T 2-3, the pack's own widths; `0.5x` would be a perfect halving):
