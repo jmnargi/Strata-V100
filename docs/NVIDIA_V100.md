@@ -163,6 +163,58 @@ run at 110-130 GB/s because IQ2_S / IQ3_XXS bit unpacking, not bandwidth, is the
 one place a kernel rewrite has a published 1.4-1.5x to claim
 ([1Cat-vLLM's paired IQ3_XXS reader](https://github.com/1CatAI/1Cat-vLLM/pull/966)).
 
+## The decode knob sweep found nothing, and where the 8-11 ms a token goes (2026-11-24)
+
+The daily profile (UD-IQ3_XXS, layer split 16, `--spec 4 --spec-min-p 0.70`, `STRATA_VERIFY_ECAP=16`,
+`STRATA_ROUTE_RESIDENT=1`, the adaptive tier on, `STRATA_SPLIT_RING=192`) measured against one changed
+knob per arm, greedy, 3,000- and 20,000-token prompts, three fresh prompts a row, engine timings from
+`/metrics`, one engine start an arm. `STRATA_VERIFY_PROFILE=1` was on for the arms, which costs about
+10 %: the same production arm reads **79.5 / 80.0** tok/s with it off.
+
+| arm | decode 3K / 20K | prompt 3K / 20K |
+| --- | ---: | ---: |
+| production (split 16) | 71.2 / 71.3 | 1,029 / 2,028 |
+| `--layer-split 22` | **81.1 / 75.2** | 721 / 1,455 |
+| `--layer-split 24` | 64.7 / 76.2 | 628 / 1,279 |
+| `--adapt-every 100000` (static residency) | 57.9 / 57.8 | 1,025 / 2,025 |
+| `--pool-workers 11` | 63.3 / 71.3 | 988 / 2,005 |
+| `--pcie-mode dma` | 71.9 / 72.2 | 1,038 / 2,010 |
+| `--pcie-mode direct` (same prompt, paired) | +1 to +2 % | equal |
+
+Moving four layers to the x4 card buys decode and costs a third of the prompt read: on the daily
+agentic workload (30-50K-token prompts) the extra TTFT is larger than the decode gain, so 16 stays.
+Static residency costs 19 %: the adaptive tier is doing real work. More pool workers cost 11 % (the
+pool is not worker-limited). Neither PCIe mode moves decode outside noise. The shipped profile is at
+its local optimum for this workload.
+
+Wider windows lose for the reason the cap exists: `--spec 6 --spec-min-p 0.30 --mtp-max-t 6` with
+`STRATA_VERIFY_ECAP=18` raised the window from T 2.3 to 4.8 and cut decode 14 % (28.2 -> 41.5 ms a
+window, 2.00 -> 2.56 tokens). Each draft row routes its own experts, so rows are not free at this
+hit rate; 0.70 is the right trim. `--pipeline-windows 2` is context-dependent: with
+`STRATA_PIPELINE_SWITCH` reading `pw=0` and `pw=2` on the same server, serial decode read
+80.0 against 72.4 tok/s at 3K, and the pipeline 78.6 against 70.2 at 20K - keep the pipeline for long
+conversations, which is the daily workload.
+
+The window's own budget (production, profiling on): 28-31 ms for 2.0-3.4 tokens; stage 0 9.4-10.5 ms
+and stage 1 19.0-21.9 ms, the host blocked on the GPU 12-14 ms of that, 1.2-1.8 ms of host work, 0.3-1.2 ms
+of CPU expert compute, and 10-22 adaptive swaps a window. The pipeline cancelled 56 of its 88
+speculative windows in a short-context request (32 on the path): the whole-window guess fails more
+often than it holds at T 2-3, which is why the overlap was about 15 %.
+
+Where the ceiling is: the dense projections (`native_q6_k_mmvq` 12.1 % of the window, `native_mmvq_il`
+6.5 %, `b6_mmvq_rows` 5.8 %) already read their weights at roughly 800 GB/s, at the card's DRAM peak.
+The IQ3_XXS expert dots (`native_gu_fused` 7.6 % + `native_down_lds` 5.3 %, at 110-130 GB/s) and the
+hyper-connection read (about 160 GB/s, derived from its 6.5 MB matrix a layer) run 5-7x under it, and
+with the per-layer handshakes (`wait_flag_ge` 11.2 %) they are most of the rest of the window. A
+1.4-1.5x kernel rewrite there and a per-layer split (the second card sits idle about two thirds of a
+window; sfnx measured 1.5-2x for that on this box) are the two remaining levers. Nothing in the
+configuration space moves decode further.
+
+`STRATA_HC_V100=1` (the opt-in one-launch, K-split hyper-connection read) does not survive a decode
+window on this rig: with the daily configuration it reached 43 tokens at 1-4 tok/s and the engine exited
+with `verify: timed out at layer 17 ... the GPU did not finish within 5 s (#267)`. The single-token
+read from the same kernel is fine. Do not enable it on a V100 until that hang is found.
+
 ## Suffix lookup index reset (2026-11-18)
 
 Suffix lookup now marks each index entry with the history it belongs to instead
