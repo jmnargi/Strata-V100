@@ -255,6 +255,24 @@ pattern's 707-740. The arithmetic is not the limit (dp4a stays under 5 % of the 
 widths), so the remaining ~1.45x is in how the loop keeps weight loads in flight beside the activation
 reads. `ncu` would name the stall, but GPU counters need admin here (`ERR_NVGPUCTRPERM`).
 
+With counters (driver 580, `RmProfilingAdminOnly: 1`, so `sudo ncu`), the picture is instruction
+throughput, not latency:
+
+| kernel | DRAM | SM | L1 | registers | occupancy (cap / achieved) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `native_mmvq_il` Q6_K 4096x4096, 2 columns | 49.2 % | **55.1 %** | 47.6 % | 64 | 50 % / 43 % |
+| `native_gu_fused<18>`, 16 groups, half width | 51.8 % | **54.2 %** | - | 79 | 37.5 % / 30.2 % |
+| `native_down_lds<20>`, 16 groups, half width | 59.8 % | 59.7 % | - | 48 | 62.5 % / 50.7 % |
+
+Occupancy is not the lever: forcing `native_gu_fused` from 3 to 4 blocks an SM (64 registers) changed it
+by 2 % (100.1-100.8 against 100.5-104.3 us at the 16-group shape) and to 5 blocks (51 registers) made it
+**17 % slower** from spills; forcing `native_mmvq_il` to 6 or 4 blocks an SM left it at 28.7 us exactly.
+The dense kernel runs at SM 55 % / DRAM 49 %, so it is near its instruction rate, not waiting on memory:
+halving the instructions a weight byte costs is what the remaining 1.45x needs, and that means 16-byte
+loads with two lanes on each 210-byte block instead of 32 lanes over a 256-byte window. That changes which
+lane owns which values, hence the warp reduction's order, so it is a rounding-level change and has to be
+opt-in with its own tolerance gate rather than the bitwise `mmvq_il_parity`.
+
 What a 2-way split actually costs, measured on this rig (one V100, `mmvq_graph_bench` and the grouped
 expert timing, T 2-3, the pack's own widths; `0.5x` would be a perfect halving):
 
