@@ -316,6 +316,17 @@ residency table may lag while windows are in flight. So the device plan is a no-
 `waitA` needs either the pipeline (10 % at 20K) or the adaptive tier (19 %) - unless adaptation is paused inside a
 request so residency is static while its windows run.
 
+What that is worth, measured with the pipeline off (12 requests an arm, 3K and 20K, `ms a token`):
+
+| `--pipeline-windows` | device plan | ms/token |
+| --- | --- | ---: |
+| 0 | off | 15.31 |
+| 0 | on | **14.53 (-5.1 %)** |
+
+So the pairing costs about 5 %: the device plan is real, but it cannot run beside the pipeline without pausing the
+adaptive tier's swaps inside a request (the tier's table is what the plan reads, and it must not move while the
+window's plan is on the device).
+
 What a 2-way split actually costs, measured on this rig (one V100, `mmvq_graph_bench` and the grouped
 expert timing, T 2-3, the pack's own widths; `0.5x` would be a perfect halving):
 
