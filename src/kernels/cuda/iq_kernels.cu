@@ -5583,6 +5583,12 @@ __global__ void __launch_bounds__(WG_THREADS, MT == 2 ? 2 : 1) gemm_iq_f16_group
                                   : (const uint8_t*) (wsrc == 1 ? tbl.gu[e] : tbl.dn[e]);
     const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
     const int wm = warp >> 2, wn = warp & 3;                     // rows wm*32, cols wn*32 of an m-tile
+#if __CUDA_ARCH__ == 700
+    // A warp owns two 16-row activation fragments. Only the last token
+    // tile can be partial; keep every thread in staging and at the barriers.
+    const int tail_rows = crow - (nmt - 1) * WG_BM;
+    const int tail_fragments = (max(0, tail_rows - wm * 32) + 15) / 16;
+#endif
     __shared__ uint64_t codebook[wg_codebook_words(TY)];
     auto* grid32 = reinterpret_cast<uint32_t*>(codebook);
     auto* grid8 = reinterpret_cast<int8_t*>(codebook);
@@ -5697,6 +5703,11 @@ __global__ void __launch_bounds__(WG_THREADS, MT == 2 ? 2 : 1) gemm_iq_f16_group
 #pragma unroll
         for (int t = 0; t < MT; ++t) {
             if (t >= nmt) break;
+#if __CUDA_ARCH__ == 700
+            const int fragments = t + 1 == nmt ? tail_fragments : 2;
+#else
+            constexpr int fragments = 2;
+#endif
 #pragma unroll 1
             for (int xh = 0; xh < WK / XK; ++xh, ++it) {
                 __syncthreads();                                 // the previous X tile is consumed (and W is written)
@@ -5707,19 +5718,23 @@ __global__ void __launch_bounds__(WG_THREADS, MT == 2 ? 2 : 1) gemm_iq_f16_group
                 }
                 __syncthreads();
                 if (it + 1 < total) load_x(it + 1);
+                if (fragments == 0) continue;
 #pragma unroll
                 for (int kk = 0; kk < XK; kk += 16) {
                     wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a[2];
                     wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::col_major> b[2];
 #pragma unroll
                     for (int f = 0; f < 2; ++f) {
-                        wmma::load_matrix_sync(a[f], sx + (wm * 32 + f * 16) * LDX + kk, LDX);
+                        if (f < fragments)
+                            wmma::load_matrix_sync(a[f], sx + (wm * 32 + f * 16) * LDX + kk, LDX);
                         wmma::load_matrix_sync(b[f], sw + (wn * 32 + f * 16) * LDW + xh * XK + kk, LDW);
                     }
 #pragma unroll
-                    for (int fa = 0; fa < 2; ++fa)
+                    for (int fa = 0; fa < 2; ++fa) {
+                        if (fa >= fragments) break;
 #pragma unroll
                         for (int fb = 0; fb < 2; ++fb) wmma::mma_sync(acc[t][fa][fb], a[fa], b[fb], acc[t][fa][fb]);
+                    }
                 }
             }
         }
