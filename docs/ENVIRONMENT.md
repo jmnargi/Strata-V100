@@ -267,7 +267,7 @@ absent variable as enabled. `engine default` means a value the code computes.
 | Variable | Default | Description |
 |---|---|---|
 | `STRATA_PCIE_AUTO_CANON` | off | canonicalize the PCIe window automatically (opt-in on Windows) |
-| `STRATA_PCIE_AUTO_SPLIT` | off | refine a layer split's shares from each stage's probed link (HIP) |
+| `STRATA_PCIE_AUTO_SPLIT` | off | refine a layer split's shares from each stage's probed link and the pool's measured speed (CUDA and HIP); a later stage's share is recomputed whenever a reading lands, even when the first stage's own share does not move |
 | `STRATA_PCIE_BALANCE` | off | take the expert count from measured CPU and GPU costs |
 | `STRATA_PCIE_FRAC_DEFAULT` | engine default (share form) | default PCIe share of the expert cache; `auto` refines it |
 | `STRATA_PCIE_MIN1` | off | give 1-2 misses per layer at least one slot on the PCIe lane |

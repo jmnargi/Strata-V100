@@ -11220,36 +11220,57 @@ int main(int argc, char** argv) {
             pcie_auto.link_gbps = o.pcie_probe_gbps;
             pcie_auto.blob_bytes = g.n_layers > 0 ? sum / (double) g.n_layers : 0.0;
         }
+        // Say which share the decode will use: a fixed one from the probe, or the one PcieAuto refines from the pool's
+        // measured speed (STRATA_PCIE_AUTO_SPLIT=1 on a layer split).  A silent fall-back to the fixed share is what
+        // made an A/B of the refinement read as "no change".
+        if (o.pcie_frac_auto || pcie_auto_split_ok()) {
+            if (pcie_auto.on)
+                std::fprintf(stderr, "strata serve: the PCIe share is refined from the CPU pool's speed (starts at %.2f, "
+                                     "link %.1f GB/s, %d stage%s)\n", o.pcie_frac, o.pcie_probe_gbps, n_stages,
+                             n_stages == 1 ? "" : "s");
+            else
+                std::fprintf(stderr, "strata serve: the PCIe share stays fixed at %.2f (pcie_frac_auto %s, %s, batch %d, "
+                                     "peer %d, stages %d)\n", o.pcie_frac, o.pcie_frac_auto ? "on" : "off",
+                             all_experts_resident ? "every expert is resident" : "experts are missed", o.batch,
+                             o.peer_device, n_stages);
+        }
         // PcieAuto after a decode window (the serial loop, and 0.1.44 the pipelined one at every verdict): the share, refined from
         // the CPU pool's speed.  A layer split: every later stage takes the share its own probed link gives against the same pool
-        // rate, on both parities' routing (the pipelined loop's second verifier).
+        // rate, on both parities' routing (the pipelined loop's second verifier).  The pool reading is refreshed on its own: the
+        // first stage's share usually lands within 0.025 of the probe and did not move, which used to leave every later stage
+        // on the probe's share forever.
         auto pcie_auto_step = [&](double& req_pcie_frac) {
             if (!pcie_auto.on) return;
             double tc_us = 0.0, rate = 0.0;
             const double nf = req_pcie_frac == o.pcie_frac
                                   ? pcie_auto.window(drive.d.ms_run, drive.d.multi_misses, o.pcie_frac, &tc_us, &rate)
                                   : (pcie_auto.mark(drive.d.ms_run, drive.d.multi_misses), -1.0);
-            if (nf < 0.0) return;
-            std::fprintf(stderr, "strata serve: PCIe share: the CPU pool takes %.0f us per missed expert (%.1f GB/s of expert bytes), "
-                                 "the link %.1f GB/s -> pcie_frac %.2f (was %.2f; --pcie-frac N fixes it, "
-                                 "STRATA_PCIE_FRAC_DEFAULT=old keeps the start-up rule)\n",
-                         tc_us, rate, pcie_auto.link_gbps, nf, o.pcie_frac);
-            o.pcie_frac = nf;
-            req_pcie_frac = nf;
+            if (!(rate > 0.0) && nf < 0.0) return;   // no fresh reading, and nothing to change on this stage
             const auto num_of = [](double f) { return std::max(0, std::min(256, (int) (f * 256.0 + 0.5))); };
-            drive.d.pcie_num = num_of(nf);
-            split_drive.pcie_num[0] = drive.d.pcie_num;
-            split_drive_b.pcie_num[0] = drive.d.pcie_num;
-            for (int st = 1; st < n_stages; ++st) {
-                GpuStage& gs = *stages[(size_t) st - 1];
-                if (!(gs.link_gbps > 0.0)) continue;
-                gs.pcie_frac = std::min(0.60, std::max(0.10, std::round(gs.link_gbps / (gs.link_gbps +
-                                   PcieAuto::kPoolFactor * rate) * 20.0) / 20.0));
-                split_drive.pcie_num[st] = num_of(gs.pcie_frac);
-                split_drive_b.pcie_num[st] = split_drive.pcie_num[st];
-                std::fprintf(stderr, "strata serve: PCIe share: stage %d (link %.1f GB/s) -> pcie_frac %.2f\n", st + 1,
-                             gs.link_gbps, gs.pcie_frac);
+            if (nf >= 0.0) {
+                std::fprintf(stderr, "strata serve: PCIe share: the CPU pool takes %.0f us per missed expert (%.1f GB/s of expert bytes), "
+                                     "the link %.1f GB/s -> pcie_frac %.2f (was %.2f; --pcie-frac N fixes it, "
+                                     "STRATA_PCIE_FRAC_DEFAULT=old keeps the start-up rule)\n",
+                             tc_us, rate, pcie_auto.link_gbps, nf, o.pcie_frac);
+                o.pcie_frac = nf;
+                req_pcie_frac = nf;
+                drive.d.pcie_num = num_of(nf);
+                split_drive.pcie_num[0] = drive.d.pcie_num;
+                split_drive_b.pcie_num[0] = drive.d.pcie_num;
             }
+            if (rate > 0.0)   // a later stage's own link against the same pool rate
+                for (int st = 1; st < n_stages; ++st) {
+                    GpuStage& gs = *stages[(size_t) st - 1];
+                    if (!(gs.link_gbps > 0.0)) continue;
+                    const double f = std::min(0.60, std::max(0.10, std::round(gs.link_gbps / (gs.link_gbps +
+                                                     PcieAuto::kPoolFactor * rate) * 20.0) / 20.0));
+                    if (std::fabs(f - gs.pcie_frac) < 0.025) continue;
+                    gs.pcie_frac = f;
+                    split_drive.pcie_num[st] = num_of(f);
+                    split_drive_b.pcie_num[st] = split_drive.pcie_num[st];
+                    std::fprintf(stderr, "strata serve: PCIe share: stage %d (link %.1f GB/s) -> pcie_frac %.2f\n", st + 1,
+                                 gs.link_gbps, f);
+                }
         };
         // #477 --expert-profile-save: what the adaptive tier learned, kept across restarts (opt-in; off: `heat` stays
         // empty and nothing below runs).  It needs the adaptive tier's counts and the residency table.
