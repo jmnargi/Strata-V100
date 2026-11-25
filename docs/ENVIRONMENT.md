@@ -482,7 +482,7 @@ absent variable as enabled. `engine default` means a value the code computes.
 | `STRATA_QFUSE_HC` | architecture table (gfx12) | only the hyper-connection read writes its consumer's image |
 | `STRATA_QFUSE_HC_LOCAL` | on | the 32-column up kernel under `STRATA_QFUSE_HC`; `0` restores the atomic-tail kernel |
 | `STRATA_HC_V100` | off | `experimental`, sm_70 only. `1` reads the hyper-connection down matrix once per window (K-split). Rounding changes can produce different greedy answers. |
-| `STRATA_HC_V100_FUSED` | on | under `STRATA_HC_V100=1`: down and up in one launch for windows of 6 tokens or fewer if all fused variants fit at once; `0` keeps two launches |
+| `STRATA_HC_V100_FUSED` | off | under `STRATA_HC_V100=1`: `1` runs down and up in one launch for windows of 6 tokens or fewer. It ends in a grid-wide spin that needs all 160 blocks resident, so it can hang a window when another stream runs on the same card (the MTP drafter, the forked shared expert); `0` keeps the two launches, which have no such barrier |
 | `STRATA_MMVQ_IL` | on | the interleaved mmvq kernels; `0` keeps native_mmvq's multi-column kernels |
 | `STRATA_MMVQ_IL_ROWS` | engine default | row table of the interleaved mmvq |
 | `STRATA_MMVQ_IL_120` | engine default | `0` gives a 12.0 card the shared table again |
