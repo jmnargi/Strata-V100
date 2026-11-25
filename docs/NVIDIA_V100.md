@@ -210,10 +210,14 @@ with the per-layer handshakes (`wait_flag_ge` 11.2 %) they are most of the rest 
 window; sfnx measured 1.5-2x for that on this box) are the two remaining levers. Nothing in the
 configuration space moves decode further.
 
-`STRATA_HC_V100=1` (the opt-in one-launch, K-split hyper-connection read) does not survive a decode
-window on this rig: with the daily configuration it reached 43 tokens at 1-4 tok/s and the engine exited
-with `verify: timed out at layer 17 ... the GPU did not finish within 5 s (#267)`. The single-token
-read from the same kernel is fine. Do not enable it on a V100 until that hang is found.
+`STRATA_HC_V100=1` (the opt-in K-split hyper-connection read, which reads the down matrix once for a
+window) used to hang this rig: 43 tokens at 1-4 tok/s, then `verify: timed out at layer 17 ... the GPU
+did not finish within 5 s (#267)`. The hang is the *fused* variant's grid-wide spin, which needs all 160
+blocks resident and breaks when the drafter or the forked shared expert shares the card; the fused read is
+now opt-in (`STRATA_HC_V100_FUSED=1`, off by default) and the two-launch read has no barrier. Measured with
+it on (15 requests an arm, 192 greedy tokens, 3K and 20K prompts): the HC down kernels 1.61 -> 1.22 ms a
+window and the window 32.4 -> 31.5 ms (ms/token 15.9 -> 15.1), the rounding difference at relative RMS 2e-7.
+The daily service enables it in `99-hc-v100.conf` with `STRATA_HC_V100_FUSED=0`.
 
 ## Suffix lookup index reset (2026-11-18)
 
