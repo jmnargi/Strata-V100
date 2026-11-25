@@ -4785,12 +4785,22 @@ template<> struct GridOf<18> { using T = uint32_t; static constexpr int N = 256;
 template<> struct GridOf<21> { using T = uint32_t; static constexpr int N = 512; __device__ static const T* src() { return iq3s_grid; } };
 template<> struct GridOf<23> { using T = uint32_t; static constexpr int N = 1; __device__ static const T* src() { return iq3s_grid; } };   // IQ4_XS: no grid
 
-// SG = 1 (mode 6): the signs without byte-SIMD ops, which gfx906 lacks (strata_vcmpne4 / strata_vsub4 unpack to
-// ~12 word ops each).  m = the sign nibble as 0x00/0xff bytes; (g ^ m) is g or -g-1 per byte, so
-// dp4a(g ^ m, u) - dp4a(m, u) = sum(s g u) exactly - the same integers, the same floats.
-__device__ __forceinline__ int nib_mask(uint32_t n) {
-    const uint32_t b = __umul24(n & 0xFu, 0x204081u) & 0x01010101u;
-    return (int) ((b << 8) - b);
+// SG = 1 avoids byte-SIMD ops. The grid bytes in IQ2_XXS, IQ2_S, IQ3_XXS
+// and IQ3_S are all in [1, 127], so adding 1 to a complemented byte cannot
+// carry into its neighbor. On Volta, apply the signs before the dot.
+__device__ __forceinline__ int dot_grid_signed_pair(int g0, int g1, int u0, int u1, uint32_t signs, int acc) {
+    const uint32_t b0 = __umul24(signs & 0xFu, 0x204081u) & 0x01010101u;
+    const uint32_t b1 = __umul24((signs >> 4) & 0xFu, 0x204081u) & 0x01010101u;
+    const uint32_t m0 = (b0 << 8) - b0, m1 = (b1 << 8) - b1;
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+    acc = ggml_cuda_dp4a((int) (((uint32_t) g0 ^ m0) + b0), u0, acc);
+    return ggml_cuda_dp4a((int) (((uint32_t) g1 ^ m1) + b1), u1, acc);
+#else
+    // (g ^ m) is g or -g-1 per byte, so subtract the dot with m.
+    acc = ggml_cuda_dp4a(g0 ^ (int) m0, u0, acc);
+    acc = ggml_cuda_dp4a(g1 ^ (int) m1, u1, acc);
+    return acc - ggml_cuda_dp4a((int) m1, u1, ggml_cuda_dp4a((int) m0, u0, 0));
+#endif
 }
 template<int TY, int SG> struct DotG;
 template<int SG> struct DotG<22, SG> { __device__ static __forceinline__ float f(const void* vbq, const block_q8_1* bq8_1, int kbx, int iqs,
@@ -4811,10 +4821,7 @@ template<int SG> struct DotG<22, SG> { __device__ static __forceinline__ float f
         const int u1 = get_int_b4(bq8_1[iqs / 2].qs, l0 + 1);
         int& acc = l0 < 4 ? sumi0 : sumi1;
         if constexpr (SG == 1) {
-            const int m0 = nib_mask(signs_packed_8[l0 / 2]), m1 = nib_mask(signs_packed_8[l0 / 2] >> 4);
-            acc = ggml_cuda_dp4a(grid_pos[0] ^ m0, u0, acc);
-            acc = ggml_cuda_dp4a(grid_pos[1] ^ m1, u1, acc);
-            acc -= ggml_cuda_dp4a(m1, u1, ggml_cuda_dp4a(m0, u0, 0));
+            acc = dot_grid_signed_pair(grid_pos[0], grid_pos[1], u0, u1, signs_packed_8[l0 / 2], acc);
         } else {
             const int signs0 = __vcmpne4(((signs_packed_8[l0 / 2] & 0x03) << 7) | ((signs_packed_8[l0 / 2] & 0x0C) << 21), 0x00000000);
             const int signs1 = __vcmpne4(((signs_packed_8[l0 / 2] & 0x30) << 3) | ((signs_packed_8[l0 / 2] & 0xC0) << 17), 0x00000000);
@@ -4842,10 +4849,7 @@ template<int SG> struct DotG<18, SG> { __device__ static __forceinline__ float f
         const int u0 = get_int_b4(bq8_1[iqs / 2].qs, l0 + 0);
         const int u1 = get_int_b4(bq8_1[iqs / 2].qs, l0 + 1);
         if constexpr (SG == 1) {
-            const int m0 = nib_mask(signs), m1 = nib_mask(signs >> 4);
-            sumi = ggml_cuda_dp4a(grid_pos.x ^ m0, u0, sumi);
-            sumi = ggml_cuda_dp4a(grid_pos.y ^ m1, u1, sumi);
-            sumi -= ggml_cuda_dp4a(m1, u1, ggml_cuda_dp4a(m0, u0, 0));
+            sumi = dot_grid_signed_pair(grid_pos.x, grid_pos.y, u0, u1, signs, sumi);
         } else {
             const int signs0 = __vcmpne4(signs & 0x08040201, 0);
             const int grid_l = __vsub4(grid_pos.x ^ signs0, signs0);
@@ -4876,10 +4880,7 @@ template<int SG> struct DotG<21, SG> { __device__ static __forceinline__ float f
         const int u0 = get_int_b4(bq8_1[iqs / 2].qs, l0 + 0);
         const int u1 = get_int_b4(bq8_1[iqs / 2].qs, l0 + 1);
         if constexpr (SG == 1) {
-            const int m0 = nib_mask(signs_packed_8[l0 / 2]), m1 = nib_mask(signs_packed_8[l0 / 2] >> 4);
-            sumi = ggml_cuda_dp4a(grid_pos.x ^ m0, u0, sumi);
-            sumi = ggml_cuda_dp4a(grid_pos.y ^ m1, u1, sumi);
-            sumi -= ggml_cuda_dp4a(m1, u1, ggml_cuda_dp4a(m0, u0, 0));
+            sumi = dot_grid_signed_pair(grid_pos.x, grid_pos.y, u0, u1, signs_packed_8[l0 / 2], sumi);
         } else {
             const int signs0 = __vcmpne4(((signs_packed_8[l0 / 2] & 0x03) << 7) | ((signs_packed_8[l0 / 2] & 0x0C) << 21), 0x00000000);
             const int signs1 = __vcmpne4(((signs_packed_8[l0 / 2] & 0x30) << 3) | ((signs_packed_8[l0 / 2] & 0xC0) << 17), 0x00000000);
@@ -4909,10 +4910,7 @@ template<int SG> struct DotG<16, SG> { __device__ static __forceinline__ float f
         const int u1 = get_int_b4(bq8_1[iqs / 2].qs, k0 + 1);
         if constexpr (SG == 1) {
             const uint32_t v = (aux32 >> (7 * k0 / 2)) & 0x7F, sg = v | ((__popc(v) & 1) << 7);
-            const int m0 = nib_mask(sg), m1 = nib_mask(sg >> 4);
-            sumi = ggml_cuda_dp4a((int) grid_pos.x ^ m0, u0, sumi);
-            sumi = ggml_cuda_dp4a((int) grid_pos.y ^ m1, u1, sumi);
-            sumi -= ggml_cuda_dp4a(m1, u1, ggml_cuda_dp4a(m0, u0, 0));
+            sumi = dot_grid_signed_pair((int) grid_pos.x, (int) grid_pos.y, u0, u1, sg, sumi);
         } else {
             const uint32_t signs = unpack_ksigns(aux32 >> (7 * k0 / 2));
             const int signs0 = __vcmpne4(signs & 0x08040201, 0);
