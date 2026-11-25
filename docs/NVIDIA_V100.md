@@ -292,6 +292,30 @@ window and this workload's windows sit at T ~2.3 (mostly 2 columns, where the co
 gain would be under 1 % against a padded copy in the dense loader and a routing rule at every call site. The
 prototype sits on `perf/q6k-padded-loads-20261125`.
 
+The per-launch cost model, measured with `mmvq_graph_bench` (Q6_K, 4096-wide, two columns, one launch a point):
+
+| matrix a launch covers | GB/s |
+| ---: | ---: |
+| 0.9 MB | 121 |
+| 1.7 MB | 219 |
+| 3.4 MB | 347 |
+| 6.9 MB | 421 |
+| 13.8 MB | 479 |
+| 27.5 MB | 516 |
+
+It fits `t = 4.1 us + bytes / 560 GB/s`: every launch carries about 4 us of fixed cost, and the marginal rate is
+560 GB/s. A decode window has ~473 launches (the table above), so the fixed cost is ~1.9 ms of its 22.3 ms, and a
+kernel under ~4 MB cannot beat ~350 GB/s however it is written. That is why the kernel-level work in this document
+(occupancy, hoisting, padded loads) moves so little, and why the remaining levers are structural: fuse the per-layer
+chains into fewer launches, or halve the work a launch covers by splitting each layer across the cards.
+
+The biggest single stall is also structural. `wait_flag_ge` is 2.5 ms of the window (87.7 launches), and
+`STRATA_VERIFY_DEVICE_PLAN` cannot remove it here: with `--pipeline-windows 2` every verifier is given
+`set_always_publish(true)` (generate.cpp, `if (pipe)`), and `device_plan_` requires `!always_publish_` - the device
+residency table may lag while windows are in flight. So the device plan is a no-op in the daily profile, and dropping
+`waitA` needs either the pipeline (10 % at 20K) or the adaptive tier (19 %) - unless adaptation is paused inside a
+request so residency is static while its windows run.
+
 What a 2-way split actually costs, measured on this rig (one V100, `mmvq_graph_bench` and the grouped
 expert timing, T 2-3, the pack's own widths; `0.5x` would be a perfect halving):
 
