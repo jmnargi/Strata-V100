@@ -316,6 +316,30 @@ learned on the traffic a box actually serves is what moves decode here (7.7 tok/
 bias). The engine takes about 30 s to load and warm up from cold, and the first request of a session pays the slot
 refill.
 
+**Cold and warm.** Decode and prefill both depend on what the page cache holds, and that is worth knowing before trusting a
+number. The 6,200-token review read in **32.2 s (192 tok/s) with a cold cache** and **18.35 s (338 tok/s) immediately
+after**, the same run twice: 11,000 experts streamed either way, but their copies into the bounce took 18.6 s the first
+time and 5.4 s the second. Cached pages went from 27 to 72 GiB. A 28.7K-token conversation read cold takes about 81 s;
+the same conversation's next turn reads its 90 new tokens in 1.7 s and decodes at **29.5 tok/s warm against 20.0 cold**
+(33.9 against 50 ms a token), with the CPU lane at 95 of 672 experts a token and the Engram at 0.1 ms.
+
+The Engram table looked like the thing to fix first: 64 random 96-byte rows a token, spread over ~7 GB of pages for one
+29K-token conversation, which is more than the page cache wants to keep beside 65 GiB of experts. It is not worth a cache
+of its own. Held in the process (`HY4_EG_CACHE_MB=512`, 16 sharded clock caches, measured then dropped) the Engram cost
+falls to 0.15 ms; without it, once the page cache has warmed, it is **0.11 ms** — the per-token cost swings from 7 ms to
+0.1 ms with the cache's state, and the warm state needs nothing. What actually pays is warming: the first prompt after a
+restart is the slow one.
+
+**64K context, not 32K.** On the same 28.7K-token conversation, `--max-context 65536` decoded at 27.18 tok/s and read the
+prompt in 80.0 s against 23.88 tok/s and 94.9 s at 32768 (one run each, then again at 16.3K: 38.1 against 33.2 tok/s with
+0.98 against 0.84 of drafts kept). The engine's own plan ends up friendlier to the expert pool at the larger limit, and a
+30-50K conversation needs the room anyway; the saved config uses 65536.
+
+**Against the box's daily service** (Qwen3.8-Flash-Next, UD-IQ3_XXS, `--layer-split 16`), same 26-29K-token text, greedy,
+192 tokens out: that engine reads the prompt at **2,012 tok/s and decodes at 101.6 tok/s** (127 of 156 drafts kept). Hy4
+here is 356 tok/s and 29.5 tok/s warm. So this is a second model to reach for, not a replacement for the daily one at
+long context; what it adds is the model, not speed.
+
 ## Two cards, one request: what the layer split costs (2026-11-18)
 
 [sfnx](https://github.com/johnfink8/sfnx) is a separate engine for this same model
