@@ -195,6 +195,127 @@ plain controls emitted identical tokens. DFly2 accepted 122 of 199 drafts
 and decoded at 22.4 tok/s against 21.0–22.5 tok/s without drafting; no
 consistent decode improvement is established.
 
+## Hy4-Flash on AngelSlim's own GGUFs, with the published DFly2 drafter (2026-11-26)
+
+AngelSlim ships five GGUF builds of `tencent/Hy4-flash` and a published DFly2 drafter in its own llama.cpp layout. The
+build that fits this pair is the 25%-pruned Q4_K_M one; its experts, the Engram table and the drafter's file are read in
+place by `strata-hy4` (no second copy).
+
+**Which build, and why.** Sizes are the files on the Hub; the quality columns are AngelSlim's own chart (BF16 minus the
+build, in points, on APEX-agents p@1 / PPTGenBench / DeepSWE v1.1 / AutomationBench):
+
+| build | disk | quality against BF16 |
+|---|---:|---|
+| `Q4_K_M_MTP_Q8_0` | 164.8 GB | -0.1 / -0.5 / -0.5 / -0.6 |
+| `Q4_K_M_MTP_Q8_0_Prune25` | 141.4 GB | not charted (25% of the experts pruned) |
+| `Q3_K` | 155.4 GB | -0.4 / -0.3 / +0.1 / -0.3 |
+| `SPARK-4Bit` / `-Fast` | 162.5 / 159.6 GB | not charted (NVIDIA's 4-bit format) |
+| `IQ2_AH` | 135.0 GB | -2.2 / -4.7 / -6.4 / -3.2 |
+
+This box has 139 GiB free on the NVMe; the other 232 GiB volume is a USB T7, whose random reads are far too slow for
+expert streaming. So the full `Q4_K_M_MTP_Q8_0` (153.5 GiB) and `Q3_K` (144.7 GiB) do not fit, `IQ2_AH` fits but pays the
+published quality loss, and `Prune25` (131.7 GiB) fits with the drafter and the projector. It is also the fastest of them
+here for a second reason: 25% fewer experts to hold in VRAM or stream. Its shard 1 is 65.2 GiB of routed experts (Q4_K,
+with the `down` projections of 19 layers at Q6_K) plus 7.4 GiB of dense weights; shard 2 is the 59 GiB Engram table.
+
+```sh
+hf download AngelSlim/Hy4-flash-GGUF --include "Hy4-flash-Q4_K_M_MTP_Q8_0_Prune25-0000*-of-00002.gguf" \
+   "hy4-flash_dfly_Q8_0.gguf" "mmproj-Hy4-flash-bf16.gguf" \
+   --local-dir /mnt/strata-models/models/hy4-flash-prune25
+.venv/bin/python tools/hy4/pack_gguf.py --model /mnt/strata-models/models/hy4-flash-prune25 \
+   --out /mnt/strata-models/models/hy4-flash-prune25/hy4-prune25
+```
+
+**The published drafter.** `hy4-flash_dfly_Q8_0.gguf` is `general.architecture hy_v4_next_dfly`, llama.cpp's tensor
+names, `block_size 8` (an anchor and seven mask rows), five dense MLA layers, each paired with target layer 25, 29, 33,
+37 or 41, reading that layer's latent cache at the positions its indexer picked for the row before the anchor. The
+engine reads this layout as well as the earlier HF-named one (`hy_v4_flash_dfly`, block 6): `alias_next` maps the
+names, `attn_k_b` is transposed and requantized into the one `kv_b_proj` row order the kernels read, `attn_v_b` rows
+copy straight in, and the block size comes from the file rather than a constant. Its weights are 0.86 GB on the head
+GPU.
+
+The draft loop is the one the paper describes: gated fusion of the anchor's embedding with the target's last-layer
+hidden state, the block pass over the target's own KV at the shared selection, then the sequential hidden correction,
+one head projection per slot. Drafts are greedy and the target's own forward decides every row, so drafting is lossless
+whatever the drafter does.
+
+**Two things that made it pay.** First, the drafts read their own copy of the output head, rounded to Q4_K as the model
+loads (`draft_head_q4k`, from any head type the row reader knows), not the model's full-precision head: a slot's head
+projection was the largest read in a draft round. `HY4_DRAFT_HEAD=full` puts the model's head back for comparison.
+Second, `--draft-floor` now ends the block at the first slot whose confidence is below it, so the slots the verify window
+would drop are not projected at all.
+
+`--dfly` pairs with the expert placement of the section above: a two-row verify window routes more experts than a single
+row, so `--route-resident` and `--profile` matter more with drafting than without it.
+
+**Measured.** Two V100-PCIE-16GB, Ryzen 5 3600, 94 GiB of RAM, the model on the NVMe; 32K context, `--kv q8`,
+`--chunk 4096`, `--main-gpu 1` (the drafter and the head on the card that holds layers 21-41, so no peer copies), the
+expert profile learned from 128 prose tokens, `--route-resident 0.30`, `--dfly` with `--draft 1 --draft-floor 0`, through
+the engine's serve protocol (the path `serve/server.py` uses). Decode is the engine's own `DONE` window; medians of two
+or three runs.
+
+| workload | prompt tokens | decode, no drafting | decode, DFly2 | kept of 1 draft |
+|---|---:|---:|---:|---:|
+| prose explanation, 192 out | 88 | 28.86 tok/s | **37.40 tok/s** | 0.75 |
+| Python code, 192 out | 90 | 24.68 tok/s | 28.82 tok/s | 0.88 |
+| source review, 192 out | 6,200 | 28.09 tok/s | 33.0-34.6 tok/s | 0.74-0.80 |
+| source review, 128 out | 16,300 | - | 33.2 tok/s (32K) / 38.1 (64K) | 0.84 / 0.98 |
+
+Prefill: the 6,200-token review reads at **340 tok/s** with `--chunk 4096` against 207-258 at `--chunk 1024` (the small
+chunk holds more expert slots, so decode is 4% better and the read 40% worse); the 16,300-token one at 345-373 tok/s.
+`HY4_SCRATCH_BORROW=1 HY4_SCRATCH_BORROW_CHUNK=4096` with `--chunk 1024` reads as fast as 4096 but its decode falls to
+24.0 tok/s while the borrowed slots refill, so it is not the better trade here.
+
+What each knob did, on the prose prompt, 192 tokens out (interleaved arms, one run each unless stated):
+
+| change | decode |
+|---|---:|
+| no expert profile (`--profile` unset) | 7.7 tok/s |
+| profile, `--route-resident 0` | 12.6 tok/s |
+| profile, `--route-resident 0.15` | 24.7 tok/s |
+| profile, `--route-resident 0.30` | 35.3-37.4 tok/s |
+| `--route-resident 0.15`, `--draft 3` | 19.5 tok/s |
+| `--route-resident 0.30`, `--draft 3` | 29.8-32.6 tok/s |
+| `--route-resident 0.30`, `--draft 5 --draft-floor 0.5` | 37.3 tok/s |
+| `--kv f16` instead of q8 (3 runs each) | 34.28 against 37.40 tok/s |
+| `--cpu-threads 11` (SMT) instead of 6 | 15.7 against 19.4 tok/s |
+
+**What the drafter costs and what it accepts.** A round is 4.2 ms of drafting against 43.3 ms of verifying two rows, and
+the first draft is kept 75% of the time on prose and 84% on code. The second slot is kept about 19% of the time, the
+third about 10%, which is why one draft is the setting here: every extra row of the verify window costs 10-20 ms (the
+window routes more experts than one row) and buys 0.2-0.6 of a token. The paper's accepted length on Hy4-flash (3.96 over
+five slots) needs a faster verify row than this pair has, not a better drafter alone: the published drafter file is the
+same one AngelSlim's own Strata numbers use, and the trend there (code 47.6 against 37.5 tok/s off) matches ours.
+
+`--route-resident 0.30` adds 0.3 of probability to an expert that has a VRAM slot, so it changes which experts compute
+and therefore the output. The four smoke prompts (arithmetic, a capital, a Python function, a tool call) stayed correct at
+0.30. Loading the drafter takes about 2 GB of VRAM from the expert pool (4,264 slots fall to 4,059), which changes the
+resident set and so, at the same bias, one of those four answers: the tool call came out as
+`<tool_call>get_weather</tool_call>` with the drafter and `<tool>get_weather({"city": "Paris"})</tool>` without it. Both
+are the model's own greedy output for their routing; drafting itself never changes a token, because the target's forward
+decides every row.
+
+**Limit.** 4,059 of the model's 15,744 routed experts fit in VRAM (26%); the rest run on six CPU threads from the file,
+and that is what caps decode: at `--route-resident 0` the lane holds 68% of the experts and decode is 7.7 tok/s, and every
+step of the bias moves traffic to the card. Prefill pays the same way. Nothing here was measured on a model whose experts
+all fit.
+
+**Serving it.** The tuned configuration is `/mnt/strata-models/models/hy4-flash-prune25/hy4-service.json` (it points at
+the pack, the drafter, and the expert profile at `/mnt/strata-models/data/hy4-routes-prose.bin`); it is the same JSON
+shape as `strata-v100-pipeline.json`, so serving it is a swap of the config `serve/server.py` is started with, on its own
+port, with the Qwen service stopped (the two do not fit in VRAM together):
+
+```sh
+systemctl --user stop strata-v100.service
+.venv/bin/python -m serve.server --engine strata \
+  --config /mnt/strata-models/models/hy4-flash-prune25/hy4-service.json --port 8091
+```
+
+The profile file is per workload: `--profile-out` on the same path keeps learning from every request, and a profile
+learned on the traffic a box actually serves is what moves decode here (7.7 tok/s without one, 35+ with one and the
+bias). The engine takes about 30 s to load and warm up from cold, and the first request of a session pays the slot
+refill.
+
 ## Two cards, one request: what the layer split costs (2026-11-18)
 
 [sfnx](https://github.com/johnfink8/sfnx) is a separate engine for this same model

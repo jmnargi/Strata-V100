@@ -1,10 +1,13 @@
-// src/hy4/hy4_dfly.hpp - Hy4-flash's DFly2 drafter: its own GGUF (general.architecture hy_v4_flash_dfly, read directly,
-// its Q8_0 projections and F32 vectors used as stored), the target rows it reads (each decode window's last-layer hidden
-// state after the output norm, and each sparse layer's indexer picks), and the block pass over the target's own KV cache.
+// src/hy4/hy4_dfly.hpp - Hy4-flash's DFly2 drafter: its own GGUF, read directly (its Q8_0 projections and F32 vectors
+// used as stored), the target rows it reads (each decode window's last-layer hidden state after the output norm, and each
+// sparse layer's indexer picks), and the block pass over the target's own KV cache. Two layouts of the same file are read:
+// the HF-named build (general.architecture hy_v4_flash_dfly; Maya-S's drafter) and AngelSlim's llama.cpp build
+// (hy_v4_next_dfly, hy4-flash_dfly_Q8_0.gguf: the published drafter for these GGUFs, its kv_b_proj split in two).
 //
-// A block is the anchor token (the last pick, whose position the target has not run) and n mask tokens. The anchor's
-// embedding is fused with the target's hidden state at the row before it (gated fusion); five dense MLA layers run over
-// the block's rows, each attending the rows its target layer selected for the source row (index share) in that layer's
+// A block is the anchor token (the last pick, whose position the target has not run) and n mask tokens (n up to the
+// drafter's block_size - 1: five in the HF-named build, seven in AngelSlim's). The anchor's
+// embedding is fused with the target's hidden state at the row before it (gated fusion); the drafter's dense MLA layers run
+// over the block's rows, each attending the rows its target layer selected for the source row (index share) in that layer's
 // latent cache (KV share) and the block's own rows before it; each mask row then passes the sequential hidden correction
 // with the embedding of the token drafted before it, and the target's output head gives the draft. The drafter keeps no
 // cache and no indexer: a rejected block leaves nothing behind. Drafts are greedy; the target's own forward decides every
@@ -44,8 +47,7 @@
 
 namespace hy4 {
 
-constexpr int kDflyBlock = 6;      // rows of a full block: the anchor and five masks
-constexpr int kDflyDrafts = kDflyBlock - 1;
+constexpr int kDflyMaxBlock = 8;   // the most rows a block may have: the anchor and up to seven masks (the GGUF's block_size)
 constexpr int kDflyTapRows = 16;   // rows of a window the tap keeps
 constexpr int kDflyMaxLayers = 8;
 constexpr int kDflyNope = 192, kDflyRank = 512, kDflyV = 256, kDflyRope = 64;
@@ -56,6 +58,7 @@ constexpr int kDflyKvbHead = kDflyNope + kDflyV;       // 448 rows of one head i
 struct DflyDims {
     int layers = 0, E = 0, q_lora = 0, heads = 0, ffn = 0, hc_ffn = 0;
     int vocab = 0, mask_id = 0;
+    int block = 6;                    // rows of a full block, the anchor included (the GGUF's block_size; drafts = block - 1)
     int topk = 2048;                  // the target's selection width (target_index_topk)
     float rms_eps = 1e-5f, rope_base = 1e4f;
     std::vector<int> kv_layers;       // the target layer whose cache each draft layer reads
@@ -145,8 +148,9 @@ public:
     bool draft_begin(int32_t anchor, int64_t pos, int n, const DflyCache* caches, cudaStream_t s, int64_t rope_pos,
                      std::string& err);
     /// Runs the heads over the block begin() made, in order, each with the token before it: up to max_n drafts and their
-    /// acceptance estimates.
-    bool draft_end(int32_t* ids, float* conf, int max_n, int& n, cudaStream_t s, std::string& err);
+    /// acceptance estimates. `floor` > 0 ends the block before a slot whose estimate is below it (the caller drops that
+    /// slot and every later one anyway, so its head's projection is not worth running).
+    bool draft_end(int32_t* ids, float* conf, int max_n, int& n, float floor, cudaStream_t s, std::string& err);
     bool has_pending() const { return pending_ > 0; }
 
 private:

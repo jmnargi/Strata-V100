@@ -825,27 +825,25 @@ struct Model::Impl {
     // The drafts' copy of the output head in Q4_K (ggml's own rounding, the BF16 rows a thread a share): a quarter of the
     // BF16 head's bytes for the drafts' top token - the drafts are checked by the model's own head, so only how often
     // they hold depends on it (HY4_DRAFT_HEAD=q8: Q8_0, half the bytes)
-    bool draft_head_q4k(Gpu& hg, std::string& err) {
+    bool draft_head_q4k(Gpu& hg, bool& built, std::string& err) {
         const Tensor* t = need("output.weight", err);
+        built = false;
         if (!t) return false;
         const int k = g.n_embd;
         const size_t rows = (size_t) t->n(1), rb = iq::row_bytes(iq::kQ4_K, k);
-        if (k % 256 || rb == 0) {
-            err = "the drafts' head: rows of " + std::to_string(k) + " are not whole Q4_K blocks";
-            return false;
-        }
+        const int st = type_id(t->type);
+        const bool readable = st == 0 || st == 1 || st == 8 || st == 12 || st == 13 || st == 14 || st == 30;  // (tok_row's)
+        if (k % 256 || rb == 0 || !readable || t->bytes % rows) return true;   // (no draft head: the full one stands)
         std::vector<uint8_t> q(rows * rb);
-        const uint16_t* src = (const uint16_t*) pk.data(*t);
+        const uint8_t* src = pk.data(*t);
+        const size_t srow = t->bytes / rows;
         const int nt = (int) std::max(1u, std::min(32u, std::thread::hardware_concurrency()));
         std::vector<std::thread> th;
         for (int w = 0; w < nt; ++w)
             th.emplace_back([&, w] {
                 std::vector<float> x((size_t) k);
                 for (size_t r = (size_t) w; r < rows; r += (size_t) nt) {
-                    for (int i = 0; i < k; ++i) {
-                        const uint32_t b = (uint32_t) src[r * (size_t) k + (size_t) i] << 16;
-                        std::memcpy(&x[(size_t) i], &b, 4);
-                    }
+                    tok_row(st, src + r * srow, k, x.data());
                     quantize_row_q4_K_ref(x.data(), q.data() + r * rb, k);
                 }
             });
@@ -859,6 +857,7 @@ struct Model::Impl {
         out_draft.n = (int) rows;
         out_draft.batch = 1;
         out_draft.ld = rb;
+        built = true;
         return true;
     }
     // the current GPU's memory bandwidth: a copy of 256 MB within it, timed (GB/s; 0 and err: it failed)
@@ -2119,21 +2118,26 @@ struct Model::Impl {
             !f32(hg, "output_hc_base.weight", hh_base, err, g.hc) || !f32(hg, "output_hc_scale.weight", hh_scale, err, 1) ||
             !hg.alloc(hg.logits, (size_t) W * g.n_vocab, err) || !hg.alloc(hring, (size_t) ring * g.n_embd, err))
             return false;
+        if ((o.mtp && g.n_mtp > 0) || !o.dfly.empty()) {   // the drafts' own copy of the head (see draft_head_q4k)
+            const char* dh = std::getenv("HY4_DRAFT_HEAD");
+            bool ok = true, built = false;
+            if (!(dh && std::string(dh) == "q8"))
+                ok = draft_head_q4k(hg, built, err);              // (Q4_K: a quarter of the bytes for the drafts)
+            else if (out.type == kBF16) {
+                t_round_bf16 = true;
+                ok = built = mat(hg, "output.weight", out_draft, err, g.n_embd, g.n_vocab);
+                t_round_bf16 = false;
+            }
+            if (!ok) return false;
+            if (!built) out_draft = out;
+        }
         if (o.mtp && g.n_mtp > 0) {   // (after the head: its BF16 rounding is the MTP block's alone)
             const double tm = now_s();
             M.il = g.n_layer;
             M.gpu = head_gpu;
             bool ok = load_layer(M, err);
-            const char* dh = std::getenv("HY4_DRAFT_HEAD");
-            if (ok && out.type == kBF16 && !(dh && std::string(dh) == "q8")) {
-                ok = draft_head_q4k(hg, err);
-            } else if (ok && out.type == kBF16) {
-                t_round_bf16 = true;
-                ok = mat(hg, "output.weight", out_draft, err, g.n_embd, g.n_vocab);
-            }
             t_round_bf16 = false;
             if (!ok) return false;
-            if (!out_draft) out_draft = out;
             const size_t E = (size_t) g.n_embd, T = (size_t) Tc;
             if (!hg.alloc(mtp_in, T * 2 * E, err) || !hg.alloc(mtp_cur, T * E, err) || !hg.alloc(mtp_hin, T * E, err) ||
                 !hg.alloc(mtp_out, T * E, err) || !hg.alloc(mtp_top, 2, err))
@@ -2302,9 +2306,12 @@ struct Model::Impl {
         if (!o.dfly.empty()) {
             Gpu& hg = G[(size_t) head_gpu];
             dfly_target.kv_q8 = kv_q8;
+            const char* dh0 = std::getenv("HY4_DRAFT_HEAD");   // (full: the drafts read the model's own head, to measure)
+            const bool full_head = dh0 && std::string(dh0) == "full";
             if (!dfly.load(o.dfly, dfly_target, g.ix_top_k + g.ix_kpool, o.max_ctx, hg.dev,
-                           [this](const float* h, float* logits, cudaStream_t) {
-                               return mm(G[(size_t) head_gpu], out, h, g.n_embd, 1, logits, g.n_vocab);
+                           [this, full_head](const float* h, float* logits, cudaStream_t) {
+                               return mm(G[(size_t) head_gpu], full_head ? out : out_draft, h, g.n_embd, 1, logits,
+                                         g.n_vocab);
                            },
                            [this](int32_t token, float* row) {
                                if (token < 0 || token >= g.n_vocab) return false;
@@ -3324,12 +3331,12 @@ struct Model::Impl {
         conf.clear();
         if (dfly.on() && n > 0) {
             Gpu& hg = G[(size_t) head_gpu];
-            n = std::min(n, kDflyDrafts);
+            n = std::min(n, std::max(1, dfly.dims().block - 1));
             if (!dfly.draft_begin(tok, pos, n, dfly_caches.data(), hg.s, -1, err)) return false;
             d.resize(n);
             conf.resize(n);
             int made = 0;
-            if (!dfly.draft_end(d.data(), conf.data(), n, made, hg.s, err)) return false;
+            if (!dfly.draft_end(d.data(), conf.data(), n, made, floor, hg.s, err)) return false;
             d.resize(made);
             conf.resize(made);
             return true;

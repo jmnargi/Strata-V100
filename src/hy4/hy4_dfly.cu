@@ -24,6 +24,10 @@
 #include <unordered_map>
 #include <vector>
 
+// (ggml-quants, linked into the engine: the split kv_b's transposed half is dequantized and requantized row by row)
+extern "C" void dequantize_row_q8_0(const void* x, float* y, int64_t k);
+extern "C" void quantize_row_q8_0_ref(const float* x, void* y, int64_t k);
+
 namespace hy4 {
 
 namespace iq = strata::ds4::gguf::iq;
@@ -163,8 +167,11 @@ enum Kind { F32V, Q8M };
 
 struct Spec {
     std::string name;
+    std::string file;   // the file's tensor (the canonical name unless the drafter is AngelSlim's llama.cpp build)
+    std::string alt;    // the second tensor of a split kv_b (AngelSlim stores attn_k_b and attn_v_b apart)
     uint64_t a = 0, b = 0;   // Q8M: a = k (inputs), b = n (outputs); F32V: a = values
     Kind kind = F32V;
+    bool split_kv = false;
     uint64_t elems() const { return kind == Q8M ? a * b : a; }
     uint64_t bytes() const { return kind == Q8M ? elems() / 32 * 34 : elems() * 4; }
 };
@@ -232,8 +239,70 @@ std::vector<Spec> specs(const DflyDims& d) {
 
 uint64_t drb(bool q8) { return q8 ? k::kv_q8_row_bytes(kDflyRank, kDflyRope) : (uint64_t) kDflyRowWidth * 2; }
 
+// AngelSlim's own drafter GGUF (general.architecture hy_v4_next_dfly, llama.cpp's tensor names) carries the same weights
+// as the HF-named build this file was written for, under other names, with kv_b_proj split into a transposed attn_k_b and
+// an attn_v_b. `alias_next` maps a canonical name to the file's (`alt` the split's second tensor); false when it has none.
+bool alias_next(const std::string& canon, std::string& file, std::string& alt, bool& split) {
+    static const std::pair<const char*, const char*> top[] = {
+        {"final_norm.weight", "output_norm.weight"},
+        {"mtp_fusion.eh_proj.weight", "dfly_fusion_eh.weight"},
+        {"mtp_fusion.enorm.weight", "dfly_fusion_enorm.weight"},
+        {"mtp_fusion.hnorm.weight", "dfly_fusion_hnorm.weight"},
+        {"mtp_fusion.gate", "dfly_fusion_gate.weight"},
+        {"hidden_correction.gate_proj.weight", "dfly_correction_gate.weight"},
+        {"hidden_correction.up_proj.weight", "dfly_correction_up.weight"},
+        {"hidden_correction.down_proj.weight", "dfly_correction_down.weight"},
+        {"hidden_correction.hidden_norm.weight", "dfly_correction_hnorm.weight"},
+        {"hidden_correction.embed_norm.weight", "dfly_correction_enorm.weight"},
+        {"confidence_head.proj.weight", "dfly_confidence.weight"},
+        {"confidence_head.proj.bias", "dfly_confidence.bias"},
+    };
+    static const std::pair<const char*, const char*> lay[] = {
+        {"input_layernorm.weight", "attn_norm.weight"},
+        {"post_attention_layernorm.weight", "ffn_norm.weight"},
+        {"mlp.gate_proj.weight", "ffn_gate.weight"},
+        {"mlp.up_proj.weight", "ffn_up.weight"},
+        {"mlp.down_proj.weight", "ffn_down.weight"},
+        {"self_attn.q_a_proj.weight", "attn_q_a.weight"},
+        {"self_attn.q_a_layernorm.weight", "attn_q_a_norm.weight"},
+        {"self_attn.q_b_proj.weight", "attn_q_b.weight"},
+        {"self_attn.kv_a_proj_with_mqa.weight", "attn_kv_a_mqa.weight"},
+        {"self_attn.kv_a_layernorm.weight", "attn_kv_a_norm.weight"},
+        {"self_attn.kv_b_proj.weight", "attn_k_b.weight"},
+        {"self_attn.linear_gate.weight", "attn_gate.weight"},
+        {"self_attn.o_proj.weight", "attn_output.weight"},
+        {"self_attn.post_proj_norm.weight", "post_attention_norm.weight"},
+        {"self_attn.learnable_sink_param", "attn_sinks.weight"},
+    };
+    split = false;
+    const std::string pre = "model.dfly_layers.";
+    if (canon.compare(0, pre.size(), pre) != 0) return false;
+    const std::string rest = canon.substr(pre.size());
+    for (const auto& e : top)
+        if (rest == e.first) {
+            file = e.second;
+            return true;
+        }
+    const size_t dot = rest.find('.');
+    if (dot == std::string::npos || dot == 0) return false;
+    const std::string idx = rest.substr(0, dot);
+    for (char ch : idx)
+        if (ch < '0' || ch > '9') return false;
+    const std::string part = rest.substr(dot + 1);
+    for (const auto& e : lay)
+        if (part == e.first) {
+            file = "blk." + idx + "." + e.second;
+            if (part == "self_attn.kv_b_proj.weight") {
+                split = true;
+                alt = "blk." + idx + ".attn_v_b.weight";
+            }
+            return true;
+        }
+    return false;
+}
+
 uint64_t scratch_bytes_for(const DflyDims& d, bool kv_q8, int sel_cap) {
-    const uint64_t R = kDflyBlock, E = (uint64_t) d.E, H = (uint64_t) d.heads, F = (uint64_t) d.ffn,
+    const uint64_t R = (uint64_t) d.block, E = (uint64_t) d.E, H = (uint64_t) d.heads, F = (uint64_t) d.ffn,
                    C = (uint64_t) d.hc_ffn, Q = (uint64_t) d.q_lora;
     const uint64_t rb = drb(kv_q8);
     const uint64_t maxk = std::max({2 * E, Q, F, C, (uint64_t) H * kDflyV});
@@ -255,32 +324,51 @@ uint64_t scratch_bytes_for(const DflyDims& d, bool kv_q8, int sel_cap) {
 bool parse(const std::string& path, const DflyTarget& target, DflyDims& d, Gguf& g, std::vector<Spec>& sp, std::string& err) {
     if (!read_gguf(path, g, err)) return false;
     const std::string arch = g.strs.count("general.architecture") ? g.strs["general.architecture"] : "";
-    if (arch != "hy_v4_flash_dfly") return fail(err, path + ": architecture " + arch + ", not hy_v4_flash_dfly");
+    // hy_v4_flash_dfly: the HF-named build this file was written for (Maya-S's drafter). hy_v4_next_dfly: AngelSlim's own
+    // llama.cpp build (hy4-flash_dfly_Q8_0.gguf), whose tensors alias_next maps.
+    const bool next = arch == "hy_v4_next_dfly";
+    if (!next && arch != "hy_v4_flash_dfly")
+        return fail(err, path + ": architecture " + arch + ", not hy_v4_flash_dfly or hy_v4_next_dfly");
+    const std::string ap = arch + ".";
     auto gi = [&](const char* k, int64_t dflt) {
-        auto it = g.ints.find("hy_v4_flash_dfly." + std::string(k));
+        auto it = g.ints.find(ap + std::string(k));
         return it == g.ints.end() ? dflt : it->second;
     };
     auto gs = [&](const char* k) -> std::string {
-        auto it = g.strs.find("hy_v4_flash_dfly." + std::string(k));
+        auto it = g.strs.find(ap + std::string(k));
         return it == g.strs.end() ? std::string() : it->second;
     };
     auto ga = [&](const char* k) -> std::vector<int64_t> {
-        auto it = g.arrays.find("hy_v4_flash_dfly." + std::string(k));
+        auto it = g.arrays.find(ap + std::string(k));
         return it == g.arrays.end() ? std::vector<int64_t>() : it->second;
     };
     if (gs("mtp_fusion") != "slot0") return fail(err, path + ": dfly mtp_fusion is not slot0");
     if (gi("hidden_correction", 1) != 1) return fail(err, path + ": dfly without hidden correction is not run");
     d.layers = (int) gi("block_count", 0);
-    d.mask_id = (int) gi("mask_token_id", -1);
-    d.topk = (int) gi("target_index_topk", 2048);
+    {
+        auto it = g.ints.find(next ? "tokenizer.ggml.mask_token_id" : ap + "mask_token_id");
+        d.mask_id = it == g.ints.end() ? -1 : (int) it->second;
+    }
+    d.topk = (int) gi(next ? "target_index_top_k" : "target_index_topk", 2048);
+    d.block = (int) gi("block_size", 6);
+    if (d.block < 2 || d.block > kDflyMaxBlock)
+        return fail(err, path + ": block_size " + std::to_string(d.block) + ", not 2.." + std::to_string(kDflyMaxBlock));
     for (int64_t x : ga("target_kv_layers")) d.kv_layers.push_back((int) x);
     for (int64_t x : ga("target_index_layers")) d.idx_layers.push_back((int) x);
     if (d.layers < 1 || d.layers > kDflyMaxLayers || (int) d.kv_layers.size() != d.layers ||
         (int) d.idx_layers.size() != d.layers || d.mask_id < 0)
         return fail(err, path + ": block_count, target_kv_layers, target_index_layers or mask_token_id are missing or disagree");
+    auto fname = [&](const std::string& n) -> std::string {
+        if (!next) return n;
+        std::string f, a;
+        bool split = false;
+        return alias_next(n, f, a, split) ? f : std::string();
+    };
     auto mj = [&](const std::string& n, TensorRef& t) -> bool {
-        auto it = g.tensors.find(n);
-        if (it == g.tensors.end()) return fail(err, "dfly: no tensor " + n);
+        const std::string f = fname(n);
+        if (f.empty()) return fail(err, "dfly: " + n + " has no name in this file's layout");
+        auto it = g.tensors.find(f);
+        if (it == g.tensors.end()) return fail(err, "dfly: no tensor " + f);
         t = it->second;
         return true;
     };
@@ -319,18 +407,46 @@ bool parse(const std::string& path, const DflyTarget& target, DflyDims& d, Gguf&
     }
     d.vocab = target.n_vocab;
     d.rms_eps = target.rms_eps;
-    d.rope_base = target.rope_base;
+    // the rotary base: the drafter's own key when it has one (AngelSlim's build: 1e7), else the target's
+    {
+        auto it = g.floats.find(ap + "rope.freq_base");
+        d.rope_base = (float) (it == g.floats.end() ? (double) target.rope_base : it->second);
+    }
     sp = specs(d);
-    for (const Spec& s : sp) {
-        TensorRef t;
-        if (!mj(s.name, t)) return false;
+    for (Spec& s : sp) {
+        s.file = s.name;
+        if (next) {
+            if (!alias_next(s.name, s.file, s.alt, s.split_kv))
+                return fail(err, "dfly: " + s.name + " has no name in this file's layout");
+        }
+        auto it = g.tensors.find(s.file);
+        if (it == g.tensors.end()) return fail(err, "dfly: no tensor " + s.file);
+        const TensorRef& t = it->second;
         if (t.type != (s.kind == Q8M ? kQ8_0 : kF32))
-            return fail(err, "dfly: " + s.name + " is not " + (s.kind == Q8M ? "Q8_0" : "F32"));
-        bool shape;
+            return fail(err, "dfly: " + s.file + " is not " + (s.kind == Q8M ? "Q8_0" : "F32"));
+        bool shape = false;
+        uint64_t file_bytes = s.bytes();
+        if (s.split_kv) {
+            // the split: attn_k_b is [192 nope][512 rank][heads] (out contiguous, so it is read transposed), attn_v_b
+            // [512 rank][256 v][heads] (rank contiguous: its rows copy straight in)
+            auto ia = g.tensors.find(s.file), ib = g.tensors.find(s.alt);
+            if (ib == g.tensors.end()) return fail(err, "dfly: no tensor " + s.alt);
+            const TensorRef& ka = ia->second;
+            const TensorRef& vb = ib->second;
+            shape = ka.ne.size() == 3 && ka.ne[0] == kDflyNope && ka.ne[1] == kDflyRank && ka.ne[2] == s.b / kDflyKvbHead &&
+                    vb.ne.size() == 3 && vb.ne[0] == kDflyRank && vb.ne[1] == kDflyV && vb.ne[2] == s.b / kDflyKvbHead &&
+                    vb.type == kQ8_0;
+            if (!shape) return fail(err, "dfly: " + s.file + " / " + s.alt + " are not shaped as a split kv_b");
+            file_bytes = (uint64_t) ka.ne[0] * ka.ne[1] * ka.ne[2] / 32 * 34;
+            if (ka.off + file_bytes > g.file_bytes - g.data_start ||
+                vb.off + (uint64_t) vb.ne[0] * vb.ne[1] * vb.ne[2] / 32 * 34 > g.file_bytes - g.data_start)
+                return fail(err, "dfly: " + s.file + " runs past the file");
+            continue;
+        }
         if (s.kind == F32V) shape = elems_of(t) == s.a && t.ne.size() <= 2;
         else shape = t.ne.size() == 2 && t.ne[0] == s.a && t.ne[1] == s.b;             // ggml: [in][out]
-        if (!shape) return fail(err, "dfly: " + s.name + " has another shape than the drafter's");
-        if (t.off + s.bytes() > g.file_bytes - g.data_start) return fail(err, "dfly: " + s.name + " runs past the file");
+        if (!shape) return fail(err, "dfly: " + s.file + " has another shape than the drafter's");
+        if (t.off + file_bytes > g.file_bytes - g.data_start) return fail(err, "dfly: " + s.file + " runs past the file");
     }
     return true;
 }
@@ -450,6 +566,8 @@ struct Dfly::Impl {
     float* actd = nullptr;
     void* attw = nullptr;
     float *hid = nullptr, *h_emb = nullptr, *h_pe = nullptr, *h_conf = nullptr;
+    float* xmask = nullptr;        // the block's mask rows on the device (constant, written once)
+    int32_t* h_pos = nullptr;      // padded host row of the block's rotary positions
     int32_t* h_tok = nullptr;
     uint64_t sbytes = 0;
 
@@ -472,7 +590,32 @@ struct Dfly::Impl {
         if (had) cudaSetDevice(prev);
     }
 
-    bool mm(const void* W, const float* x, int ldx, int k, int n, float* y, int ldy, int rows, cudaStream_t s, std::string& err) {
+    // several projections of the same input: one quantization of it, one mv call (the layer's q_a/kv_a/gate read xn, the
+    // MLP's gate/up too, so the input is rounded once instead of once a projection)
+    bool mm3(const void* const* W, const int* ns, float* const* ys, int nW, const float* x, int ldx, int k, int rows,
+             cudaStream_t s, std::string& err) {
+        k::q8_rows(x, (size_t) ldx, rows, k, actq, actd, s);
+        iq::MvJob jobs[4];
+        for (int i = 0; i < nW; ++i) {
+            iq::MvJob& j = jobs[i];
+            j.w = (const uint8_t*) W[i];
+            j.ld = (size_t) (k / 32 * 34);
+            j.type = kQ8_0;
+            j.k = k;
+            j.n = ns[i];
+            j.ncol = rows;
+            j.xq = actq;
+            j.xd = actd;
+            j.y = ys[i];
+            j.ycs = (size_t) ns[i];
+            j.alpha = 1.0f;
+        }
+        if (!iq::mv(jobs, nW, s)) return fail(err, "dfly: projections the kernels do not take");
+        return true;
+    }
+
+    bool mm(const void* W, const float* x, int ldx, int k, int n, float* y, int ldy, int rows, cudaStream_t s,
+            std::string& err) {
         k::q8_rows(x, (size_t) ldx, rows, k, actq, actd, s);
         iq::MvJob j;
         j.w = (const uint8_t*) W;
@@ -645,6 +788,12 @@ bool Dfly::load(const std::string& gguf, const DflyTarget& target, int sel_cap, 
     if (!parse(gguf, target, p->d, g, sp, err)) return false;
     std::ifstream f(gguf, std::ios::binary);
     if (!f) return fail(err, gguf + ": cannot open");
+    auto read_at = [&](const TensorRef& t, uint64_t bytes, std::vector<uint8_t>& out) -> bool {
+        out.resize((size_t) bytes);
+        f.seekg((std::streamoff) (g.data_start + t.off), std::ios::beg);
+        f.read((char*) out.data(), (std::streamsize) out.size());
+        return (bool) f;
+    };
     for (const Spec& spc : sp) {
         void* dev = nullptr;
         if (cudaMalloc(&dev, std::max<uint64_t>(spc.bytes(), 16)) != cudaSuccess)
@@ -652,11 +801,41 @@ bool Dfly::load(const std::string& gguf, const DflyTarget& target, int sel_cap, 
         p->walloc.push_back(dev);
         p->wslot[spc.name] = dev;
         p->wbytes += spc.bytes();
-        std::vector<uint8_t> host((size_t) spc.bytes());
-        const TensorRef& t = g.tensors.at(spc.name);
-        f.seekg((std::streamoff) (g.data_start + t.off), std::ios::beg);
-        f.read((char*) host.data(), (std::streamsize) host.size());
-        if (!f) return fail(err, gguf + ": " + spc.name + " is truncated");
+        std::vector<uint8_t> host;
+        if (!spc.split_kv) {
+            const TensorRef& t = g.tensors.at(spc.file);
+            if (!read_at(t, spc.bytes(), host)) return fail(err, gguf + ": " + spc.file + " is truncated");
+        } else {
+            // build the kv_b_proj this engine reads: per head, 192 key rows then 256 value rows, each a Q8_0 row of the
+            // 512 latents. attn_k_b is stored with its outputs contiguous (transpose it), attn_v_b with the latents
+            // contiguous (its rows are the same bytes already).
+            const TensorRef& ka = g.tensors.at(spc.file);
+            const TensorRef& vb = g.tensors.at(spc.alt);
+            const int H = (int) (spc.b / kDflyKvbHead);
+            std::vector<uint8_t> kraw, vraw;
+            if (!read_at(ka, (uint64_t) kDflyNope * kDflyRank * (uint64_t) H / 32 * 34, kraw) ||
+                !read_at(vb, (uint64_t) kDflyRank * kDflyV * (uint64_t) H / 32 * 34, vraw))
+                return fail(err, gguf + ": " + spc.file + " is truncated");
+            std::vector<float> kd((size_t) kDflyNope * kDflyRank * (size_t) H);
+            const size_t kb_row = (size_t) kDflyNope / 32 * 34;   // a run of 192 values: 6 Q8_0 blocks
+            for (int h = 0; h < H; ++h)
+                for (int i = 0; i < kDflyRank; ++i)
+                    dequantize_row_q8_0(kraw.data() + ((size_t) h * kDflyRank + (size_t) i) * kb_row,
+                                        kd.data() + ((size_t) h * kDflyRank + (size_t) i) * kDflyNope, kDflyNope);
+            const size_t vrow = (size_t) kDflyRank / 32 * 34, row = (size_t) kDflyRank / 32 * 34;
+            host.resize((size_t) spc.bytes());
+            std::vector<float> x((size_t) kDflyRank);
+            for (int h = 0; h < H; ++h) {
+                for (int o = 0; o < kDflyNope; ++o) {
+                    for (int i = 0; i < kDflyRank; ++i)
+                        x[(size_t) i] = kd[((size_t) h * kDflyRank + (size_t) i) * kDflyNope + (size_t) o];
+                    quantize_row_q8_0_ref(x.data(), host.data() + ((size_t) h * kDflyKvbHead + (size_t) o) * row, kDflyRank);
+                }
+                for (int o = 0; o < kDflyV; ++o)
+                    std::memcpy(host.data() + ((size_t) h * kDflyKvbHead + kDflyNope + (size_t) o) * row,
+                                vraw.data() + ((size_t) h * kDflyV + (size_t) o) * vrow, vrow);
+            }
+        }
         if (cudaMemcpy(dev, host.data(), host.size(), cudaMemcpyHostToDevice) != cudaSuccess)
             return fail(err, "dfly: copying " + spc.name);
     }
@@ -698,8 +877,8 @@ bool Dfly::load(const std::string& gguf, const DflyTarget& target, int sel_cap, 
         return fail(err, "dfly: the confidence bias");
 
     const DflyDims& d = p->d;
-    const uint64_t R = kDflyBlock, E = (uint64_t) d.E, H = (uint64_t) d.heads, F = (uint64_t) d.ffn, C = (uint64_t) d.hc_ffn,
-                   Q = (uint64_t) d.q_lora;
+    const uint64_t R = (uint64_t) d.block, E = (uint64_t) d.E, H = (uint64_t) d.heads, F = (uint64_t) d.ffn,
+                   C = (uint64_t) d.hc_ffn, Q = (uint64_t) d.q_lora;
     auto dev = [&](float*& ptr, size_t n) -> bool {
         void* v = nullptr;
         if (cudaMalloc(&v, std::max<size_t>(n * 4, 16)) != cudaSuccess) return false;
@@ -785,6 +964,11 @@ bool Dfly::load(const std::string& gguf, const DflyTarget& target, int sel_cap, 
     if (void* v = pin(4)) p->h_tok = (int32_t*) v;
     else ok = false;
     if (!ok) return fail(err, "dfly: out of device memory for the drafter's scratch");
+    // the mask rows are the same every round: one device copy of a block's worth, and a pinned position row
+    ok = ok && dev(p->xmask, (size_t) ((kDflyMaxBlock - 1) * E));
+    if (void* v = pin(sizeof(int32_t) * (size_t) kDflyMaxBlock)) p->h_pos = (int32_t*) v;
+    else ok = false;
+    if (!ok) return fail(err, "dfly: out of device memory for the drafter's scratch");
     p->tap_clear();
     p->mask.assign((size_t) d.E, 0.0f);
     p_ = std::move(p);
@@ -832,30 +1016,31 @@ bool Dfly::draft_begin(int32_t anchor, int64_t pos, int n, const DflyCache* cach
     }
     if (!p.head || !p.embed) return fail(err, "dfly: no head or embedding");
     const int slot = p.tap_row(pos);
-    if (slot < 0 || pos + kDflyBlock > p.ctx) return true;   // no hidden state to draft from: the window goes plain
+    if (slot < 0 || pos + p.d.block > p.ctx) return true;   // no hidden state to draft from: the window goes plain
     if (n < 1) return fail(err, "dfly: a block of " + std::to_string(n) + " drafts");
-    n = std::min(n, kDflyDrafts);
+    n = std::min(n, p.d.block - 1);
     if (!caches) return fail(err, "dfly: no target caches");
     const DflyDims& d = p.d;
     const int R = n + 1, E = d.E;
     if (!p.mask_ready) {
         if (!p.embed(d.mask_id, p.mask.data())) return fail(err, "dfly: no embedding row for the mask token");
+        std::vector<float> mr((size_t) (kDflyMaxBlock - 1) * E);
+        for (int r = 0; r < kDflyMaxBlock - 1; ++r)
+            std::memcpy(mr.data() + (size_t) r * E, p.mask.data(), (size_t) E * 4);
+        if (cudaMemcpyAsync(p.xmask, mr.data(), mr.size() * 4, cudaMemcpyHostToDevice, s) != cudaSuccess)
+            return fail(err, "dfly: the mask rows");
         p.mask_ready = true;
     }
     if (!p.embed(anchor, p.h_emb)) return fail(err, "dfly: the anchor token has no embedding row");
-    for (int r = 1; r < R; ++r) std::memcpy(p.h_emb + (size_t) r * E, p.mask.data(), (size_t) E * 4);
     cudaMemcpyAsync(p.emb0, p.h_emb, (size_t) E * 4, cudaMemcpyHostToDevice, s);
-    cudaMemcpyAsync(p.X + E, p.h_emb + E, (size_t) (R - 1) * E * 4, cudaMemcpyHostToDevice, s);
+    cudaMemcpyAsync(p.X + E, p.xmask, (size_t) (R - 1) * E * 4, cudaMemcpyDeviceToDevice, s);
     k::rmsnorm(p.emb0, E, 1, E, p.enorm, d.rms_eps, p.cat, 2 * E, s);
     k::rmsnorm(p.hid + (size_t) slot * E, E, 1, E, p.hnorm, d.rms_eps, p.cat + E, 2 * E, s);
     if (!p.mm(p.eh_proj, p.cat, 2 * E, 2 * E, E, p.fused, E, 1, s, err)) return false;
     gate_add_kernel<<<(E + 255) / 256, 256, 0, s>>>(p.emb0, p.fused, p.fuse_gate, E, p.X);
     const int64_t rp = rope_pos < 0 ? pos : rope_pos;
-    {
-        std::vector<int32_t> hp((size_t) R);
-        for (int r = 0; r < R; ++r) hp[(size_t) r] = (int32_t) (rp + r);
-        cudaMemcpyAsync(p.posd, hp.data(), sizeof(int32_t) * (size_t) R, cudaMemcpyHostToDevice, s);
-    }
+    for (int r = 0; r < R; ++r) p.h_pos[r] = (int32_t) (rp + r);
+    cudaMemcpyAsync(p.posd, p.h_pos, sizeof(int32_t) * (size_t) R, cudaMemcpyHostToDevice, s);
     const uint64_t rb = drb(p.target.kv_q8);
     for (int i = 0; i < d.layers; ++i) {
         const int nctx = p.tap_count(slot, i, pos);
@@ -871,10 +1056,14 @@ bool Dfly::draft_begin(int32_t anchor, int64_t pos, int n, const DflyCache* cach
         if (!p.gather(c, cells, nctx, p.ctxbuf, s, err)) return false;
         const Impl::Layer& L = p.layer[(size_t) i];
         k::rmsnorm(p.X, E, R, E, L.in_ln, d.rms_eps, p.xn, E, s);
-        if (!p.mm(L.q_a, p.xn, E, E, d.q_lora, p.qa, d.q_lora, R, s, err)) return false;
+        {   // q_a, kv_a and the attention's gate all read xn: one rounding of it
+            const void* W[3] = {L.q_a, L.kv_a, L.gate};
+            const int ns[3] = {d.q_lora, kDflyRowWidth, d.heads * kDflyV};
+            float* ys[3] = {p.qa, p.kvraw, p.gate};
+            if (!p.mm3(W, ns, ys, 3, p.xn, E, E, R, s, err)) return false;
+        }
         k::rmsnorm(p.qa, d.q_lora, R, d.q_lora, L.q_a_ln, d.rms_eps, p.qan, d.q_lora, s);
         if (!p.mm(L.q_b, p.qan, d.q_lora, d.q_lora, d.heads * 256, p.q, d.heads * 256, R, s, err)) return false;
-        if (!p.mm(L.kv_a, p.xn, E, E, kDflyRowWidth, p.kvraw, kDflyRowWidth, R, s, err)) return false;
         absorb_kernel<<<dim3(kDflyRank, (unsigned) (R * d.heads)), 256, 0, s>>>((const uint8_t*) L.kv_b, p.q, d.heads,
                                                                                p.qabs);
         // the block's own rows, in the target's cache form, after the selected ones (position rp + r -> row nctx + r)
@@ -891,14 +1080,17 @@ bool Dfly::draft_begin(int32_t anchor, int64_t pos, int n, const DflyCache* cach
                      maxk, scale, L.sink, (float*) p.attw, p.olat, s, p.target.kv_q8);
         expand_kernel<<<dim3(kDflyV, (unsigned) (R * d.heads)), 256, 0, s>>>((const uint8_t*) L.kv_b, p.olat, d.heads,
                                                                              p.vout);
-        if (!p.mm(L.gate, p.xn, E, E, d.heads * kDflyV, p.gate, d.heads * kDflyV, R, s, err)) return false;
         k::sigmoid_mul(p.vout, p.gate, (size_t) R * d.heads * kDflyV, s);
         if (!p.mm(L.o, p.vout, d.heads * kDflyV, d.heads * kDflyV, E, p.o, E, R, s, err)) return false;
         k::rmsnorm(p.o, E, R, E, L.post_proj_ln, d.rms_eps, p.o2, E, s);
         k::add(p.X, p.o2, (size_t) R * E, s);
         k::rmsnorm(p.X, E, R, E, L.post_attn_ln, d.rms_eps, p.xn, E, s);
-        if (!p.mm(L.mlp_gate, p.xn, E, E, d.ffn, p.g, d.ffn, R, s, err)) return false;
-        if (!p.mm(L.mlp_up, p.xn, E, E, d.ffn, p.u, d.ffn, R, s, err)) return false;
+        {
+            const void* W[2] = {L.mlp_gate, L.mlp_up};
+            const int ns[2] = {d.ffn, d.ffn};
+            float* ys[2] = {p.g, p.u};
+            if (!p.mm3(W, ns, ys, 2, p.xn, E, E, R, s, err)) return false;
+        }
         k::swiglu(p.g, p.u, (size_t) d.ffn, R, d.ffn, p.h, (size_t) d.ffn, s);
         if (!p.mm(L.mlp_down, p.h, d.ffn, d.ffn, E, p.mlp, E, R, s, err)) return false;
         k::add(p.X, p.mlp, (size_t) R * E, s);
@@ -912,7 +1104,7 @@ bool Dfly::draft_begin(int32_t anchor, int64_t pos, int n, const DflyCache* cach
     return true;
 }
 
-bool Dfly::draft_end(int32_t* ids, float* conf, int max_n, int& n, cudaStream_t s, std::string& err) {
+bool Dfly::draft_end(int32_t* ids, float* conf, int max_n, int& n, float floor, cudaStream_t s, std::string& err) {
     n = 0;
     if (!p_) return fail(err, "dfly: no drafter");
     if (pending_ == 0) return true;
@@ -928,8 +1120,12 @@ bool Dfly::draft_end(int32_t* ids, float* conf, int max_n, int& n, cudaStream_t 
         const float* zrow = p.z + (size_t) (j + 1) * E;
         k::rmsnorm(zrow, E, 1, E, p.hc_hidden_norm, d.rms_eps, p.cat, 2 * E, s);
         k::rmsnorm(p.pe, E, 1, E, p.hc_embed_norm, d.rms_eps, p.cat + E, 2 * E, s);
-        if (!p.mm(p.hc_gate, p.cat, 2 * E, 2 * E, C, p.hg, C, 1, s, err)) return false;
-        if (!p.mm(p.hc_up, p.cat, 2 * E, 2 * E, C, p.hu, C, 1, s, err)) return false;
+        {
+            const void* W[2] = {p.hc_gate, p.hc_up};
+            const int ns[2] = {C, C};
+            float* ys[2] = {p.hg, p.hu};
+            if (!p.mm3(W, ns, ys, 2, p.cat, 2 * E, 2 * E, 1, s, err)) return false;
+        }
         k::swiglu(p.hg, p.hu, (size_t) C, 1, C, p.hh, (size_t) C, s);
         if (!p.mm(p.hc_down, p.hh, C, C, E, p.hd, E, 1, s, err)) return false;
         cudaMemcpyAsync(p.hcout, zrow, (size_t) E * 4, cudaMemcpyDeviceToDevice, s);
@@ -945,6 +1141,7 @@ bool Dfly::draft_end(int32_t* ids, float* conf, int max_n, int& n, cudaStream_t 
         conf[j] = 1.0f / (1.0f + std::exp(-(*p.h_conf + p.bias)));
         prev = ids[j];
         n = j + 1;
+        if (floor > 0.0f && conf[j] < floor) break;   // (the caller drops this slot and every later one)
     }
     return true;
 }
