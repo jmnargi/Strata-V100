@@ -316,6 +316,10 @@ learned on the traffic a box actually serves is what moves decode here (7.7 tok/
 bias). The engine takes about 30 s to load and warm up from cold, and the first request of a session pays the slot
 refill.
 
+The weights were deleted from this box on 2026-11-26 after the measurements, at the owner's request (139 GiB back on the
+NVMe); `hy4-prune25/` and `hy4-service.json` are left behind and are inert without them. The download and pack commands
+above are the way back.
+
 **Cold and warm.** Decode and prefill both depend on what the page cache holds, and that is worth knowing before trusting a
 number. The 6,200-token review read in **32.2 s (192 tok/s) with a cold cache** and **18.35 s (338 tok/s) immediately
 after**, the same run twice: 11,000 experts streamed either way, but their copies into the bounce took 18.6 s the first
