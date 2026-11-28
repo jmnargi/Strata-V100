@@ -1513,3 +1513,45 @@ for measured gains, fixed settings, and numerical checks.
 | `STRATA_Q8_GATHER_WIDE=0` | turns off the 8-wide int8 KV gather (#1095) that the experimental build uses below compute capability 7.5 | +11% on the gather kernel |
 | `STRATA_GDN_REC_WARP=2` | Select the chain-split DeltaNet recurrence explicitly. `1` selects the sync-free control. The fork's normal dispatch already uses `STRATA_GDN_REC_FAST` on Volta. For the original pipelined control, set both `STRATA_GDN_REC_WARP=0` and `STRATA_GDN_REC_FAST=0`. `STRATA_GDN_CHUNK=1` selects the chunked path. | Contributor: +6-9% on the recurrence; not a new gain over this fork |
 | `STRATA_VERIFY_ECAP=N` | Caps the verify window's expert set: token 0 keeps all K picks, the tail keeps the top `N-K` by weight, and a dropped pick joins a kept expert at weight 0. Opt-in, decode windows only. It changes the output. A cap under one entry per draft row (`N < K + spec - 1`, `spec` being the draft window after the suffix/lookup adjustment) is refused at start-up; under two per row the engine warns. | 32K decode, three paired prompts of 512 greedy tokens: +17.7 % at `N=20` and +16.2 % at `N=16`. 2.49 -> 2.81 and 3.24 tokens/window at a flat ms/window. Prompt unchanged. |
+
+## The hyperflare-inference survey (2026-11-27): nothing portable to sm_70
+
+[NVIDIA/hyperflare-inference](https://github.com/NVIDIA/hyperflare-inference) serves local
+models on SM103, SM120 and SM121 cards. Python prepares a model with PyTorch, `torch.compile`
+and FlashInfer/b12x; Rust then replays captured CUDA graphs. Its
+[performance document](https://github.com/NVIDIA/hyperflare-inference/blob/main/docs/performance-work.md)
+and the design documents beside it (`core-design.md`, `mtp-design.md`,
+`prefix-cache-offload.md`, `scheduling-theory.md`, `design-review.md`) were read on 2026-11-27
+at `main`, to see whether any of its mechanisms would move prompt or decode speed on this pair.
+
+The parts that are not tied to Blackwell hardware are already here, and the ones measured on
+this pair are opt-in or off because they did not pay:
+
+| hyperflare's mechanism | its equivalent here | measured on this pair |
+| --- | --- | --- |
+| fuse the hyper-connection residual injection with the following RMSNorm | `gr_read` and its fused forms `fused_gr_read`, `fused_gr_read_multi` (`src/core/layer.cpp`, `src/core/verify.cpp`); `STRATA_GR_NORM_FAST`, `STRATA_HC_PERSIST` | `STRATA_GR_NORM_FAST` +0.5-0.6 % decode on sm_7x |
+| pack the GDN QKV/Z and B/A projections; overlap the QSA index projection with QKV | the GDN gate projection and the QSA queries run on side streams beside the projections (`side_proj`, `src/core/verify.cpp`), `STRATA_SIDE_MIXER` | opt-in on Volta ([Decode mixer overlap](#decode-mixer-overlap)); the sm_86 stack that contains it (`STRATA_ADAPT_NOWAIT`, `STRATA_ADAPT_LAG`, `STRATA_SIDE_MIXER=2`) read 79-82 tok/s against 83.0 stock here |
+| overlap the shared expert with routing and the routed experts | the shared expert forks onto its own stream per layer, `STRATA_SH_STREAM`, on by default on CUDA (`src/core/verify.cpp`) | HIP turns it off, 62.9 against 43.4 tok/s on a R9700; CUDA keeps it |
+| choose the verification width from a measured round cost | `--spec 4` with `--spec-min-p 0.70`, plus `STRATA_VERIFY_ECAP` | the cost-aware window (`perf/spec-cost`) read 80.0 against 80.9 tok/s and 2,111 against 2,117 tok/s; not kept |
+| history drafts from a ring of decoded tokens | the suffix drafter, on by default (`--suffix-draft 3`, `src/spec/suffix_drafter.cpp`), and the opt-in `--lookup-chain` | `--lookup-chain 4` gave no gain or lost; 8 with a wider cap was +0.8 / +7.0 % on a prompt that does not repeat ([above](#decode-what-the-window-and-its-cap-allow-2026-11-18)) |
+| a tiered prefix cache with complete resumable endpoints | L1 GPU checkpoints, L2 RAM and L3 disk, with recurrent, PLE and indexer state, shared K/V and pins (`docs/DETAILS.md`) | the daily service reuses 49 tokens of a 56-token prompt |
+| a scheduler that prices graph cohorts by value per time | `--parallel N` with the batch groups | this service runs one slot (`parallel: 1`) |
+
+The rest needs hardware this pair does not have. NVFP4/FP4 W4A16, FP8, TMA, `cp.async`,
+`wgmma` and 2:4 sparsity are sm_80 or newer. FP4 would also raise weight traffic here: the
+daily pack is IQ3_XXS at about 3.06 bits per weight, and FP4 with its scales is about 4.5.
+`torch.compile` and Inductor have no counterpart in an engine that captures its own windows,
+and the host's share of a decode window is the smallest part of the engine's own timing line
+(`STRATA_DECODE_TIMING=1`, `docs/DETAILS.md`): the window waits on the GPU and the expert
+pool, not on a graph launch. Cross-host tensor parallelism, RoCE and narrow DGX Spark memory
+accounting do not describe two discrete V100s.
+
+One mechanism is absent: hyperflare compresses a parked checkpoint at the VRAM-to-host
+boundary, with a 64-pivot matrix predictor and Zstd on the CPU or 12-bit rANS on the GPU, so
+the same host memory holds more checkpoints. This engine parks raw bytes, and the daily
+service runs no L2 or L3 tier, so on this pair the codec would have nothing to hold. It buys
+cache capacity, not prompt or decode speed on a hit. It was not ported: a port is a
+checkpoint-format project, and it needs a service that evicts before it can show a gain.
+
+No engine change came out of the survey, so this section records the check and takes no
+measurement of its own.
