@@ -438,6 +438,100 @@ int check_blob(const cpu::NativeFmt& f, const std::vector<uint8_t>& blob, int se
             std::printf("          gpu decode-once vs per-entry kernels: %s\n", same ? "bitwise equal" : "MISMATCH");
             if (!same) ++failures;
         }
+        {   // per-layer split: two FF parts (gate/up column blocks and down K blocks) must add up to the whole expert
+            // (mode 8 forced: it is the layout with block ranges, and on Volta it is opt-in via STRATA_SM70_TABLE)
+            strata::kernels::native_expert_set_mode(8, 0);
+            std::vector<float> sum(got_g.size(), 0.0f), p(got_g.size());
+            float* dp = nullptr;
+            cudaMalloc((void**)&dp, got_g.size() * 4);
+            bool ok = true;
+            double worst = 0.0;
+            for (int part = 0; part < 2 && ok; ++part) {
+                cudaMemset(dp, 0, got_g.size() * 4);
+                const strata::kernels::ExpertFFPart hp{part, 2};
+                if (!strata::kernels::native_expert_grouped_part(L, dptr, dstart, dn, ddst, dtok, 1, NT, dxq, dscr, dp, s,
+                                                                 hp)) {
+                    ok = false;
+                    break;
+                }
+                cudaStreamSynchronize(s);
+                cudaMemcpy(p.data(), dp, p.size() * 4, cudaMemcpyDeviceToHost);
+                for (size_t i = 0; i < sum.size(); ++i) sum[i] += p[i];
+            }
+            if (!ok) {
+                std::printf("          split parts: this layout has no block-range path (skipped)\n");
+            } else {
+                worst = rel(sum, got_g);
+                std::printf("          split parts (2) vs whole: rel %.2e\n", worst);
+                if (!(worst < 1e-6)) ++failures;
+                // the pair's time against the whole, in the window's shape: G groups x NT entries on this card
+                const int G = 16;
+                const strata::kernels::ExpertFFPart h0{0, 2}, h1{1, 2};
+                const size_t ne = (size_t) G * NT;
+                unsigned long long* dpG = nullptr;
+                int32_t *dsG = nullptr, *dnG = nullptr, *ddG = nullptr, *dtG = nullptr;
+                float* doG = nullptr;
+                cudaMalloc((void**)&dpG, (size_t) G * 8);
+                cudaMalloc((void**)&dsG, (size_t) (G + 1) * 4);
+                cudaMalloc((void**)&dnG, 4);
+                cudaMalloc((void**)&ddG, ne * 4);
+                cudaMalloc((void**)&dtG, ne * 4);
+                cudaMalloc((void**)&doG, ne * (size_t) H * 4);
+                {
+                    std::vector<unsigned long long> pg((size_t) G, (unsigned long long) dblob);
+                    std::vector<int32_t> sg((size_t) G + 1), dg(ne), tg(ne);
+                    for (int g = 0; g < G; ++g) {
+                        sg[(size_t) g] = g * NT;
+                        for (int j = 0; j < NT; ++j) { dg[(size_t) (g * NT + j)] = g * NT + j; tg[(size_t) (g * NT + j)] = j; }
+                    }
+                    sg[(size_t) G] = (int32_t) ne;
+                    const int32_t gg = G;
+                    cudaMemcpy(dpG, pg.data(), (size_t) G * 8, cudaMemcpyHostToDevice);
+                    cudaMemcpy(dsG, sg.data(), (size_t) (G + 1) * 4, cudaMemcpyHostToDevice);
+                    cudaMemcpy(dnG, &gg, 4, cudaMemcpyHostToDevice);
+                    cudaMemcpy(ddG, dg.data(), ne * 4, cudaMemcpyHostToDevice);
+                    cudaMemcpy(dtG, tg.data(), ne * 4, cudaMemcpyHostToDevice);
+                }
+                cudaEvent_t ev0, ev1;
+                cudaEventCreate(&ev0);
+                cudaEventCreate(&ev1);
+                auto time_it = [&](bool split) {
+                    for (int it = 0; it < 10; ++it) {
+                        if (!split) strata::kernels::native_expert_grouped(L, dpG, dsG, dnG, ddG, dtG, G, (int64_t) ne, dxq, dscr, doG, s);
+                        else {
+                            strata::kernels::native_expert_grouped_part(L, dpG, dsG, dnG, ddG, dtG, G, (int64_t) ne, dxq, dscr, doG, s, h0);
+                            strata::kernels::native_expert_grouped_part(L, dpG, dsG, dnG, ddG, dtG, G, (int64_t) ne, dxq, dscr, doG, s, h1);
+                        }
+                    }
+                    cudaEventRecord(ev0, s);
+                    for (int it = 0; it < 20; ++it) {
+                        if (!split) strata::kernels::native_expert_grouped(L, dpG, dsG, dnG, ddG, dtG, G, (int64_t) ne, dxq, dscr, doG, s);
+                        else {
+                            strata::kernels::native_expert_grouped_part(L, dpG, dsG, dnG, ddG, dtG, G, (int64_t) ne, dxq, dscr, doG, s, h0);
+                            strata::kernels::native_expert_grouped_part(L, dpG, dsG, dnG, ddG, dtG, G, (int64_t) ne, dxq, dscr, doG, s, h1);
+                        }
+                    }
+                    cudaEventRecord(ev1, s);
+                    cudaEventSynchronize(ev1);
+                    float m = 0.0f;
+                    cudaEventElapsedTime(&m, ev0, ev1);
+                    return 1e3 * m / 20.0;
+                };
+                double whole = 1e30, halves = 1e30;
+                for (int r = 0; r < 3; ++r) {
+                    whole = std::fmin(whole, time_it(false));
+                    halves = std::fmin(halves, time_it(true));
+                }
+                cudaEventDestroy(ev0);
+                cudaEventDestroy(ev1);
+                std::printf("          %d groups x %lld entries: whole %7.1f us, its two parts on one card %7.1f us "
+                            "(%.2fx; one part on a card %.1f us = %.2fx of the whole)\n",
+                            G, (long long) NT, whole, halves, halves / whole, halves / 2.0, halves / 2.0 / whole);
+                cudaFree(dpG); cudaFree(dsG); cudaFree(dnG); cudaFree(ddG); cudaFree(dtG); cudaFree(doG);
+            }
+            cudaFree(dp);
+            strata::kernels::native_expert_set_mode(-1, 0);
+        }
         {   // (d) the GPU dequantizers (prompt path: iq_dequant_f32/_f16; embedding: iq_embed_rows) against to_float
             float* dq = nullptr;
             uint16_t* dh = nullptr;
