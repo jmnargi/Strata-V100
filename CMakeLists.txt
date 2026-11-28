@@ -1612,6 +1612,46 @@ set_property(SOURCE src/kernels/cpu/q2_avx2.cpp APPEND PROPERTY COMPILE_DEFINITI
 find_package(Threads REQUIRED)
 target_link_libraries(strata_kernels_cpu PUBLIC Threads::Threads)
 
+option(STRATA_INKLING2 "Build the CUDA Inkling 2 Mini engine" OFF)
+if(STRATA_INKLING2)
+  if(NOT STRATA_ENABLE_CUDA OR STRATA_ENABLE_HIP)
+    message(FATAL_ERROR "STRATA_INKLING2 requires the NVIDIA CUDA backend")
+  endif()
+  add_library(strata_ik2_kernels STATIC src/ik2/ik2_kernels.cu)
+  target_include_directories(strata_ik2_kernels PUBLIC src/ik2)
+  target_link_libraries(strata_ik2_kernels PUBLIC CUDA::cudart)
+  add_executable(strata-ik2 src/ik2/ik2_main.cu src/ik2/ik2_draft.cu src/ik2/ik2_cpu.cpp)
+  target_include_directories(strata-ik2 PRIVATE include)
+  target_link_libraries(strata-ik2 PRIVATE strata_ik2_kernels CUDA::cublas Threads::Threads)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    find_package(OpenMP QUIET COMPONENTS CXX)
+    if(OpenMP_CXX_FOUND)
+      target_sources(strata-ik2 PRIVATE src/ik2/ik2_cpu_deep.cpp)
+      set_source_files_properties(src/ik2/ik2_cpu_deep.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-mf16c;-ffp-contract=off")
+      target_compile_definitions(strata-ik2 PRIVATE IK2_HOST_AVX2=1)
+      target_link_libraries(strata-ik2 PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+  endif()
+  # the upstream Inkling 2 path (GGUF architecture inkling2), a second, separately tuned engine
+  add_library(strata_inkling2 STATIC src/inkling2/inkling2_engine.cu src/inkling2/inkling2_compat.cpp
+                             src/inkling2/inkling2_quant_compat.cpp)
+  target_include_directories(strata_inkling2 PUBLIC include PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES} src/inkling2)
+  target_link_libraries(strata_inkling2 PRIVATE strata_prefill strata_kernels strata_warnings
+                                             strata_ik2_kernels CUDA::cudart CUDA::cublas)
+  if(STRATA_NATIVE_EXPERTS)
+    target_link_libraries(strata_inkling2 PRIVATE strata_kernels_cpu)
+    target_compile_definitions(strata_inkling2 PRIVATE STRATA_INKLING2_CPU_POOL=1)
+  endif()
+  add_executable(strata-inkling2 src/inkling2/inkling2_main.cpp)
+  target_link_libraries(strata-inkling2 PRIVATE strata_inkling2 CUDA::cudart)
+
+  if(STRATA_BUILD_TESTS)
+    add_executable(ik2_kernels_test tests/ik2_kernels_test.cu)
+    target_link_libraries(ik2_kernels_test PRIVATE strata_ik2_kernels)
+    add_test(NAME ik2_kernels_test COMMAND ik2_kernels_test)
+  endif()
+endif()
+
 # ---- plan v0.3 P6: the i-quant models' CPU experts (IQ2_XS / IQ3_XXS files) ----
 #
 # The CPU computes a native expert with ggml-cpu's own dot products (`ggml_get_type_traits_cpu`), so an IQ

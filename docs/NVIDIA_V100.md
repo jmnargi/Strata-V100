@@ -9,6 +9,8 @@ It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.
 Build from source for other platforms or a mix of GPU architectures. The measurements
 below state their hardware and do not establish performance on every V100 system.
 
+For the separate Inkling 2 Mini Q4 engine, see [Inkling 2 Mini on two V100s](INKLING2_V100.md).
+
 ## Hy4-Flash Maya-S
 
 Hy4-Flash uses a separate, opt-in `strata-hy4` CUDA engine. It does not change

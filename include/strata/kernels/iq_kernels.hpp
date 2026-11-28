@@ -51,12 +51,24 @@ struct NativeExpertLayout {
     // APR (prism.hadamard): the down weights are Hadamard-folded, so native_expert_grouped rotates h before
     // quantizing it (hadamard_rows).  had_block 0 = none; d_signs is a DEVICE vector of n_ff signs or nullptr.
     int had_block = 0;
+    bool gu_nib = false;                // (a converted 4-bit gate/up slot; never set by this build)
     const float* d_signs = nullptr;
+    // Inkling2's SITU activation: situ(g, u) = (beta * tanh(g / beta) * sigmoid(g)) * (lb * tanh(u / lb)).
+    bool situ = false;
+    float situ_beta = 4.0f;
+    float situ_linear_beta = 25.0f;
 };
 NativeExpertLayout native_expert_layout(int gu_type, int d_type, int64_t n_embd, int64_t n_ff);
 /// Whether `native_expert_grouped` has kernels for this gate/up and down type pair at these dimensions, and the
 /// prompt path's dequantizer takes both (checked for every layer at startup, before anything is allocated).
 bool native_expert_supported(int gu_type, int d_type, int64_t n_embd, int64_t n_ff) noexcept;
+
+/// Volta+ (sm_70+) FP16 WMMA grouped MoE for prefill.  Not built here: it answers false and the caller falls back to
+/// native_expert_grouped.
+bool native_expert_grouped_wmma(const NativeExpertLayout& L, const unsigned long long* grp_ptr, const int32_t* grp_start,
+                                const int32_t* n_groups, const int32_t* ent_dst, const int32_t* ent_tok,
+                                int64_t cap_groups, int64_t cap_entries, const void* x_f16, void* scratch, float* out,
+                                void* stream, int64_t expected_entries = 0);
 
 /// Bytes of scratch `native_expert_grouped` needs for `cap_entries` entries.
 size_t native_expert_scratch_bytes(int64_t cap_entries, int64_t n_ff);
