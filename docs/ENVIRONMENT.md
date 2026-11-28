@@ -542,6 +542,7 @@ absent variable as enabled. `engine default` means a value the code computes.
 | Variable | Default | Description |
 |---|---|---|
 | `STRATA_POOL_SPIN_US` | 20000 (20 ms) | spin before a pool worker sleeps; `0` sleeps at once |
+| `STRATA_POOL_DEP` | off (`1` turns it on) | one batch per native CPU layer call: a down row range waits only for its own expert's gate/up ranges instead of the phase barrier, and the first worker there quantizes that expert's intermediate once. Bit-exact. Measured with `--max-new` A/B (see [NVIDIA_V100.md](NVIDIA_V100.md)) |
 | `STRATA_POOL_TRACE` | off | print who waits on the expert pool |
 | `STRATA_POOL_UMWAIT` | off | use `WAITPKG` waits in the pool (Intel) |
 | `STRATA_POOL_UMWAIT_C02` | 1 | C0.2 wait form; `1` takes it, any other value keeps the plain spin |

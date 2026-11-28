@@ -1688,6 +1688,49 @@ The prompt path does not move with the driver knobs either: a 32K read measured 
 14259 and 14263 ms with `CUDA_SCALE_LAUNCH_QUEUES=4x` and `CUDA_DEVICE_MAX_CONNECTIONS=32`, which is
 the run-to-run spread.
 
+## One batch per native CPU layer call (`STRATA_POOL_DEP`, 2026-11-21)
+
+A native CPU layer call (`ExpertPool::run_split_multi_native`) runs in two row phases: every expert's gate/up row
+range, a barrier, the intermediate quantization on the submitting thread, then every expert's down row range. The
+call therefore costs its slowest gate/up range plus its slowest down range, and no expert's down rows can start while
+another expert's gate/up rows are still running. From upstream 0.1.63 (its `STRATA_POOL_DEP`, bit-exact by the
+author's 20-repetition check): `STRATA_POOL_DEP=1` publishes the call as one batch instead. The gate/up ranges go
+first, then the down ranges; a down range waits only for its own expert's gate/up ranges (a per-expert counter), and
+the first worker that reaches that expert quantizes its intermediate once while the others wait on a flag. The same
+kernels compute the same rows from the same bytes, so the outputs are the two-phase batch's bits: `pool_tasks_test`
+now compares both paths against the two-phase reference at 1 and 3 workers, the host worker on and off, seven task
+counts and a 97-expert batch boundary (336 bitwise comparisons, passing with the switch set and unset). The engine
+prints one line at start-up when the switch is on.
+
+Measured on the two-V100-PCIE rig above, UD-IQ3_XXS, the daily profile's environment, one engine start an arm, the
+arms interleaved A-B-A-B (`bench/run_v100_prefill.py --chain --chain-prefix 8192
+--chain-diffs 0,256,512,1024,2048 --chain-rounds 2 --max-new 32`). The prefix turn reads 8,192 tokens in one chunk;
+the CPU share is off at or above `STRATA_PREFILL_STREAM_MIN=6144`, so the switch cannot act there. The follow-up
+turns read 257 to 2,049 new tokens, which is the daily agentic shape.
+
+| read tokens | prompt_ms, two-phase | prompt_ms, `STRATA_POOL_DEP=1` | change |
+| ---: | ---: | ---: | ---: |
+| 257 | 731.5 | 728.6 | -0.4 % |
+| 513 | 1,023.0 | 1,007.9 | -1.5 % |
+| 1,025 | 1,396.3 | 1,341.5 | -3.9 % |
+| 2,049 | 1,916.7 | 1,894.0 | -1.2 % |
+| 8,192 (prefix, CPU share off) | 5,581 / 5,590 | 5,543 / 5,538 | -0.7 % (drift) |
+
+Each row is the mean of four samples (two rounds in each of two starts an arm). Pooled over the 16 paired diff
+turns, prompt_ms is 1.76 % lower (sd 2.61, se 0.65, t = 2.7); in prompt throughput the 1,025-token read goes from
+735 to 766 tok/s. Decode over the same turns does not move within noise (means 66.2 against 66.9 tok/s, 12 samples an
+arm at 32 tokens, a sample's own spread about 10 %). Cold 2K and 4K reads without reuse measured -0.3 % and -1.0 %
+over two pairs, inside the run-to-run drift.
+
+Adopted in `service/strata-v100.service.d/96-prefill-performance.conf`.
+
+Limits: one rig, one quant, one workload, and a small effect. The gain is bounded by the CPU share's part of a
+short read; a read at or above the 6,144-row stream floor cannot use it. The samples are 32-token replies, so the
+decode comparison only rules out a change larger than about 5 %. Greedy text is not an equality test on this pair:
+two starts of the *same* setting matched on 2 of 7 greedy turns (7 turns, 64 tokens each), and so did two starts that
+differ in this switch, because whether a swapped-in expert runs on the GPU or the CPU (whose arithmetic rounds
+differently) follows the copy's timing (#463). The bitwise comparison inside the pool is the exactness evidence.
+
 ## More opt-in switches (CUDA 12 experimental build)
 
 Unless stated below, these switches are off by default. The sm_70 table sets `STRATA_PF_WMMA2=1`; each switch was
