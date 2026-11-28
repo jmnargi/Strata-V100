@@ -36,6 +36,8 @@ effect.
 | Install on Windows, Linux, or Mac | [INSTALL.md](INSTALL.md), [AI_SETUP.md](AI_SETUP.md) |
 | Choose a model or a quantization | [MODELS.md](MODELS.md), [QUANTS.md](QUANTS.md) |
 | Run on a Tesla V100 or Titan V | [NVIDIA_V100.md](NVIDIA_V100.md), [OLDER_GPUS.md](OLDER_GPUS.md) |
+| Run Inkling 2 Mini on V100 | [INKLING2_V100.md](INKLING2_V100.md) |
+| Run Hy4-Flash Maya-S on V100 | [NVIDIA_V100.md](NVIDIA_V100.md#hy4-flash-maya-s) |
 | Run on two or more NVIDIA cards | [MULTI_GPU.md](MULTI_GPU.md), [SECOND_GPU.md](SECOND_GPU.md) |
 | Serve several requests at once | [BATCHING.md](BATCHING.md) |
 | Run NVFP4 experts | [NVFP4.md](NVFP4.md) |

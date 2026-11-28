@@ -717,6 +717,33 @@ read them.
 | `STRATA_GDN_REC_WARP` | engine default | `1` selects the sync-free bit-exact recurrence |
 | `STRATA_GDN_XE` | engine default (on for Alchemist) | `0` off, `1` on any Intel GPU |
 
+### Hy4-Flash engine
+
+The `strata-hy4` engine (opt-in, `-DSTRATA_BUILD_HY4=ON`) has its own switches. Only the ones with a
+documented measurement are listed; the rest in `src/hy4/` and `src/ds4/` are experiment and debug arms.
+See [NVIDIA_V100.md](NVIDIA_V100.md#hy4-flash-maya-s).
+
+| Variable | Default | Description |
+|---|---|---|
+| `--route-resident` | 0 | a probability bonus for an expert that holds a VRAM slot, before the top 16 picks; `0` is the model's own routing. `0.04`-`0.15` is the conservative range |
+| `--route-skip` | 0 | a pick at 0-based rank R or later that is on the CPU lane gets weight 0 (the first R picks are kept; the sum is not renormalised) |
+| `--route-skip-draft` | 0 | `--route-skip`'s rank for the speculative rows of a window only (row 0 is the real token) |
+| `HY4_SCRATCH_BORROW` | off | a long prompt temporarily lends its expert slots from the decode tier |
+| `HY4_SCRATCH_BORROW_CHUNK` | engine default | the borrow granularity; 4096 was the measured setting with `--chunk 1024` (one run each) |
+| `HY4_STAGE2` | on | `0` keeps the serial streamed-expert passes instead of the two-half copy/sets overlap |
+| `HY4_MTP_EAGER` | off | an eager MTP draft; neutral on the V100 pair |
+| `HY4_GEMV_OLD` | off | the earlier GEMV path |
+| `MAYA_DS4_NO_TC` | off | `1` keeps the grouped expert GEMM off the tensor cores (25 % slower) |
+| `DS4_IQ_TC_RM` | engine default | `2` gives a block's rows 2 x 64 for sets whose busiest expert has more than 64 rows |
+| `MAYA_DS4_NO_LIGHT`, `MAYA_DS4_PREFILL_FUSED`, `MAYA_DS4_IQ_PERSIST`, `MAYA_DS4_EXPERT_MMQ`, `DS4_IQ_RP`, `DS4_IQ_AHEAD` | engine default | prompt-path arms; neutral on the V100 pair |
+
+### Inkling 2 Mini engines
+
+`strata-ik2` (opt-in, `-DSTRATA_INKLING2=ON`) carries its own `IK2_*` switches for the attention tile,
+the expert split, the CPU lane and the drafter; the defaults are the profile measured on V100. See
+[INKLING2_V100.md](INKLING2_V100.md). The same CMake option also builds `strata-inkling2`, the upstream
+Inkling 2 path.
+
 ### Qwen3.6 engine
 
 | Variable | Default | Description |
