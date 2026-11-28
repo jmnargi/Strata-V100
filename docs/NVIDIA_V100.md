@@ -957,6 +957,13 @@ The individual settings `STRATA_MMVQ_IL`, `STRATA_EXP_MODE`, and
 `STRATA_GR_FAST` take precedence. Set `STRATA_SM70_TABLE=0` to select
 the previous decode path explicitly.
 
+On Volta, mode 8 applies the signs to packed IQ2 and IQ3 codebook bytes before
+the integer dot. On two PCIe V100-16GB cards with UD-IQ3_XXS, at 16 expert
+groups and three rows per group, the isolated gate/up kernel took 57.75 →
+49.20 µs on an IQ2_S layer and 63.05 → 51.75 µs on an IQ3_XXS layer. All 36
+cross-build layer, shape and GPU comparisons were bitwise equal. These are
+isolated kernel timings, not model throughput.
+
 The Volta defaults also select `STRATA_DEQUANT_WIDE=1`. This setting uses
 the existing vector-store dequantization kernels. The CUDA parity test
 checks that their output is bitwise equal to the narrow kernels.
