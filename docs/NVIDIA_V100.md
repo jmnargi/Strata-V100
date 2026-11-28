@@ -671,7 +671,7 @@ All host bytes matched at 512, 2,048 and 8,192 tokens on both cards.
 The streaming parity test also checks partial pages and rejected-tail rewrites.
 These are **component gains, not whole-model speedups**. Real-source HTTP
 prompts of 2,048, 9,436 and 29,728 tokens showed no consistent prefill gain.
-The daily `--kv-grow` configuration does not use this path.
+The published `--kv-grow` configuration does not use this path.
 
 ## Exact tiled prompt scoring (2026-11-14)
 
@@ -733,7 +733,7 @@ parity is not a model-quality benchmark. All runs are retained in
 [`v100-cat-topk-2026-11-12.json`](../benchmarks/v100-cat-topk-2026-11-12.json).
 
 The other proposed port, [1Cat #1172](https://github.com/1CatAI/1Cat-vLLM/pull/1172),
-already exists here: both the Volta BF16 and daily Q8 HC paths compute
+already exists here: both the Volta BF16 and Q8 HC paths compute
 the squared-norm work inside the down projection. The existing HC
 benchmark passed, with matching Q8 hashes across its normal and TSUM
 implementations. No duplicate fusion or new HC flag was added.
@@ -761,7 +761,7 @@ This is not the earlier resident-budget, text-only benchmark.
 | After port, HC_Q8 enabled | 4864 | 3507 | 8371 |
 
 The port recovers 430 slots, about 1.1 GiB across both cards, compared
-with the old HC_Q8 path. Against the daily BF16 path, enabling the corrected
+with the old HC_Q8 path. Against the BF16 path, enabling the corrected
 option adds 139 slots, about 0.36 GiB. These are startup capacities;
 elastic KV takes slots back as the context grows.
 
@@ -876,14 +876,14 @@ The engine used split 16, two pipeline windows, MTP 4 with minimum probability
   from [PR #4039](https://github.com/Niko1221/Strata/pull/4039):
   reuse group-sized GU/H/Hq buffers on an all-MMQ prompt plan. Set
   `STRATA_PF_GROUP_SCRATCH=1 STRATA_PF_WMMA=0`, alongside the trellis
-  and HC options above. The daily WMMA override is arithmetically inert
+  and HC options above. The WMMA override is arithmetically inert
   on this all-trellis pack but otherwise prevents the smaller allocation.
   Fallback, direct WMMA, compact, peer and helper plans are guarded;
   the existing layouts remain in use when the option is off.
 - [Upstream PR #4625](https://github.com/Niko1221/Strata/pull/4625):
   when `STRATA_POOL_SPIN_US=0`, sleep without first doing 1024 pauses.
   The build guard enables this only for Linux CPU/CUDA, not HIP or SYCL.
-  This is an optional CPU-cost saving, not a change to the daily value 100.
+  This is an optional CPU-cost saving, not a change to the default value 100.
 
 | Measurement | Before | With the relevant change |
 | --- | ---: | ---: |
@@ -953,10 +953,10 @@ interleaved old/new runs. Wall time was about 1.06 seconds in every arm.
 | `STRATA_POOL_SPIN_US` | Old loop CPU time | Ported loop CPU time |
 | --- | ---: | ---: |
 | 0 | 139.8 ms | 46.2 ms |
-| 100, daily setting | 580.8 ms | 588.7 ms |
+| 100, default setting | 580.8 ms | 588.7 ms |
 
 The zero-spin result is a park-cost microbenchmark, not an inference-speed
-claim. It does not show a saving at 100; the daily setting was left alone.
+claim. It does not show a saving at 100; the default setting was left alone.
 
 ### Recent upstream PRs and rejected experiments
 
@@ -976,7 +976,7 @@ Open PRs created or updated since October 29 were also checked:
   `mtp.bind_bytes` on the drafter's stage.
 - [#4928](https://github.com/Niko1221/Strata/pull/4928), long lookup windows,
   requires the absent long-window verifier/drafter changes and excludes
-  the daily two-window pipeline. It was not hardware-tested or ported.
+  the published two-window pipeline. It was not hardware-tested or ported.
 - [#5149](https://github.com/Niko1221/Strata/pull/5149), the drafter-prefill
   deadlock, concerns a stage-0 drafter. This V100 profile keeps its drafter
   on the last card; stage-0 placement was already measured slower here.
@@ -1004,7 +1004,7 @@ Open PRs created or updated since October 29 were also checked:
   ([#5002](https://github.com/Niko1221/Strata/pull/5002)) really activated,
   but were slower. A final matched, resident-KV 32K chat check took
   18,749.3 ms with it off and 22,859.2 ms on. This also requires dropping
-  the daily KV-grow setting. It was removed, not installed.
+  the KV-grow setting. It was removed, not installed.
 - WDDM submission optimizations, newer-architecture kernels, and unrelated
   model engines were not ported. PLE RAM/mmap compaction and copy-stream
   changes require IQ4_NL; this model's PLE table is Q8_0.
@@ -1644,7 +1644,7 @@ Do not interpret either prefill improvement as an equal decode gain.
 
 The [measurement rows](../benchmarks/v100-prefill-2026-10-25.json)
 include binary and prompt hashes, decode lengths, and acceptance counts.
-The harness kept the daily spec-4 and 750-MiB reserve rather than its
+The harness kept the published spec-4 and 750-MiB reserve rather than its
 strict spec-8/700-MiB profile. Prompt reuse was disabled.
 A threaded short-chunk copy issuer was also built and measured; it
 gave no gain and was removed. CUDA sm_70 built and ran. The full HIP
@@ -1667,7 +1667,7 @@ and use a separate `--out` and `--arm-label` for each restart.
 
 ## Tiled prompt selection
 
-The daily two-V100 profile selects `STRATA_SELECT_SIMT=1`.
+The published two-V100 profile selects `STRATA_SELECT_SIMT=1`.
 On pre-sm_80 CUDA cards this uses a tiled FP32 scorer for prompt
 attention selection instead of the older warp scorer. The engine
 default stays unchanged; `STRATA_SELECT_SIMT=0` keeps the warp scorer.
