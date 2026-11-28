@@ -3314,7 +3314,8 @@ bool place_experts(Model& m, Engine& E, double vram_gib, int threads, std::strin
     }
 #else
     if (need_cpu) {
-        err = "model experts exceed VRAM and STRATA_NATIVE_EXPERTS is OFF";
+        err = "the experts exceed VRAM and this build has no host expert pool: the CPU lane has no SITU "
+              "expert path (docs/INKLING2_V100.md)";
         return false;
     }
 #endif

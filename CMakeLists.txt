@@ -7,7 +7,7 @@
 # CUDA builds require compute capability 7.0 or newer.  Optional kernels with newer ISA requirements are
 # selected below so a binary never contains instructions its target GPU cannot execute.
 cmake_minimum_required(VERSION 3.24)
-project(strata VERSION 0.1.45.13 LANGUAGES CXX)
+project(strata VERSION 0.1.45.14 LANGUAGES CXX)
 # EXPERIMENTAL: the Intel Arc engine, the SYCL port in sycl/ (PR #423; icpx + oneMKL, docs/INTEL_ARC.md). It is its
 # own project that takes the unported sources from src/; with this on, nothing below is configured.
 option(STRATA_ENABLE_SYCL "EXPERIMENTAL: build the Intel Arc (SYCL) engine from sycl/ - docs/INTEL_ARC.md" OFF)
@@ -1638,10 +1638,10 @@ if(STRATA_INKLING2)
   target_include_directories(strata_inkling2 PUBLIC include PRIVATE ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES} src/inkling2)
   target_link_libraries(strata_inkling2 PRIVATE strata_prefill strata_kernels strata_warnings
                                              strata_ik2_kernels CUDA::cudart CUDA::cublas)
-  if(STRATA_NATIVE_EXPERTS)
-    target_link_libraries(strata_inkling2 PRIVATE strata_kernels_cpu)
-    target_compile_definitions(strata_inkling2 PRIVATE STRATA_INKLING2_CPU_POOL=1)
-  endif()
+  # Its host expert pool (STRATA_INKLING2_CPU_POOL) needs a CPU SITU expert path, which this tree's CPU lane
+  # does not have: its NativeFmt applies the gated activation to g only, and SITU also scales u through a tanh.
+  # The pool is therefore not built here and the engine refuses a model whose experts do not fit in VRAM
+  # (docs/INKLING2_V100.md).
   add_executable(strata-inkling2 src/inkling2/inkling2_main.cpp)
   target_link_libraries(strata-inkling2 PRIVATE strata_inkling2 CUDA::cudart)
 
