@@ -2519,13 +2519,12 @@ int main(int argc, char** argv) {
     // Load every CUDA kernel when the context is created, before the expert cache takes the free VRAM.  With the
     // default lazy loading, a kernel first used mid-prompt (MMQ for IQ3_XXS at 64K+ on a 12 GB card) found no VRAM
     // left for its code and the engine ended ("out of memory: cudaFuncSetAttribute").  Costs ~30 MB of VRAM.
-    if (std::getenv("CUDA_MODULE_LOADING") == nullptr) {
-#if defined(_WIN32)
-        _putenv_s("CUDA_MODULE_LOADING", "EAGER");
-#else
-        setenv("CUDA_MODULE_LOADING", "EAGER", 0);
-#endif
-    }
+    // Under volta-forever the opposite is wanted: EAGER has the layer retarget every kernel of the image before the
+    // banner prints, so the default there is LAZY (include/strata/core/volta_forever.hpp, docs/VOLTA_FOREVER.md).
+    if (strata::core::apply_default_cuda_module_loading())
+        std::fprintf(stderr, "strata generate: volta-forever %s: CUDA_MODULE_LOADING=LAZY (its kernels are retargeted "
+                             "when the module loads)\n",
+                     strata::core::volta_forever_version_str() ? strata::core::volta_forever_version_str() : "by env");
     if (launch_blocking())
         std::fprintf(stderr, "warning: CUDA_LAUNCH_BLOCKING=1: the verify windows cannot run with blocking launches, so "
                              "the first one after a prompt hangs until the watchdog ends the engine (#1341). Unset it; "

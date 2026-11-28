@@ -10,6 +10,7 @@
 #include "strata/core/sm120_series.hpp"
 #include "strata/kernels/gfx_arch.hpp"
 #include "strata/kernels/dp4a.hpp"
+#include "strata/kernels/volta_isa.hpp"
 #include "strata/kernels/q8_1_finite.hpp"
 #include "s26_tsum.cuh"
 
@@ -4792,7 +4793,7 @@ __device__ __forceinline__ int dot_grid_signed_pair(int g0, int g1, int u0, int 
     const uint32_t b0 = __umul24(signs & 0xFu, 0x204081u) & 0x01010101u;
     const uint32_t b1 = __umul24((signs >> 4) & 0xFu, 0x204081u) & 0x01010101u;
     const uint32_t m0 = (b0 << 8) - b0, m1 = (b1 << 8) - b1;
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+#if STRATA_VOLTA_ISA
     acc = ggml_cuda_dp4a((int) (((uint32_t) g0 ^ m0) + b0), u0, acc);
     return ggml_cuda_dp4a((int) (((uint32_t) g1 ^ m1) + b1), u1, acc);
 #else
@@ -5630,7 +5631,7 @@ __global__ void __launch_bounds__(WG_THREADS, MT == 2 ? 2 : 1) gemm_iq_f16_group
                                   : (const uint8_t*) (wsrc == 1 ? tbl.gu[e] : tbl.dn[e]);
     const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
     const int wm = warp >> 2, wn = warp & 3;                     // rows wm*32, cols wn*32 of an m-tile
-#if __CUDA_ARCH__ == 700
+#if STRATA_VOLTA_ISA
     // A warp owns two 16-row activation fragments. Only the last token
     // tile can be partial; keep every thread in staging and at the barriers.
     const int tail_rows = crow - (nmt - 1) * WG_BM;
@@ -5750,7 +5751,7 @@ __global__ void __launch_bounds__(WG_THREADS, MT == 2 ? 2 : 1) gemm_iq_f16_group
 #pragma unroll
         for (int t = 0; t < MT; ++t) {
             if (t >= nmt) break;
-#if __CUDA_ARCH__ == 700
+#if STRATA_VOLTA_ISA
             const int fragments = t + 1 == nmt ? tail_fragments : 2;
 #else
             constexpr int fragments = 2;
@@ -6220,7 +6221,7 @@ template <bool Paired>
 __global__ void w2_iq4_skinny(const uint8_t* W, size_t expert_bytes, size_t row_bytes, int K,
                               const __half* X, int ldx, const int32_t* bounds, const int32_t* ids,
                               float* Y, int ldy, bool indirect, GroupedWeightTable tbl) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+#if STRATA_VOLTA_ISA
     const int e = blockIdx.y, first = bounds[e], rows = bounds[e + 1] - first;
     if (!rows) return;
     const int lane = threadIdx.x & 31, q = (lane >> 2) & 3;

@@ -1,6 +1,7 @@
 // src/ik2/ik2_kernels.cu - maya-ik2's kernels (the interface and the conventions: ik2_kernels.cuh).
 #include "ik2_kernels.cuh"
 #include "ik2_iq_tables.h"
+#include "strata/kernels/volta_isa.hpp"
 
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
@@ -934,7 +935,7 @@ constexpr int kFaBN = 64, kFaD = 128, kFaLd = kFaD + 8;   // (row pad: conflict-
 constexpr float kLog2e = 1.4426950408889634f;
 
 __device__ __forceinline__ void mma16816(float* c, const uint32_t* a, uint32_t b0, uint32_t b1) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+#if STRATA_VOLTA_ISA
     // Volta computes four 8x8 tiles per warp. Use two for each 8-row
     // half and duplicate the result to gather the two row pairs cheaply.
     const int lane = threadIdx.x & 31;
@@ -983,7 +984,7 @@ __device__ __forceinline__ void mma16816(float* c, const uint32_t* a, uint32_t b
 #endif
 }
 
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+#if STRATA_VOLTA_ISA
 template <bool Transpose>
 __device__ __forceinline__ uint32_t ldsm_volta(unsigned ptr, int tile) {
     const int lane = threadIdx.x & 31;
@@ -1005,7 +1006,7 @@ __device__ __forceinline__ uint32_t ldsm_volta(unsigned ptr, int tile) {
 #endif
 __device__ __forceinline__ void ldsm_x4_t(uint32_t& r0, uint32_t& r1, uint32_t& r2, uint32_t& r3, const void* p) {
     const unsigned a = (unsigned) __cvta_generic_to_shared(p);
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+#if STRATA_VOLTA_ISA
     r0 = ldsm_volta<true>(a, 0); r1 = ldsm_volta<true>(a, 1);
     r2 = ldsm_volta<true>(a, 2); r3 = ldsm_volta<true>(a, 3);
 #else
@@ -1016,7 +1017,7 @@ __device__ __forceinline__ void ldsm_x4_t(uint32_t& r0, uint32_t& r1, uint32_t& 
 }
 __device__ __forceinline__ void ldsm_x4(uint32_t& r0, uint32_t& r1, uint32_t& r2, uint32_t& r3, const void* p) {
     const unsigned a = (unsigned) __cvta_generic_to_shared(p);
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+#if STRATA_VOLTA_ISA
     r0 = ldsm_volta<false>(a, 0); r1 = ldsm_volta<false>(a, 1);
     r2 = ldsm_volta<false>(a, 2); r3 = ldsm_volta<false>(a, 3);
 #else
@@ -1026,7 +1027,7 @@ __device__ __forceinline__ void ldsm_x4(uint32_t& r0, uint32_t& r1, uint32_t& r2
 #endif
 }
 __device__ __forceinline__ void cp_async16(void* dst, const void* src, bool valid) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+#if STRATA_VOLTA_ISA
     *static_cast<uint4*>(dst) = valid ? *static_cast<const uint4*>(src) : uint4{};
 #else
     const unsigned a = (unsigned) __cvta_generic_to_shared(dst);
@@ -1035,7 +1036,7 @@ __device__ __forceinline__ void cp_async16(void* dst, const void* src, bool vali
 #endif
 }
 __device__ __forceinline__ void cp_async4(void* dst, const void* src, bool valid) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 700
+#if STRATA_VOLTA_ISA
     *static_cast<uint32_t*>(dst) = valid ? *static_cast<const uint32_t*>(src) : 0;
 #else
     const unsigned a = (unsigned) __cvta_generic_to_shared(dst);

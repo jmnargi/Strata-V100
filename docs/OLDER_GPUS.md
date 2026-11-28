@@ -85,6 +85,16 @@ one, #601; on glibc 2.43 use 12.8, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md))
 On GCC 12.3 with nvcc (openEuler 24.03, CUDA 12.8, 2x V100) the build needed `-D_BITS_OPT_RANDOM_H` added to the host flags (#1074; one
 report, not reproduced here). The `size_t` error in `vmm.hpp` that the same report hit is fixed in 0.1.40.2.
 
+### A CUDA 13 toolkit only: volta-forever
+
+A machine with no CUDA 12 toolkit can still run its V100 from a CUDA 13 build: [volta-forever](https://github.com/nbald/volta-forever)
+retargets the image's PTX to sm_70 when the module loads. Build with `-DSTRATA_VOLTA_PTX=ON` so the image carries the
+Volta kernels (and ggml's MMQ its dp4a path) instead of Turing's, which the layer would have to emulate. Measured on
+2x V100-PCIE-16GB, IQ3_XXS, this repository's daily config: an 8K prompt reads in **4,880 ms** against the native CUDA
+12 engine's 4,908 (0.99x) and decodes at **100.5 against 99.3 tok/s**; the same build without the flag reads 5,624 ms
+(1.15x) and decodes at 86.2 tok/s. [VOLTA_FOREVER.md](VOLTA_FOREVER.md) has the build line, the 2K-64K table and the
+limits.
+
 ### What the flag changes, and what it does not
 
 `-DSTRATA_EXPERIMENTAL_SM60=ON` lowers the runtime floor to compute capability 6.0 and compiles the older cards' code

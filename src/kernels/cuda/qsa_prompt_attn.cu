@@ -1,5 +1,6 @@
 // src/kernels/cuda/qsa_prompt_attn.cu - see include/strata/kernels/qsa_prompt_attn.hpp.
 #include "strata/core/emulate.hpp"
+#include "strata/kernels/volta_isa.hpp"
 #include "strata/core/sm75_series.hpp"
 #include "strata/core/geometry.hpp"
 #include "strata/core/gfx12_platform_defaults.hpp"
@@ -1489,7 +1490,7 @@ bool launch(const float* q, const QsaAttnPools& pools, const int32_t* ids, const
 //        cells' K scale) goes to S.part[w]; the softmax adds the four groups in a fixed order (deterministic).
 //   p.v: warp w owns dims [64w, 64w+64) again; QP q takes the 16 dims 64w+16q.. (two n-tiles of 8); k = the 32 cells in
 //        steps of 4; p carries the V scale (as v1) and is split into hi + lo halves.
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700 && __CUDA_ARCH__ < 750
+#if STRATA_VOLTA_ISA
 #define STRATA_PA_VOLTA 1
 #else
 #define STRATA_PA_VOLTA 0
@@ -2482,7 +2483,11 @@ bool qsa_prompt_attn_batch(const float* q, const QsaAttnPools& pools, const int3
             cc[dev] = w && (!std::strcmp(w, "1") || !std::strcmp(w, "attn")) && real_cc >= 75 ? 75 : real_cc;
         }
         if (cc[dev] < 70) return false;
-        volta = cc[dev] < 75;     // sm_70: the m8n8k4 kernel (STRATA_PA_VOLTA); STRATA_QSA_WARP=1 still forces the old one
+        // sm_70: the m8n8k4 kernel (STRATA_PA_VOLTA); STRATA_QSA_WARP=1 still forces the old one.  Only where the
+        // image holds Volta code: in a sm_75-only build (a CUDA 13 engine, or any build whose architecture list has
+        // no 70) that kernel's body is a `__trap()`, and a card that reports 7.0 - or a PTX layer such as
+        // volta-forever retargeting this image for one - would otherwise launch it and fail the launch.
+        volta = cc[dev] < 75 && STRATA_HOST_VOLTA_ISA;
         turing = cc[dev] < 80;
         t75 = cc[dev] == 75;      // a Turing card, or one run as such (STRATA_EMULATE_CC=75, STRATA_QSA_WARP=1)
     }
