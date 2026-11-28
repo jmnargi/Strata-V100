@@ -9,10 +9,10 @@ conversation cache in the private configuration and `.strata-service.env`.
 | --- | --- |
 | `90-cpu-prefill.conf` | the CPU-assisted prompt staging (`STRATA_PREFILL_CPU_SHARE=auto`) |
 | `95-v0141-profile.conf` | the v0.1.41 profile: the CPU prefill share, the staged-chunk limit, the embedding-buffer accounting and the Volta master switch (`STRATA_SM70_TABLE=1`) |
-| `96-prefill-performance.conf` | FP16 tensor-core experts, skipped unrouted experts, elastic KV growth, pooled checkpoint buffers, parallel stage checkpoint saves, exact wide dequantization, up to 2048 expert-cache admissions per stage and input loan, the first card's own prompt buffers, tiled FP32 QSA selection, the measured small-read crossover, exact fresh-segment loans, and one batch per native CPU layer call (`STRATA_POOL_DEP=1`) |
+| `96-prefill-performance.conf` | FP16 tensor-core experts, skipped unrouted experts, elastic KV growth, pooled checkpoint buffers, parallel stage checkpoint saves, exact wide dequantization, up to 2048 expert-cache admissions per stage and input loan, a split's first stage keeping its own prompt buffers, tiled FP32 QSA selection, the measured small-read crossover, exact fresh-segment loans, and one batch per native CPU layer call (`STRATA_POOL_DEP=1`) |
 | `97-resident-routing.conf` | the residency-biased routing (`STRATA_ROUTE_RESIDENT=1`); it can change the model's answers |
 | `98-verify-ecap.conf` | the verify window's expert cap (`STRATA_VERIFY_ECAP=16`, about +11 % decode); it can accept a draft the exact model would reject |
-| `99-dual-gpu.conf` | the two cards' layer split: the streamed ring, split draft K/V through the prompt path, and the 8,192-token prompt chunk |
+| `99-dual-gpu.conf` | a layer split across two GPUs: the streamed ring, split draft K/V through the prompt path, and the 8,192-token prompt chunk |
 | `99-hc-v100.conf` | the K-split hyper-connection read (`STRATA_HC_V100=1`) with the fused variant off (`STRATA_HC_V100_FUSED=0`); the rounding differs, so greedy text can differ |
 
 `STRATA_POOL_DEP=1` is bit-exact (`pool_tasks_test` compares it with the two-phase batch) and
@@ -34,7 +34,7 @@ systemctl --user restart strata-v100.service
 table (`src/core/nv_defaults.cpp`); the line stays here so the profile is explicit. `STRATA_SM70_PERF=0`
 turns the table off.
 
-The measurements behind these switches, and the ones that did **not** help on this rig, are in
+The measurements behind these switches, and the ones that did **not** help on the V100 cards, are in
 [the Volta report](../bench/results/2026-10-20-v100-sm70-speed-stack/README.md).
 
 The checkpoint settings were measured with the deferred input-anchor engine.
