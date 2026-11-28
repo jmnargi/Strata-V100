@@ -7,6 +7,8 @@
 // card would.  Speed under it says nothing about the real card; results do - the kernels are the real card's.
 #pragma once
 
+#include "strata/core/volta_forever.hpp"
+
 #include <cstdlib>
 
 namespace strata {
@@ -21,7 +23,15 @@ inline int emulated_cc() {
     return cc;
 }
 inline int cc_major_of(int real_major) { return emulated_cc() ? emulated_cc() / 10 : real_major; }
-inline int cc_minor_of(int real_minor) { return emulated_cc() ? emulated_cc() % 10 : real_minor; }
+inline int cc_minor_of(int real_minor) {
+    if (const int e = emulated_cc()) return e % 10;
+    // volta-forever retargets this image for a Tesla V100 and tells the program it runs a 7.5 card (the shim only
+    // exists for sm_70).  7.5 becomes 7.0 here, so the host chooses the Volta kernels the image carries instead of
+    // Turing's, which that card has to emulate (docs/VOLTA_FOREVER.md).  The shim runs Volta images only, so no card
+    // it reports is a real Turing.
+    if (real_minor == 5 && core::volta_forever_active()) return 0;
+    return real_minor;
+}
 /// cudaDevAttrMaxSharedMemoryPerBlockOptin as the emulated card reports it: 64 KB on Turing, 163 KB on the A100,
 /// 99 KB on the other Ampere and Ada cards
 inline int smem_optin_of(int real) {

@@ -305,8 +305,13 @@ DeviceInfo device_info(int ordinal) {
     if (const std::string why = arch_problem(p, ordinal); !why.empty()) throw CudaError(why, -1);
 #else
     // The fork's baseline is Volta (sm_70): the release engine requires 7.0; the STRATA_EXPERIMENTAL_SM60
-    // build (Pascal sm_60) runs on the cards it was built for instead of being refused here.
-#if defined(STRATA_EXPERIMENTAL_SM60)
+    // build (Pascal sm_60) runs on the cards it was built for instead of being refused here.  A STRATA_VOLTA_PTX
+    // build turns SM60 on for its kernel set but is still a 7.0-or-newer engine: its sm_75 image only runs on Volta
+    // through the retargeting layer, never on a Pascal card.
+#if defined(STRATA_VOLTA_PTX)
+    constexpr int kMinCc = 70;
+    const char* const kNeed = "7.0 or newer (a Volta-PTX build: its Volta code is retargeted for the card by the layer)";
+#elif defined(STRATA_EXPERIMENTAL_SM60)
     constexpr int kMinCc = 60;
     const char* const kNeed = "6.0 or newer (this is the experimental Pascal build)";
 #else

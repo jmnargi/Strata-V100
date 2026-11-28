@@ -2,6 +2,8 @@
 // Included directly by inkling2_engine.cu inside namespace strata::inkling2.
 #pragma once
 
+#include "strata/kernels/volta_isa.hpp"
+
 namespace dspark_detail {
 
 __device__ __forceinline__ float bf16_to_f32_d(uint16_t u) {
@@ -476,7 +478,7 @@ __global__ void __launch_bounds__(128, 4) k_dspark_attn_q8_wmma_split(
         const float* __restrict__ K_self, const float* __restrict__ V_self,
         float* __restrict__ split_out,
         int n_head, int n_head_kv, int cap, int n_swa, const int32_t* __restrict__ pos_d, int block_n, float kq_scale, int split_n) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700 && __CUDA_ARCH__ < 750
+#if STRATA_VOLTA_ISA
     // Volta sm_70 native PTX HMMA.884 path: STRIDE=144 (18,432 B = 4 blk/SM, 0-bank-conflict LDS.64),
     // V prefetch overlapping QK^T + K-next prefetch overlapping P*V, STACK:0, direct float2 epilogue.
     constexpr int STRIDE = 144;

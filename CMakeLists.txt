@@ -175,11 +175,31 @@ elseif(STRATA_ENABLE_CUDA)
   # be brought in explicitly for the host-side tests that call cudaMalloc themselves.
   find_package(CUDAToolkit REQUIRED)
   option(STRATA_EXPERIMENTAL_SM60 "community build for GPUs below compute capability 7.5: Pascal sm_60, Volta sm_70 (#236)" OFF)
+  # A CUDA 13 build on a V100: CUDA 13 cannot compile for sm_70, so the image is built for 7.5 or newer and carries
+  # our Volta sequences (mma.m8n8k4, the shorter __dp4a dots, shuffles instead of ldmatrix/cp.async) as PTX.  A layer
+  # that retargets that PTX to sm_70 when the module loads - volta-forever - then runs them on the card's own tensor
+  # cores (docs/VOLTA_FOREVER.md).  Opt-in: the default path of every build is unchanged.
+  option(STRATA_VOLTA_PTX "build for sm_75 or newer but carry the Volta (sm_70) kernels as PTX, for a PTX-retargeting layer such as volta-forever on a V100" OFF)
+  if(STRATA_VOLTA_PTX AND (STRATA_ENABLE_HIP OR STRATA_HIP_GFX906))
+    message(FATAL_ERROR "STRATA_VOLTA_PTX is a CUDA setting: the Volta sequences it selects are CUDA kernels only")
+  endif()
   if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 70 CACHE STRING "CUDA architectures" FORCE)
   endif()
+  # Does the image carry the Volta (sm_70) kernels?  The host may only launch one where it does: a build without them
+  # holds a `__trap()` in their body (src/kernels/cuda/qsa_prompt_attn.cu, STRATA_PA_VOLTA), and a card that reports
+  # 7.0 - or a PTX layer retargeting a sm_75 image for one - would otherwise launch that trap.  "native" / "all" stay
+  # 0: conservative, the generic kernel is used there.
+  set(_strata_host_volta_isa 0)
   foreach(_a IN LISTS CMAKE_CUDA_ARCHITECTURES)
     string(REGEX REPLACE "-.*$" "" _base "${_a}")     # 120-real / 120-virtual are still 120
+    if(_base STREQUAL "70")
+      set(_strata_host_volta_isa 1)
+    endif()
+    if(STRATA_VOLTA_PTX AND NOT (_base MATCHES "^[0-9]+$" AND _base GREATER_EQUAL 75))
+      message(FATAL_ERROR "STRATA_VOLTA_PTX builds for compute capability 7.5 or newer (the PTX a layer retargets for "
+                          "Volta), so CMAKE_CUDA_ARCHITECTURES must list 75 or a newer architecture: got '${_a}'")
+    endif()
     # Volta (sm_70) and newer: the fork's baseline.  The optional native QSA score kernel has a portable
     # FP32-FMA fallback below sm_80, so every arch builds the same sources.
     if(_base STREQUAL "native" OR _base STREQUAL "all" OR _base STREQUAL "all-major")
@@ -207,6 +227,24 @@ elseif(STRATA_ENABLE_CUDA)
                       "CUDA 12.8 crashed on long prompts on these cards (issues #220, #224). Use CUDA 13.0 or newer.")
     endif()
   endforeach()
+  if(STRATA_VOLTA_PTX)
+    # The Volta kernel set a sm_70 build compiles comes from the same sources: the SM60 build already compiles it (and
+    # src/core/device.cu keeps the 7.0 card check for this build, so a Pascal card is still refused).
+    set(STRATA_EXPERIMENTAL_SM60 ON CACHE BOOL "" FORCE)
+    set(_strata_host_volta_isa 1)
+    add_compile_definitions(STRATA_VOLTA_PTX=1)
+    # PTX only.  The Volta instructions the image now carries (mma.m8n8k4) are not valid for a ptxas that targets
+    # sm_75, so nvcc stops at PTX and the retargeting layer's own ptxas (sm_70) assembles it when the module loads.
+    # A SASS target in the list would fail the build, so every entry becomes "<n>-virtual".
+    set(_strata_virtual_archs "")
+    foreach(_a IN LISTS CMAKE_CUDA_ARCHITECTURES)
+      string(REGEX REPLACE "-.*$" "" _base "${_a}")
+      list(APPEND _strata_virtual_archs "${_base}-virtual")
+    endforeach()
+    set(CMAKE_CUDA_ARCHITECTURES "${_strata_virtual_archs}" CACHE STRING "" FORCE)
+    message(STATUS "Strata: STRATA_VOLTA_PTX - the Volta (sm_70) sequences are carried as PTX (${CMAKE_CUDA_ARCHITECTURES}) for a retargeting layer")
+  endif()
+  add_compile_definitions(STRATA_HOST_VOLTA_ISA=${_strata_host_volta_isa})
   if(STRATA_EXPERIMENTAL_SM60)
     # every target sees it: the Pascal / Volta code paths (the Volta prompt attention, PR #600) are compiled into this
     # build only, so the ready-made engine (sm_75+) keeps exactly the code it had
@@ -1710,6 +1748,15 @@ if(STRATA_NATIVE_EXPERTS)
       FetchContent_Populate(strata_llamacpp)
     endif()
     add_subdirectory(${strata_llamacpp_SOURCE_DIR}/ggml ${CMAKE_BINARY_DIR}/ggml EXCLUDE_FROM_ALL)
+  endif()
+  if(STRATA_VOLTA_PTX)
+    # the fetched ggml must carry the Volta MMQ path too: its kernels are read at build time, after this configure
+    include(cmake/strata_volta_ptx_ggml.cmake)
+    if(STRATA_GGML_DIR)
+      strata_volta_ptx_ggml("${STRATA_GGML_DIR}")
+    else()
+      strata_volta_ptx_ggml("${strata_llamacpp_SOURCE_DIR}")
+    endif()
   endif()
   # part of strata_kernels_cpu (the pool calls these and they call its CPU probe: one library, so GNU ld's
   # one-pass static linking has no cycle to resolve)

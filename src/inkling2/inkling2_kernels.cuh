@@ -1,6 +1,8 @@
 // src/inkling2/inkling2_kernels.cuh - CUDA kernels for Inkling-2-Mini (inkling2).
 #pragma once
 
+#include "strata/kernels/volta_isa.hpp"
+
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 700
@@ -3135,7 +3137,7 @@ __device__ __forceinline__ void i8x4_to_h2x2_scaled(uint32_t packed_i8x4, __half
 }
 
 __device__ __forceinline__ void wmma_acc_layout_16x16(int lane, int& r0, int& r1, int& c0, int& c1) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+#if STRATA_PRE_TURING_ISA
     r0 = ((lane & 16) >> 2) + ((lane & 4) << 1) + (lane & 1);
     r1 = r0 + 2;
     c0 = (lane & 8) + (lane & 2);
@@ -3149,7 +3151,7 @@ __device__ __forceinline__ void wmma_acc_layout_16x16(int lane, int& r0, int& r1
 }
 
 __device__ __forceinline__ float wmma_row_max_16(float v) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+#if STRATA_PRE_TURING_ISA
     v = fmaxf(v, __shfl_xor_sync(0xffffffffu, v, 2));
     v = fmaxf(v, __shfl_xor_sync(0xffffffffu, v, 8));
 #else
@@ -3160,7 +3162,7 @@ __device__ __forceinline__ float wmma_row_max_16(float v) {
 }
 
 __device__ __forceinline__ float wmma_row_sum_16(float v) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+#if STRATA_PRE_TURING_ISA
     v += __shfl_xor_sync(0xffffffffu, v, 2);
     v += __shfl_xor_sync(0xffffffffu, v, 8);
 #else
@@ -3171,7 +3173,7 @@ __device__ __forceinline__ float wmma_row_sum_16(float v) {
 }
 
 __device__ __forceinline__ bool wmma_row_leader_16(int lane) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+#if STRATA_PRE_TURING_ISA
     return (lane & 10) == 0;
 #else
     return (lane & 3) == 0;
@@ -3212,7 +3214,7 @@ __device__ __forceinline__ void wmma_acc_to_matA_16x16(
     const uint32_t a0 = f2_to_h2u(p00, p01), a1 = f2_to_h2u(p04, p05);
     const uint32_t b0 = f2_to_h2u(p12, p13), b1 = f2_to_h2u(p16, p17);
     uint32_t* fa_u = reinterpret_cast<uint32_t*>(fa.x);
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 750
+#if STRATA_PRE_TURING_ISA
     const bool want_r1 = (lane & 2) != 0;
     const uint32_t recv0 = __shfl_xor_sync(0xffffffffu, want_r1 ? a0 : b0, 2);
     const uint32_t recv1 = __shfl_xor_sync(0xffffffffu, want_r1 ? a1 : b1, 2);
@@ -3779,7 +3781,7 @@ __global__ void __launch_bounds__(256, 1) k_attn_q8_gqa3_pp_fa2_256_bulk(
         const float* __restrict__ sink, float* __restrict__ split_out,
         int n_head, int n_head_kv, int cap, int bulk_aligned,
         float kq_scale, int T, int bulk_splits, int total_splits) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700 && __CUDA_ARCH__ < 750
+#if STRATA_VOLTA_ISA
     // Volta sm_70 native HMMA.884 path (stride 144 -> 92,160 B SMEM, bit-exact with WMMA path, +19% faster!).
     constexpr int STRIDE = 144;
     extern __shared__ __align__(16) char smem_raw[];
@@ -5102,7 +5104,7 @@ __global__ void __launch_bounds__(128, 4) k_attn_q8_gqa3_verify4_wmma_split(
         float* __restrict__ split_out,
         int n_head, int n_head_kv, int cap, int n_ext,
         const int32_t* __restrict__ pos0, float kq_scale, int split_n) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700 && __CUDA_ARCH__ < 750
+#if STRATA_VOLTA_ISA
     // Volta sm_70 native PTX HMMA.884 path: STRIDE=144 (23,040 B = 4 blk/SM, 0-bank-conflict LDS.64),
     // K-next prefetch overlapping P*V + V prefetch overlapping QK^T, 0 spills (STACK:0), direct float2 epilogue.
     constexpr int STRIDE = 144;
@@ -5848,7 +5850,7 @@ __global__ void __launch_bounds__(128, 4) k_attn_q8_gqa3_verify4_swa_wmma_split(
         float* __restrict__ split_out,
         int n_head, int n_head_kv, int cap, int n_swa, int n_ext,
         const int32_t* __restrict__ pos0, float kq_scale, int split_n) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700 && __CUDA_ARCH__ < 750
+#if STRATA_VOLTA_ISA
     // Volta sm_70 native PTX HMMA.884 SWA verify4: STRIDE=144 (23,040 B = 4 blk/SM, 0-bank-conflict LDS.64),
     // V prefetch overlapping QK^T + K-next prefetch overlapping P*V, STACK:0, direct float2 epilogue.
     constexpr int STRIDE = 144;
