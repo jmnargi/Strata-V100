@@ -76,12 +76,116 @@ long-prompt speed for residency: using Basalt's ranking, a single
 233 tok/s with 4,096. Keep 4,096 for long reads. These runs did not use
 Basalt's per-layer slot weighting or temporary expert-slot borrowing.
 
+**Tuning the expert kernels.** The grouped expert GEMM takes the tensor-core path on sm_70 (`MAYA_DS4_NO_TC=1` is 25 % slower: 390 against 520 tok/s). `DS4_IQ_TC_RM=2` (a block's rows 2 x 64 for sets whose busiest expert has more than 64 rows) reads the 6,220-token review at **537-540 tok/s** against 520 and leaves decode at 46.2. `MAYA_DS4_NO_LIGHT=1` (540), `DS4_IQ_RP=4`, `DS4_IQ_AHEAD=1`, `MAYA_DS4_PREFILL_FUSED=1`, `MAYA_DS4_IQ_PERSIST=1` and `MAYA_DS4_EXPERT_MMQ=1` measured 520-521, i.e. nothing; `HY4_GEMV_OLD=1` is 46.2 tok/s decode. DFly2 with the bias holds 40 % of the experts (8,487 slots) but decodes at 41.6-44.3 tok/s against MTP's 46.3, its drafts costing 8.6-11.3 ms a round.
+
+**What the two numbers stop at.** One x16 card alone reads the review at 241 tok/s and decodes at 22.0 (residency 4 %), so the layer split is worth 2.2x and 2.1x. The pair reads 6,220 tokens in 11.6 s, 5.1 TFLOP/s of the 59 TFLOP the sparse expert GEMMs need, and decodes 3.1 tokens a 61 ms window. The cards take turns by layer, so one is idle while the other computes. Going past this needs one of:
+- alternating layer assignment (layer i on card i % 2) with two micro-batches offset by one layer, both cards
+  computing at once. Alternating alone, without the second micro-batch, was built and measured: 4,264 slots
+  (20 %), 290 tok/s read and 35.6 tok/s decode, against 7,011 / 538 / 46.3 for the contiguous split, because two
+  GPUs that each hold every other layer cannot pack their expert sets as tightly and pay a peer copy per layer.
+  A pipeline would need per-GPU independent slot counts first;
+- expert parallel (each layer's experts split by card, dense weights replicated on both): 6 GB of dense + 10 GB of experts a card fits in 16 GB, every layer uses both cards, about 2x, but the members need the partial expert plan the TP path refuses today.
+
 **Borrow prompt scratch:** set `HY4_SCRATCH_BORROW=1` and
 `HY4_SCRATCH_BORROW_CHUNK=4096` with `--chunk 1024` on a layer split.
 Long prompts temporarily make room by lending expert slots; the engine
 reloads the displaced experts before decode. On the same 6,220-token
 review and local routing profile, fixed 1,024 took 80.2 s, borrowing 50.1 s,
 and fixed 4,096 took 26.5 s (one run each, not interleaved).
+
+**Bias the picks toward the experts in VRAM.** `--route-resident <bonus>`
+adds `bonus` (in probability) to an expert's router score when that expert
+has a VRAM slot, before the top 16 are taken; the weights stay the expert's
+own sigmoid, so an expert the bonus brings in is used with its smaller
+weight. `0` is the default and the model's own routing; any other value
+changes which experts compute and therefore the output. The expert profile
+(`--profile`) still decides which experts get the slots; the bias decides
+how often they are picked.
+
+On this pair at 32K, int8 KV, `--chunk 1024`, a two-prompt local profile
+and MTP (`--draft 4`), the same 192-token coding reply, warm, interleaved:
+
+|`--route-resident`|decode|a verify round|CPU lane|
+|---:|---:|---:|---:|
+|0|17.0–18.0 tok/s|190–202 ms|57.0 % (without MTP)|
+|0.04|26.0–26.7 tok/s|131–134 ms|23.1 % (without MTP)|
+|0.08|29.9 tok/s|115 ms|—|
+|0.15|38.2 tok/s|87 ms|—|
+|0.30|43.5 tok/s|76 ms|—|
+
+A 6,220-token source review at `--chunk 4096` read at 115 tok/s with the
+bias off, 369 tok/s at 0.15 and 467 tok/s at 0.30, because the prompt
+chunks stream 15,198 experts instead of 33,267. `--reserve-gb 0.35` with
+the bias at 0.04 held 7,298 slots (35 %) and decoded at 28.2 tok/s; that
+leaves 0.35 GB free a card, so it was measured but not made a default.
+
+Quality: four short prompts (arithmetic, a capital, an explanation, a
+definition) and the 192-token code reply were generated at 0 and at 0.30.
+All were correct, with the same answer or slightly shorter wording at 0.30.
+That is a smoke check, not a quality benchmark: a large bonus turns the
+router into "prefer a resident expert" even where the model ranked a
+CPU-lane one much higher, so start at 0.04–0.15 and compare outputs there.
+`--profile-out` now writes the profile at the end of a `--mtp` run too.
+
+**Drop the tail's CPU-lane picks:** `--route-skip R` gives weight 0 to a
+pick ranked R or lower that is on the CPU lane, so neither the lane nor a
+streamed chunk runs it (the sum is not renormalised). It is off by default
+(0) and changes the output. On this pair at `--route-resident 0.15`, a
+192-token reply's verify round went from 83.6 ms at 0 to 79.3 ms at 7 and
+67–82 ms at 5, i.e. 39.8 tok/s without it against 40.3 (7) and 36.2–43.8
+(5) with it: run-to-run noise, not an established gain, because the bias
+has already moved the traffic to the resident experts. The four smoke
+prompts above stayed correct at 7. Keep it for machines whose lane share
+is high (no profile, or a small VRAM budget).
+
+**Per-layer slot weighting was tried and dropped.** Allocating the same
+total slots by each layer's profile counts (Basalt's `layer_slots` idea)
+read a two-prompt profile as nearly flat, fit 6,847 slots against 7,011
+uniform because the uneven counts pack worse across the layer split, and
+measured no decode gain (33.8–39.1 against 36.6–38.3 tok/s). A longer,
+harness-specific trace may change that; the uniform plan stays.
+
+**Two I/O experiments did not pay.** Engram rows are random 4 KB pages of
+a 63.5 GB table, so each first touch pulls in the kernel's readahead
+window; `MADV_RANDOM` on the table's range measured 47.94 against 47.92
+tok/s over 320 tokens, with 0 MB read from the NVMe in either run (the hot
+pages stay cached after the first pass), so it was reverted. The
+copy/sets pipeline above first trapped (`SIGILL`) because its send lambda
+fell off the end after `CK(...)` (a bool-returning lambda with no
+`return true`); an explicit return fixed it, and six runs then agreed to
+0.1 s.
+
+**The MTP window is 3 drafts, not 4.** With the bias on, the window size
+trades acceptance against expert work per round: every draft row is a full
+row of the verify forward and re-runs 16 experts a layer. On this pair, a
+192-token reply, warm, interleaved: `--draft 3` 41.9 / 41.8 tok/s at
+`--route-resident 0.15` and 46.3 / 46.3 at 0.30 (verify 73 / 61 ms, 3.3 /
+3.1 tokens a round); `--draft 4` 39.7 / 39.7 and 45.7 / 45.8 (verify 84 /
+72 ms, 3.6 tokens a round); `--draft 2` 39.6 (62 ms, 2.6); `--draft 6`
+36.9 (106 ms, 4.3). `--draft 3` is the setting to use with the bias; 5 %
+more at 0.15, equal at 0.30. `--draft-floor` 0.2/0.6 and `HY4_MTP_EAGER=1`
+measured 36.2/39.9/39.4 tok/s against 39.8, i.e. nothing.
+
+`--route-skip-draft R` (the tail skip on the speculative rows only, row 0
+the real token) is also neutral here: 39.6 (6) and 39.4 (8) against 39.8
+(off), 31.2 (4, one noisy run). It is off by default.
+
+**A bigger prompt chunk is slower once the bias is on.** At
+`--route-resident 0.30`, the 6,220-token review read at 483 tok/s with
+`--chunk 4096` and at 302 / 382 tok/s with `--chunk 8192`; the larger
+chunk held fewer experts (20,783 streamed against 15,198) and the window
+after it ran at 370 ms against 79 ms. `--chunk 1024` with
+`HY4_SCRATCH_BORROW=1 HY4_SCRATCH_BORROW_CHUNK=4096` reads the same
+prompt at **521.0 tok/s** (10,376 streamed, two runs within 0.1 s), and
+keeps the higher residency for decode. The streamed passes now run in two
+halves over the same pinned and device staging, the next half's copy on a
+side stream while this half's sets run, and the host fills the next half's
+bounce while the sets run: 490.9 → 506.5 tok/s for the bounce overlap and
+506.5 → 521.0 for the copy/sets overlap, with chunk 4096 at 483 (467
+before). 2.7 s of the read is still the bounce copies themselves.
+`HY4_STAGE2=0` keeps the serial passes. `--reserve-gb 0.35`
+with `--chunk 4096` fails in the warm-up (`the light sets' scratch
+(64 MB) failed`): keep at least 0.75 GB a card there.
 
 **DFly2:** pass `--dfly /path/to/Hy4-Flash-Maya-S-drafter.dfly2 --draft 5`
 instead of `--mtp`. This is opt-in and uses layer split. It used 0.97 GB

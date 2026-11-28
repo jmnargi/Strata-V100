@@ -13,6 +13,15 @@
 // the CPU lane from the model's file, --cpu-threads workers (default: a physical core each but the first); a prompt's
 // chunk sends them to the GPU instead where this PC's PCIe is measured faster than its CPU.  --profile: an expert
 // profile (uint32 [layers][experts] routings) - each layer's most routed experts are the ones kept in VRAM;
+// --route-resident: the picks prefer the experts that are in VRAM - an expert with a slot gets that much probability
+// added to the router's own score before the top n_used (its weight is still its own sigmoid, so it enters the sum
+// smaller); 0 (the default) is the model's own routing.  It changes which experts compute, and so the output.
+// --route-skip R: a pick ranked R or lower (0-based) that is on the CPU lane gets weight 0 - its part is not run and
+// the sum is not renormalised. 0 (the default) computes every pick.  Costs a little accuracy; the low ranks carry
+// the traffic, the tail does not.
+// --route-skip-draft R: --route-skip's rank for the speculative rows of a token window only (row 0 is the real token).
+// The window's own argmax decides which drafts are kept, so the accepted tokens are what this cheaper window computes;
+// they can differ from a full-window run, and that has to be compared on the answers.
 // --profile-out: where the routings this run counts (with the profile's) are written, after each request when serving
 // and at the end otherwise.
 //
@@ -1065,6 +1074,9 @@ int main(int argc, char** argv) {
             o.prefill_chunk = v == "auto" ? 0 : std::atoi(v.c_str());
         }
         else if (a == "--vram-experts") o.vram_experts = std::atof(next().c_str());
+        else if (a == "--route-resident") o.route_resident = std::atof(next().c_str());
+        else if (a == "--route-skip") o.route_skip = std::atoi(next().c_str());
+        else if (a == "--route-skip-draft") o.route_skip_draft = std::atoi(next().c_str());
         else if (a == "--cpu-threads") o.cpu_threads = std::atoi(next().c_str());
         else if (a == "--profile") o.profile = next();
         else if (a == "--tp") {
@@ -1212,6 +1224,10 @@ int main(int argc, char** argv) {
                      "(%.1f tokens a round); a round: drafts %.1f ms, verify %.1f ms\n", out.size(), t2 - t1,
                      out.size() / (t2 - t1), rounds, acc, off, rounds ? (double) out.size() / rounds : 0.0,
                      rounds ? 1e3 * t_draft / rounds : 0.0, rounds ? 1e3 * t_verify / rounds : 0.0);
+        {
+            std::string perr;
+            if (!m.save_profile(perr)) std::fprintf(stderr, "maya-hy4: the expert profile: %s\n", perr.c_str());
+        }
         return 0;
     }
     for (int i = 0; i < gen; ++i) {

@@ -31,6 +31,14 @@ struct Options {
                                   // 4096, 2048 or 1024, the largest the VRAM holds beside the model and the pictures
     double vram_experts = 1.0;    // the share of each layer's routed experts kept in VRAM at most (the plan takes less
                                   // when they do not fit; the rest run on the CPU lane)
+    double route_resident = 0.0;  // --route-resident: a bonus in probability added to an expert in a VRAM slot when the
+                                  // router picks (0: the model's own routing).  The weights stay the true sigmoids; an
+                                  // expert the bonus brings in is used with its own (smaller) weight
+    int route_skip = 0;           // --route-skip R: a pick at rank R or below that is on the CPU lane is left out (its
+                                  // weight 0: the sum is not renormalised). 0: every pick is computed
+    int route_skip_draft = 0;     // --route-skip-draft R: the same, for the speculative rows of a token window only (row
+                                  // 0 is the real token): a draft whose tail is dropped still verifies as the model's
+                                  // own pick, so the cheaper window decides which drafts to keep. 0: route_skip
     int cpu_threads = -1;         // the CPU lane's workers besides the caller (-1: one a physical core but the first)
     int tp = -1;                  // tensor parallel over tp GPUs of one kind (0 / 1: the layer split; -1: auto -
                                   // the largest group of one kind when it holds everything; hy4_tp.hpp)

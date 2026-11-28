@@ -319,6 +319,8 @@ struct Gpu {
     uint8_t* stage = nullptr;   // (a prompt's streamed experts: kStage slots of the largest blob)
     double h2d_gbs = 10.0;      // (... the copies to it, GB/s: measured at the load)
     int* pmap = nullptr;        // (... each expert's slot in them, -1: not this pass's)
+    int* pmap2 = nullptr;       // (... the second half's map, when the passes are pipelined: the other half of `stage`)
+    cudaEvent_t evst[2] = {nullptr, nullptr};   // (... each half's copy to the device landed)
     // ... and its attention as GEMMs: the scores, the probabilities (F16), a ring's keys in order, the picks' mask
     float *sS = nullptr, *dmask = nullptr;
     uint16_t *sP = nullptr, *kbuf = nullptr;
@@ -1825,7 +1827,11 @@ struct Model::Impl {
             return false;
         }
         gp.wband_n = kBand;
+        if (gp.s2 == nullptr) CK(cudaStreamCreateWithFlags(&gp.s2, cudaStreamNonBlocking));
+        for (int i = 0; i < 2; ++i)
+            if (gp.evst[i] == nullptr) CK(cudaEventCreateWithFlags(&gp.evst[i], cudaEventDisableTiming));
         return gp.alloc(gp.x, T * hc * E, err) && gp.alloc(gp.cur, T * E, err) && gp.alloc(gp.post, T * hc, err) &&
+               gp.alloc(gp.pmap2, g.n_expert, err) &&
                gp.alloc(gp.xa, T * E, err) && gp.alloc(gp.qa, T * g.q_lora, err) && gp.alloc(gp.qr, T * g.q_lora, err) &&
                gp.alloc(gp.q, T * H * g.k_mla, err) && gp.alloc(gp.qcat, T * H * g.kv_row(), err) &&
                gp.alloc(gp.kvr, T * g.kv_row(), err) && gp.alloc(gp.o, T * H * g.kv_lora, err) &&
@@ -2853,14 +2859,80 @@ struct Model::Impl {
         cudaStream_t s = gp.s;
         std::vector<char> used((size_t) ne, 0);
         for (int i = 0; i < T * nu; ++i)
-            if (l.slot_of[(size_t) h_ids[i]] < 0) used[(size_t) h_ids[i]] = 1;
+            if (l.slot_of[(size_t) h_ids[i]] < 0 && h_w[i] != 0.0f) used[(size_t) h_ids[i]] = 1;
         std::vector<int> u;
         for (int e = 0; e < ne; ++e)
             if (used[(size_t) e]) u.push_back(e);
         const CpuExperts& cx = l.cex;
         const size_t gb = cx.g_stride, db = cx.d_stride;
-        for (size_t p0 = 0; p0 < u.size(); p0 += (size_t) kStage) {
-            const int np = (int) std::min(u.size() - p0, (size_t) kStage);
+        // Two half-passes over the same pinned and device staging (kStage between them): the next half's copy runs on
+        // a side stream while this half's sets run on the main one, so the copy of a chunk's experts and their compute
+        // overlap.  HY4_STAGE2=0 keeps the serial passes.
+        static const bool pipe = !(std::getenv("HY4_STAGE2") && std::atoi(std::getenv("HY4_STAGE2")) == 0);
+        if (pipe && gp.pmap2 != nullptr && gp.s2 != nullptr && u.size() > (size_t) kStage / 2) {
+            const size_t n = u.size();
+            const int step = kStage / 2;
+            const int npass = (int) ((n + (size_t) step - 1) / (size_t) step);
+            auto dev = [&](int b) { return gp.stage + (size_t) b * step * l.blob; };
+            auto map = [&](int b) { return b ? gp.pmap2 : gp.pmap; };
+            auto hbuf = [&](int b) { return h_stage + (size_t) b * step * l.blob; };
+            auto fill2 = [&](int i) {
+                const int b = i & 1;
+                const size_t p0 = (size_t) i * (size_t) step;
+                const int np = (int) std::min(n - p0, (size_t) step);
+                const double tc = now_s();
+                lane->parallel_for(np * 3, [&](int it) {
+                    const int k = it / 3, role = it % 3, e = u[p0 + (size_t) k];
+                    uint8_t* dst = hbuf(b) + (size_t) k * l.blob + l.tr[role];
+                    const uint8_t* src = role == 0 ? cx.gate + (size_t) e * gb : role == 1 ? cx.up + (size_t) e * gb
+                                                                                           : cx.down + (size_t) e * db;
+                    std::memcpy(dst, src, role == 2 ? db : gb);
+                });
+                st.stream_ms += (now_s() - tc) * 1e3;
+            };
+            auto send = [&](int i) {
+                const int b = i & 1;
+                const size_t p0 = (size_t) i * (size_t) step;
+                const int np = (int) std::min(n - p0, (size_t) step);
+                cudaError_t e = cudaMemcpyAsync(dev(b), hbuf(b), (size_t) np * l.blob, cudaMemcpyHostToDevice, gp.s2);
+                if (e != cudaSuccess) {
+                    err = std::string("the streamed experts' copy: ") + cudaGetErrorString(e);
+                    return false;
+                }
+                for (int k = 0; k < ne; ++k) h_pmap[k] = -1;
+                for (int k = 0; k < np; ++k) h_pmap[u[p0 + (size_t) k]] = k;
+                e = cudaMemcpyAsync(map(b), h_pmap, sizeof(int) * ne, cudaMemcpyHostToDevice, gp.s2);
+                if (e != cudaSuccess) {
+                    err = std::string("the streamed experts' map: ") + cudaGetErrorString(e);
+                    return false;
+                }
+                e = cudaEventRecord(gp.evst[b], gp.s2);
+                if (e != cudaSuccess) {
+                    err = std::string("the streamed experts' event: ") + cudaGetErrorString(e);
+                    return false;
+                }
+                return true;
+            };
+            fill2(0);
+            if (!send(0)) return false;
+            for (int i = 0; i < npass; ++i) {
+                const int b = i & 1;
+                const size_t p0 = (size_t) i * (size_t) step;
+                const int np = (int) std::min(n - p0, (size_t) step);
+                CK(cudaStreamWaitEvent(s, gp.evst[b], 0));
+                if (!experts_sets(l, gp, T, err, map(b), dev(b), np, true)) return false;
+                st.streamed += np;
+                if (i + 1 < npass) {
+                    fill2(i + 1);   // (the host fills this half while the GPU runs the one above)
+                    if (!send(i + 1)) return false;   // (the other half of the staging)
+                }
+            }
+            CK(cudaStreamSynchronize(s));
+            return true;
+        }
+        // (the bounce for the next pass is filled while this pass's sets run on the GPU: the pinned image is free as
+        //  soon as its copy to the device has landed, and experts_sets waits on that copy itself)
+        auto fill = [&](size_t p0, int np) {
             const double tc = now_s();
             lane->parallel_for(np * 3, [&](int it) {
                 const int i = it / 3, role = it % 3, e = u[p0 + (size_t) i];
@@ -2870,12 +2942,18 @@ struct Model::Impl {
                 std::memcpy(dst, src, role == 2 ? db : gb);
             });
             st.stream_ms += (now_s() - tc) * 1e3;
+        };
+        if (!u.empty()) fill(0, (int) std::min(u.size(), (size_t) kStage));
+        for (size_t p0 = 0; p0 < u.size(); p0 += (size_t) kStage) {
+            const int np = (int) std::min(u.size() - p0, (size_t) kStage);
             CK(cudaMemcpyAsync(gp.stage, h_stage, (size_t) np * l.blob, cudaMemcpyHostToDevice, s));
             for (int e = 0; e < ne; ++e) h_pmap[e] = -1;
             for (int i = 0; i < np; ++i) h_pmap[u[p0 + (size_t) i]] = i;
             CK(cudaMemcpyAsync(gp.pmap, h_pmap, sizeof(int) * ne, cudaMemcpyHostToDevice, s));
             if (!experts_sets(l, gp, T, err, gp.pmap, gp.stage, np, true)) return false;
-            CK(cudaStreamSynchronize(s));   // (the bounce and the map are the next pass's)
+            if (p0 + (size_t) np < u.size())
+                fill(p0 + (size_t) np, (int) std::min(u.size() - p0 - (size_t) np, (size_t) kStage));
+            CK(cudaStreamSynchronize(s));   // (the device stage and the map are the next pass's)
             st.streamed += np;
         }
         return true;
@@ -2923,7 +3001,8 @@ struct Model::Impl {
             const bool lead = l.tpm <= 0;   // (the stats and the profile: one member's count)
             ok = mm(gp, l.router, gp.xf, E, T, gp.rl, g.n_expert);
             dbg("ffn_moe_logits", l.il, gp, gp.rl, T, g.n_expert);
-            k::router(gp.rl, T, g.n_expert, l.router_b, nu, g.w_norm, g.w_scale, gp.ids, gp.rw, s);
+            k::router(gp.rl, T, g.n_expert, l.router_b, nu, g.w_norm, g.w_scale, gp.ids, gp.rw, s, l.slot_d,
+                      (float) o.route_resident, o.route_skip, T <= W ? o.route_skip_draft : 0);
             if (dump) {
                 cudaStreamSynchronize(s);
                 std::vector<int> hid((size_t) T * nu);
@@ -2998,7 +3077,7 @@ struct Model::Impl {
                     int n_ent = 0;
                     std::vector<char> used((size_t) g.n_expert, 0);
                     for (int i = 0; i < T * nu; ++i)
-                        if (l.slot_of[(size_t) h_ids[i]] < 0) {
+                        if (l.slot_of[(size_t) h_ids[i]] < 0 && h_w[i] != 0.0f) {
                             ++n_ent;
                             used[(size_t) h_ids[i]] = 1;
                         }
@@ -3025,7 +3104,9 @@ struct Model::Impl {
                 for (int t = 0; t < T; ++t)
                     for (int j = 0; j < nu; ++j) {
                         const int e = h_ids[t * nu + j];
-                        if (l.slot_of[(size_t) e] < 0) lane_entries.push_back({t, e, h_w[t * nu + j]});
+                        // (--route-skip: a tail pick the router zeroed is not run at all)
+                        if (l.slot_of[(size_t) e] < 0 && h_w[t * nu + j] != 0.0f)
+                            lane_entries.push_back({t, e, h_w[t * nu + j]});
                     }
                 const double tc = now_s();
                 cpu_experts(*lane, l.cex, lane_entries, h_lat, T, h_cpu);

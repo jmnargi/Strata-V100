@@ -79,8 +79,15 @@ void add(float* y, const float* x, size_t n, cudaStream_t s);
 
 /// The router: logits [T][n_exp] -> sigmoid, top n_used by sigmoid + bias (bias may be null), weights = the picks'
 /// sigmoids (/ their sum when norm) * scale -> ids [T][n_used], w [T][n_used]
+/// slot (null: the model's routing), bonus: an expert whose slot is a VRAM one (>= 0) gets `bonus` added to its
+/// sigmoid + bias when the picks are made - the weights are still its own sigmoid, so it enters the sum smaller;
+/// the picks prefer the residents within `bonus` of the cutoff (0: nothing changes)
+/// skip_rank: a pick at this rank or below that is on the CPU lane (slot < 0) gets weight 0 (its part is not run,
+/// the sum is not renormalised); 0: every pick counts
+/// skip_draft: the same rank for rows after the first of the window (the speculative ones); 0: skip_rank for them too
 void router(const float* logits, int T, int n_exp, const float* bias, int n_used, bool norm, float scale, int* ids,
-            float* w, cudaStream_t s);
+            float* w, cudaStream_t s, const int* slot = nullptr, float bonus = 0.0f, int skip_rank = 0,
+            int skip_draft = 0);
 /// A window's expert entries grouped by expert (ds4_iq's grouped Args): entry e = t * 16 + j (j < n_used) of ids;
 /// grp_ptr[g] = base + expert * stride, grp_start[g .. g + 1] its entries in grp_ent, *n_groups
 /// slot (null: none): each expert's slot among the VRAM ones (base + slot stride), -1 for the CPU lane's - those entries
