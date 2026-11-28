@@ -51,6 +51,7 @@ class ChatTemplate:
         env.filters["tojson"] = tojson
         env.globals["raise_exception"] = raise_exception
         self.source = Path(path).read_text(encoding="utf-8")
+        self.hy4 = bool(re.search(r"set HYTK\s*=", self.source) and "reasoning_mode_token" in self.source)
         self.template = env.from_string(self.source)
         self.caps = self._detect_caps()
 
@@ -62,6 +63,10 @@ class ChatTemplate:
                     if i == len(messages) - 1 or os.environ.get("STRATA_KEEP_EMPTY_TURNS") == "1" or not (isinstance(m, dict) and m.get("role") == "assistant"
                                                       and not _text_of(m.get("content")).strip()
                                                       and not _has_image(m.get("content")) and not m.get("tool_calls"))]
+        if self.hy4:
+            effort = kwargs.get("reasoning_effort")
+            off = kwargs.get("enable_thinking") is False or effort in ("none", "off", "no_think")
+            kwargs["reasoning_effort"] = "no_think" if off else "high"
         return self.template.render(messages=messages, tools=tools, add_generation_prompt=add_generation_prompt,
                                     **kwargs)
 

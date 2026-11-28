@@ -3828,8 +3828,11 @@ class Service:
         self.tool_call_recovery = False                   # opt-in: tool calls in forms next to the template's
         self.images = None                                # serve/images.py's ImageGen when the config has "images"
         self.restore_after_load = None                    # a session file an image job saved before it unloaded
-        self.stop_ids = set(tokenizer.encode(IM_END, parse_special=True) +
-                            tokenizer.encode("<|endoftext|>", parse_special=True))
+        if getattr(tokenizer, "pre", None) == "hy_v4":
+            self.stop_ids = {tokenizer.special_ids["eos"]}
+        else:
+            self.stop_ids = set(tokenizer.encode(IM_END, parse_special=True) +
+                                tokenizer.encode("<|endoftext|>", parse_special=True))
         # #567: a prompt re-encodes only what follows the last special token it shares with a recent prompt (the
         # same ids as a full encode: tools/strata_tokenizer.py PromptEncoder).  Tokenizers without resume points
         # encode in full.
@@ -4938,7 +4941,10 @@ class Service:
                                 "image_counts": image_counts}
         if req is not None and req.get("strata_prefix") is not None:
             req["strata_prefix"] = self.resolve_prefix(req["strata_prefix"], messages, tools, kwargs, ids, bool(images))
-        return ids, kwargs.get("enable_thinking", True) is not False, max_new
+        thinking = kwargs.get("enable_thinking", True) is not False
+        if self.template.hy4 and kwargs.get("reasoning_effort") in ("none", "off", "no_think"):
+            thinking = False
+        return ids, thinking, max_new
 
     PREFIX_END = "\u0001strata-prefix-end\u0001"          # marks where a message's shared part ends in the rendered prompt
 
@@ -8584,7 +8590,13 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
             tokens[i] = t
         merges = (tpath / "merges.txt").read_text(encoding="utf-8").split("\n")
         types = json.loads((tpath / "token_type.json").read_text())
-        tok = ST.Tokenizer(tokens, merges, types)
+        meta_path = tpath / "tokenizer.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+        if meta.get("pre") == "hy_v4":
+            tok = ST.Tokenizer(tokens, merges, types, pre="hy_v4", special_ids=meta.get("special_ids"),
+                               aliases={int(i): text for i, text in meta.get("aliases", {}).items()})
+        else:
+            tok = ST.Tokenizer(tokens, merges, types)
     hub = hub_from_config(cfg, a.mcp_config)            # before the minutes of loading: a bad entry stops here
     if a.offline and (hub is not None or cfg.get("before_load") or a.before_load):
         ap.error("--offline requires MCP servers and before_load commands to be disabled in this profile")

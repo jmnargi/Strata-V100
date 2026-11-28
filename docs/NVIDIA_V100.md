@@ -9,6 +9,88 @@ It also needs glibc 2.38 or newer and libstdc++ with `GLIBCXX_3.4.32`.
 Build from source for other platforms or a mix of GPU architectures. The measurements
 below state their hardware and do not establish performance on every V100 system.
 
+## Hy4-Flash Maya-S
+
+Hy4-Flash uses a separate, opt-in `strata-hy4` CUDA engine. It does not change
+the Qwen engine or its V100 settings. The Hy4 engine and its Volta tensor-core
+expert kernels come from [Project Maya](https://github.com/mw00/project-maya/tree/7a18c827ff9daeafba43244346548a66367482b5).
+
+```sh
+cmake -S . -B build-hy4 -DSTRATA_ENABLE_CUDA=ON -DSTRATA_BUILD_HY4=ON -DCMAKE_CUDA_ARCHITECTURES=70
+cmake --build build-hy4 --target strata-hy4
+python tools/hy4/pack_gguf.py --model /path/to/Maya-S
+```
+
+Keep both Maya-S GGUF shards in that folder. The pack indexes the weights in
+place instead of copying them; the 63 GB Engram table stays on the SSD.
+To serve text through Strata's API, save this configuration with absolute paths:
+
+```json
+{
+  "exe": "/path/to/strata-v100/build-hy4/strata-hy4",
+  "args": ["--pack", "/path/to/Maya-S/maya-hy4", "--gpus", "0,1",
+           "--tp", "0", "--max-context", "32768", "--kv", "q8", "--vision", "off"],
+  "tokenizer": "/path/to/Maya-S/maya-hy4/tokenizer",
+  "model_name": "hy4-flash-maya-s"
+}
+```
+
+Start it with `python -m serve.server --engine strata --config hy4.json --port 8091`.
+Use the Hy4 engine's own options, not the Qwen engine's `--spec`, KV or pipeline
+flags. The Maya-S DFlash2 file is not used by this engine.
+
+On two V100 PCIe 16 GB cards at 32K context, layer split loaded in 27.5 s
+with 29% of routed experts in VRAM. A 192-token code review decoded at
+7.9–9.8 tok/s without drafting and 11.0–11.3 tok/s with MTP (`--draft 4`,
+265/344 drafts accepted). These are two requests per mode, not a general
+throughput claim. Forced tensor parallel needed 27.93 GB per card even
+with Q8 KV and did not fit.
+
+For MTP, pass `--mtp /path/to/Hy4-Flash-mtp-BF16.gguf` to the packer and
+add `"--mtp", "--draft", "4"` to the engine arguments. This is Tencent's
+separate MTP GGUF, not the `.dfly2` file in the Maya-S folder.
+
+**Place hot experts first.** Add `--profile-out /path/to/hy4-routes.bin` to
+the engine arguments and run representative requests. Then restart with
+`--profile /path/to/hy4-routes.bin`. To keep learning from subsequent
+requests, pass both flags with the same path after the first run. Use a
+separate profile per quant. This is Project Maya's placement mechanism:
+it ranks experts per layer by routes seen, without changing the router.
+On two coding prompts excluded from a small calibration, the same 4,059
+VRAM slots hit 47–51% of routes instead of 22–23% with expert-ID placement.
+
+At 32K on this pair, `--kv q8` stored the 512-value MLA latent in int8
+with FP16 scales and kept the 64 rotary values in FP16. Compared to FP16
+rows, it reduced the trunk cache and index from 1.30 to 0.73 GB and
+raised the resident expert count from 4,059 to 4,264 with MTP and a
+4,096-token prompt chunk. This changes the cache precision and can change
+generated tokens.
+
+For short coding turns on these cards, try `--chunk 1024` with int8 KV,
+MTP and a local route profile. On two held-out 192-token coding replies,
+it held 7,339 experts, hit 70–74% of routes and decoded at 19.5–23.4 tok/s.
+With [Basalt's Hy4 ranking](https://github.com/jesdga95/basalt/blob/8a5aa45a51a88455afcb0d58cafccc69f96b4e5b/data/profiles/hy4flash-42x512.prof)
+at the same settings, decode was 17.8–19.6 tok/s. The smaller chunk trades
+long-prompt speed for residency: using Basalt's ranking, a single
+6,220-token source review read at 81 tok/s with 1,024-token chunks versus
+233 tok/s with 4,096. Keep 4,096 for long reads. These runs did not use
+Basalt's per-layer slot weighting or temporary expert-slot borrowing.
+
+**Borrow prompt scratch:** set `HY4_SCRATCH_BORROW=1` and
+`HY4_SCRATCH_BORROW_CHUNK=4096` with `--chunk 1024` on a layer split.
+Long prompts temporarily make room by lending expert slots; the engine
+reloads the displaced experts before decode. On the same 6,220-token
+review and local routing profile, fixed 1,024 took 80.2 s, borrowing 50.1 s,
+and fixed 4,096 took 26.5 s (one run each, not interleaved).
+
+**DFly2:** pass `--dfly /path/to/Hy4-Flash-Maya-S-drafter.dfly2 --draft 5`
+instead of `--mtp`. This is opt-in and uses layer split. It used 0.97 GB
+on the head GPU and left room for 8,897 experts, against 7,339 with MTP.
+On one fresh 192-token coding reply at 32K with int8 KV, DFly2 and both
+plain controls emitted identical tokens. DFly2 accepted 122 of 199 drafts
+and decoded at 22.4 tok/s against 21.0–22.5 tok/s without drafting; no
+consistent decode improvement is established.
+
 ## Two cards, one request: what the layer split costs (2026-11-18)
 
 [sfnx](https://github.com/johnfink8/sfnx) is a separate engine for this same model
