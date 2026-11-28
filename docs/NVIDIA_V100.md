@@ -82,6 +82,13 @@ at 2,048**, and every row's first generated token id matched across the four arm
 no arithmetic). The daily profile sets it since 2026-11-19; before that it was opt-in with a
 component-only measurement.
 
+The Volta FP16 expert kernel skips tensor-core work for the padding-only
+16-row fragments at the end of an expert's routed rows. With 16 experts
+and about six routed rows per expert on two PCIe V100-16GB cards, the IQ2_S
+gate/up projection took 220 → 187 µs and IQ4_NL down took 130 → 112 µs.
+All 24 cross-build comparisons over four formats, three routed shapes and
+both cards were bitwise equal. These timings are for the kernel alone.
+
 ## Decode: what the window and its cap allow (2026-11-18)
 
 `STRATA_VERIFY_ECAP=16`, which the daily profile sets for about +11 % decode, also caps the window's
