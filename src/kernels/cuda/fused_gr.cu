@@ -1724,7 +1724,25 @@ __global__ void __launch_bounds__(THREADS, 2) gr_fused_v100_kernel(GrMulti m, un
 }
 
 static bool hc_v100_fused_on() {
-    static const bool on = [] { const char* v = std::getenv("STRATA_HC_V100_FUSED"); return v == nullptr || std::atoi(v) != 0; }();
+    // Off by default: the fused read ends with a grid-wide spin barrier (wait until all V_NG row groups are done,
+    // "the wait until all 20 groups are finished"), which needs every VF_BLOCKS block resident at once.  When another
+    // stream's kernel shares the card inside the same window (the MTP drafter, the forked shared expert, a helper),
+    // a block can be left waiting for SMs it cannot get and the window never finishes: on this rig's two-V100 service
+    // the fused read stalled at layer 17 and the engine exited with "verify: timed out".  The two-launch read
+    // (gr_down_v100_kernel's per-group ticket, then gr_up_fast_kernel) has no such barrier and is the safe default.
+    static const bool on = [] {
+        const char* v = std::getenv("STRATA_HC_V100_FUSED");
+        return v != nullptr && std::atoi(v) != 0;
+    }();
+    if (on) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            std::fprintf(stderr, "strata hc: STRATA_HC_V100_FUSED=1: the fused read spins until all %d blocks are "
+                                 "scheduled; do not use it when another stream runs on the same card "
+                                 "(STRATA_HC_V100_FUSED=0 keeps the two-launch read)\n", VF_BLOCKS);
+        }
+    }
     return on;
 }
 static unsigned* vf_counters(const void* key) {
