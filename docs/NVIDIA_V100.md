@@ -61,7 +61,7 @@ it ranks experts per layer by routes seen, without changing the router.
 On two coding prompts excluded from a small calibration, the same 4,059
 VRAM slots hit 47–51% of routes instead of 22–23% with expert-ID placement.
 
-At 32K on this pair, `--kv q8` stored the 512-value MLA latent in int8
+At 32K on two V100-16GB cards, `--kv q8` stored the 512-value MLA latent in int8
 with FP16 scales and kept the 64 rotary values in FP16. Compared to FP16
 rows, it reduced the trunk cache and index from 1.30 to 0.73 GB and
 raised the resident expert count from 4,059 to 4,264 with MTP and a
@@ -80,7 +80,7 @@ Basalt's per-layer slot weighting or temporary expert-slot borrowing.
 
 **Tuning the expert kernels.** The grouped expert GEMM takes the tensor-core path on sm_70 (`MAYA_DS4_NO_TC=1` is 25 % slower: 390 against 520 tok/s). `DS4_IQ_TC_RM=2` (a block's rows 2 x 64 for sets whose busiest expert has more than 64 rows) reads the 6,220-token review at **537-540 tok/s** against 520 and leaves decode at 46.2. `MAYA_DS4_NO_LIGHT=1` (540), `DS4_IQ_RP=4`, `DS4_IQ_AHEAD=1`, `MAYA_DS4_PREFILL_FUSED=1`, `MAYA_DS4_IQ_PERSIST=1` and `MAYA_DS4_EXPERT_MMQ=1` measured 520-521, i.e. nothing; `HY4_GEMV_OLD=1` is 46.2 tok/s decode. DFly2 with the bias holds 40 % of the experts (8,487 slots) but decodes at 41.6-44.3 tok/s against MTP's 46.3, its drafts costing 8.6-11.3 ms a round.
 
-**What the two numbers stop at.** One x16 card alone reads the review at 241 tok/s and decodes at 22.0 (residency 4 %), so the layer split is worth 2.2x and 2.1x. The pair reads 6,220 tokens in 11.6 s, 5.1 TFLOP/s of the 59 TFLOP the sparse expert GEMMs need, and decodes 3.1 tokens a 61 ms window. The cards take turns by layer, so one is idle while the other computes. Going past this needs one of:
+**What the two numbers stop at.** One x16 card alone reads the review at 241 tok/s and decodes at 22.0 (residency 4 %), so the layer split is worth 2.2x and 2.1x. The two cards read 6,220 tokens in 11.6 s, 5.1 TFLOP/s of the 59 TFLOP the sparse expert GEMMs need, and decodes 3.1 tokens a 61 ms window. The cards take turns by layer, so one is idle while the other computes. Going past this needs one of:
 - alternating layer assignment (layer i on card i % 2) with two micro-batches offset by one layer, both cards
   computing at once. Alternating alone, without the second micro-batch, was built and measured: 4,264 slots
   (20 %), 290 tok/s read and 35.6 tok/s decode, against 7,011 / 538 / 46.3 for the contiguous split, because two
@@ -104,7 +104,7 @@ changes which experts compute and therefore the output. The expert profile
 (`--profile`) still decides which experts get the slots; the bias decides
 how often they are picked.
 
-On this pair at 32K, int8 KV, `--chunk 1024`, a two-prompt local profile
+On two V100-16GB cards at 32K, int8 KV, `--chunk 1024`, a two-prompt local profile
 and MTP (`--draft 4`), the same 192-token coding reply, warm, interleaved:
 
 |`--route-resident`|decode|a verify round|CPU lane|
@@ -132,7 +132,7 @@ CPU-lane one much higher, so start at 0.04–0.15 and compare outputs there.
 **Drop the tail's CPU-lane picks:** `--route-skip R` gives weight 0 to a
 pick ranked R or lower that is on the CPU lane, so neither the lane nor a
 streamed chunk runs it (the sum is not renormalised). It is off by default
-(0) and changes the output. On this pair at `--route-resident 0.15`, a
+(0) and changes the output. On the same cards at `--route-resident 0.15`, a
 192-token reply's verify round went from 83.6 ms at 0 to 79.3 ms at 7 and
 67–82 ms at 5, i.e. 39.8 tok/s without it against 40.3 (7) and 36.2–43.8
 (5) with it: run-to-run noise, not an established gain, because the bias
@@ -159,7 +159,7 @@ fell off the end after `CK(...)` (a bool-returning lambda with no
 
 **The MTP window is 3 drafts, not 4.** With the bias on, the window size
 trades acceptance against expert work per round: every draft row is a full
-row of the verify forward and re-runs 16 experts a layer. On this pair, a
+row of the verify forward and re-runs 16 experts a layer. On the same cards, a
 192-token reply, warm, interleaved: `--draft 3` 41.9 / 41.8 tok/s at
 `--route-resident 0.15` and 46.3 / 46.3 at 0.30 (verify 73 / 61 ms, 3.3 /
 3.1 tokens a round); `--draft 4` 39.7 / 39.7 and 45.7 / 45.8 (verify 84 /
@@ -205,7 +205,7 @@ cards - a card holds a slice of each expert's FF width, of the K/V by position, 
 output head - and sums the partials between cards as fp16 pairs with GPU threads inside the
 window's CUDA graph. Strata splits **by layer**, so for one request the cards take turns.
 
-That difference, not the kernels, is the whole gap. `nsys` on this rig's daily service
+That difference, not the kernels, is the whole gap. `nsys` on the published service
 (UD-IQ3_XXS, `--layer-split 16`, `--pipeline-windows 2`, a 1,024-token prompt and 256 decoded
 tokens) sums to 3,614 ms of GPU work in a 3,147 ms decode: the two stages overlap by about
 15 %, and each card is idle most of the window.
@@ -232,20 +232,20 @@ few percent of kernel time is what that work can buy until the split changes.
 sfnx's other portable findings, and what this fork already has: n-gram (suffix) drafts of
 3-15 tokens - `--suffix-draft` is on by default here and `--lookup-chain K` extends it past
 the MTP's own drafts; a 4-bit draft layer for fewer bytes per draft step - `--mtp-q4`;
-prompt chunks of 4,096-8,192 rows - this rig runs 8,192 (`prefill_cap=8192`); the n-gram
-table on disk - this rig maps it (`--ple-io mmap`). Its MTP draft experts are Q4_0 and it
-measures 63 % draft acceptance against 59 % for the Q2_0 build this rig uses
-(`/mnt/strata-models/mtp/rt`, `tools/mtp_pack.py --experts q4_0` is that comparison arm).
+prompt chunks of 4,096-8,192 rows - the reference build runs 8,192 (`prefill_cap=8192`); the n-gram
+table on disk - that profile maps it (`--ple-io mmap`). Its MTP draft experts are Q4_0 and it
+measures 63 % draft acceptance against 59 % for the Q2_0 build used in the comparison
+(the Q2_0 comparison arm's draft, `tools/mtp_pack.py --experts q4_0` is how it is packed).
 
 ## The FP16 prompt-expert path on UD-IQ3_XXS (2026-11-18)
 
-The daily V100 service already sets `STRATA_PF_WMMA=1` (`service/strata-v100.service.d/96-prefill-performance.conf`).
+The published V100 profile already sets `STRATA_PF_WMMA=1` (`service/strata-v100.service.d/96-prefill-performance.conf`).
 That switch runs the prompt's expert products on the FP16 tensor cores (`gemm_iq_f16_grouped`: each weight
 superblock dequantized once into shared memory, FP16 activations, FP32 sums) instead of MMQ's dp4a kernels.
 IQ2_S / IQ3_XXS gate/up and IQ4_NL down are covered, which is what this pack holds, so the whole prompt path
 takes it.
 
-Measured on this rig, **A-B-A-B, two runs an arm**, one cold request per row through the engine's own `--serve`
+Measured on two V100-PCIE-16GB cards, **A-B-A-B, two runs an arm**, one cold request per row through the engine's own `--serve`
 protocol with exact token ids (`bench/run_v100_prefill.py`), production config plus the six service drop-ins,
 two V100-PCIE-16GB (GPU 0 Gen3 x4, GPU 1 x16), CUDA 12.8, `--layer-split 16`, `--pipeline-windows 2`:
 
@@ -267,7 +267,7 @@ goes with it: it stops allocating the MMQ-only prompt buffers the direct plan ne
 an 8,192-row chunk leaves about 420 MB more of the expert cache in VRAM. Whole-model, A-B-A-B, one
 engine start an arm: **+3.9/+4.8 % at 8,192, +2.0/+2.4 % at 32,768, +1.5/+1.8 % at 65,536, neutral
 at 2,048**, and every row's first generated token id matched across the four arms (the switch changes
-no arithmetic). The daily profile sets it since 2026-11-19; before that it was opt-in with a
+no arithmetic). The published profile sets it since 2026-11-19; before that it was opt-in with a
 component-only measurement.
 
 The Volta FP16 expert kernel skips tensor-core work for the padding-only
@@ -279,7 +279,7 @@ both cards were bitwise equal. These timings are for the kernel alone.
 
 ## Decode: what the window and its cap allow (2026-11-18)
 
-`STRATA_VERIFY_ECAP=16`, which the daily profile sets for about +11 % decode, also caps the window's
+`STRATA_VERIFY_ECAP=16`, which the published profile sets for about +11 % decode, also caps the window's
 length: the engine refuses a window where the cap would leave under one expert per draft row, and
 says so at start-up ("STRATA_VERIFY_ECAP=16 cannot serve a 8-token window: it keeps 6 of the tail's
 70 picks, under one expert for each of the 7 draft rows"). So with the cap on, `--spec 6` (a
@@ -287,7 +287,7 @@ says so at start-up ("STRATA_VERIFY_ECAP=16 cannot serve a 8-token window: it ke
 what lets a longer window start. A longer window is how sfnx gets 11 tokens a round on code edits
 (its n-gram drafts run 3-15 tokens), so the cap and the window length have to be chosen together.
 
-Measured on this rig (production profile, 3,000-token prompt, 192 greedy tokens, one engine start an
+Measured on two V100-PCIE-16GB cards (production profile, 3,000-token prompt, 192 greedy tokens, one engine start an
 arm; the run-to-run spread on a single sample is 15 %, so read the paired rows only):
 
 | arm | decode tok/s | windows offered |
@@ -333,7 +333,7 @@ runs, and no further decode can be bought there without a shorter window, which 
 
 ## Where a decode window's 22 ms goes (2026-11-18)
 
-`nsys` on the daily service (1,024-token prompt, 256 decoded tokens = 162 verify windows, UD-IQ3_XXS,
+`nsys` on the published service (1,024-token prompt, 256 decoded tokens = 162 verify windows, UD-IQ3_XXS,
 layer split 16), summed over both cards and divided by the window count. The two stages are serial, so
 every row is on the critical path:
 
@@ -360,7 +360,7 @@ one place a kernel rewrite has a published 1.4-1.5x to claim
 
 ## The decode knob sweep found nothing, and where the 8-11 ms a token goes (2026-11-24)
 
-The daily profile (UD-IQ3_XXS, layer split 16, `--spec 4 --spec-min-p 0.70`, `STRATA_VERIFY_ECAP=16`,
+The published profile (UD-IQ3_XXS, layer split 16, `--spec 4 --spec-min-p 0.70`, `STRATA_VERIFY_ECAP=16`,
 `STRATA_ROUTE_RESIDENT=1`, the adaptive tier on, `STRATA_SPLIT_RING=192`) measured against one changed
 knob per arm, greedy, 3,000- and 20,000-token prompts, three fresh prompts a row, engine timings from
 `/metrics`, one engine start an arm. `STRATA_VERIFY_PROFILE=1` was on for the arms, which costs about
@@ -376,13 +376,13 @@ knob per arm, greedy, 3,000- and 20,000-token prompts, three fresh prompts a row
 | `--pcie-mode dma` | 71.9 / 72.2 | 1,038 / 2,010 |
 | `--pcie-mode direct` (same prompt, paired) | +1 to +2 % | equal |
 
-Moving four layers to the x4 card buys decode and costs a third of the prompt read: on the daily
-agentic workload (30-50K-token prompts) the extra TTFT is larger than the decode gain, so 16 stays.
+Moving four layers to the x4 card buys decode and costs a third of the prompt read: on the agentic
+workload (30-50K-token prompts) the extra TTFT is larger than the decode gain, so 16 stays.
 The other direction is no better: splits 12 and 14 measured 73.4 / 78.1 and 72.5 / 76.2 tok/s decode
 (3K / 20K means of four, same prompts) against 74.6 / 83.1 at 16, and their prompt reads were equal. A
 smaller stage 0 is not a free lunch because the later stage's dense weights grow with its layer count:
 at split 10, stage 1 (layers 10-47) keeps only 1,693 expert slots (3.27 GiB) and the engine did not come
-up in time. 16 is the balance point on this pair, measured from both sides.
+up in time. 16 is the balance point on two V100-16GB cards, measured from both sides.
 Static residency costs 19 %: the adaptive tier is doing real work. More pool workers cost 11 % (the
 pool is not worker-limited). Neither PCIe mode moves decode outside noise. `--spec-min-p` 0.85 and 0.90
 are inside the spread at 3K and no better at 20K; 0.95 loses 22 % at 20K. The shipped profile is at
@@ -394,7 +394,7 @@ window, 2.00 -> 2.56 tokens). Each draft row routes its own experts, so rows are
 hit rate; 0.70 is the right trim. `--pipeline-windows 2` is context-dependent: with
 `STRATA_PIPELINE_SWITCH` reading `pw=0` and `pw=2` on the same server, serial decode read
 80.0 against 72.4 tok/s at 3K, and the pipeline 78.6 against 70.2 at 20K - keep the pipeline for long
-conversations, which is the daily workload.
+conversations, which is the agentic workload.
 
 The window's own budget (production, profiling on): 28-31 ms for 2.0-3.4 tokens; stage 0 9.4-10.5 ms
 and stage 1 19.0-21.9 ms, the host blocked on the GPU 12-14 ms of that, 1.2-1.8 ms of host work, 0.3-1.2 ms
@@ -434,7 +434,7 @@ change, with the existing parity tests as the gate):
 
 That is a re-architecture of the window, not a switch; the measured 1.5-2x is what it buys.
 
-How close the decode kernels are to this pair's memory ceiling (one V100-PCIE-16GB, 175 W, probes in
+How close the decode kernels are to the cards' memory ceiling (one V100-PCIE-16GB, 175 W, probes in
 `/tmp`; the dense matvecs from `mmvq_graph_bench` at 4096 x 4096, two columns):
 
 | read | GB/s |
@@ -472,7 +472,7 @@ The one alignment defect found, and what it is worth: a Q6_K block is 210 bytes 
 4-byte weight word is read by `load_int_b2` as **two u16 loads**. Copying the block to 212 bytes (4 x 53) makes every
 word one u32 load with the same bytes, so the result is bitwise; padding to 256 makes the block exactly a warp's
 32 x 8-byte window, so no read spills 46 bytes into the next block. A prototype (`Q6KBlock4`/`Q6KBlock16`,
-`Q6KPaddedTraits`, `native_mmvq_il_q6k_padded`, a padded mode in `mmvq_graph_bench`) measures, on this pair:
+`Q6KPaddedTraits`, `native_mmvq_il_q6k_padded`, a padded mode in `mmvq_graph_bench`) measures, on two V100-16GB cards:
 
 | shape | raw | 212-byte copy | 256-byte copy |
 | --- | ---: | ---: | ---: |
@@ -507,7 +507,7 @@ chains into fewer launches, or halve the work a launch covers by splitting each 
 The biggest single stall is also structural. `wait_flag_ge` is 2.5 ms of the window (87.7 launches), and
 `STRATA_VERIFY_DEVICE_PLAN` cannot remove it here: with `--pipeline-windows 2` every verifier is given
 `set_always_publish(true)` (generate.cpp, `if (pipe)`), and `device_plan_` requires `!always_publish_` - the device
-residency table may lag while windows are in flight. So the device plan is a no-op in the daily profile, and dropping
+residency table may lag while windows are in flight. So the device plan is a no-op in the published profile, and dropping
 `waitA` needs either the pipeline (10 % at 20K) or the adaptive tier (19 %) - unless adaptation is paused inside a
 request so residency is static while its windows run.
 
@@ -526,7 +526,7 @@ tier's rounds moved to the request's end and the pipelined verifiers planning on
 in-flight adaptation is worth more than the host round trip it would buy back, which is why every pipelined verifier
 publishes. Do not retry this pairing without a different way to keep the tier's table current.
 
-What a 2-way split actually costs, measured on this rig (one V100, `mmvq_graph_bench` and the grouped
+What a 2-way split actually costs, measured on one V100-16GB card (`mmvq_graph_bench` and the grouped
 expert timing, T 2-3, the pack's own widths; `0.5x` would be a perfect halving):
 
 | kernel class | shape | a part costs |
@@ -543,13 +543,13 @@ this window's mix lands nearer **1.4-1.6x** than 2x. Part 1 of the kernel work (
 the down K range) is in `src/kernels/cuda/iq_kernels.cu` with its parity in `native_expert_parity`.
 
 `STRATA_HC_V100=1` (the opt-in K-split hyper-connection read, which reads the down matrix once for a
-window) used to hang this rig: 43 tokens at 1-4 tok/s, then `verify: timed out at layer 17 ... the GPU
+window) used to hang a two-card decode window: 43 tokens at 1-4 tok/s, then `verify: timed out at layer 17 ... the GPU
 did not finish within 5 s (#267)`. The hang is the *fused* variant's grid-wide spin, which needs all 160
 blocks resident and breaks when the drafter or the forked shared expert shares the card; the fused read is
 now opt-in (`STRATA_HC_V100_FUSED=1`, off by default) and the two-launch read has no barrier. Measured with
 it on (15 requests an arm, 192 greedy tokens, 3K and 20K prompts): the HC down kernels 1.61 -> 1.22 ms a
 window and the window 32.4 -> 31.5 ms (ms/token 15.9 -> 15.1), the rounding difference at relative RMS 2e-7.
-The daily service enables it in `99-hc-v100.conf` with `STRATA_HC_V100_FUSED=0`.
+The published service enables it in `99-hc-v100.conf` with `STRATA_HC_V100_FUSED=0`.
 
 ## Suffix lookup index reset (2026-11-18)
 
@@ -656,7 +656,7 @@ With `--kv-resident`, the prompt appends to its GPU staging pool, then copies
 the new blocks to pinned RAM by DMA instead of writing RAM from the GPU kernel.
 It covers INT8, FP16 and Q4_0 KV. Hybrid K8V4 keeps its existing writer.
 Leave the switch unset or set it to `0` for the old path.
-The engine default and the daily service profile are unchanged.
+The engine default and the published service profile are unchanged.
 
 Measured on two V100-PCIE-16GB cards at 175 W, CUDA 12.8, Ryzen 5 3600
 and 94 GiB RAM. For one layer's 8,192-token INT8 append, including the
@@ -681,7 +681,7 @@ On a V100-PCIE-16GB at 175 W (CUDA 12.8.93), 256-query scorer medians
 improved from 0.825/3.527/5.631 ms to 0.659/2.489/3.916 ms at
 32K/131K/200K live cells. Each arm had six samples of 20 repetitions.
 All 138,898,872 parity scores matched bit for bit; both scorer CTests passed.
-These are component gains, not model-throughput gains. The daily profile's
+These are component gains, not model-throughput gains. The published profile's
 `STRATA_SELECT_SIMT=1` bypasses this route and remains faster.
 `STRATA_SCORES_THREAD=1` also keeps precedence. The switch defaults off.
 
@@ -787,7 +787,7 @@ The standalone PR build was then restarted and exercised at all three
 lengths. Both GPUs grew KV from 16384 to 40960 cells. A following red
 image answered `Red`; a `get_weather` call requested Paris and its
 tool-result follow-up answered `17°C`. The private API key was preserved.
-The daily service keeps HC_Q8 enabled in its private configuration.
+The published service keeps HC_Q8 enabled in its private configuration.
 CUDA sm_70 and the full HIP gfx1100 engine now build. QPN2's NVIDIA-only
 `mma.sync` helper is guarded by the same CUDA device check as its caller;
 HIP reports QPN2 unsupported and uses the native expert path. Linked
@@ -810,7 +810,7 @@ These were not measured as improvements on this deployment.
 
 [Upstream #5002](https://github.com/Niko1221/Strata/pull/5002), dual
 data-parallel prefill, was ported to a separate experimental branch and
-compiled for CUDA. With the daily profile it reported
+compiled for CUDA. With the published profile it reported
 `STRATA_DP_PREFILL is off`: it requires streamed host KV, not elastic
 GPU KV. The port also lacked conversation checkpoint saving on that path.
 It was not published or enabled. No DP speed comparison is claimed.
@@ -1043,7 +1043,7 @@ Prompt and conversation caches were
 disabled for cold timing; the model, GPU order and remaining service
 arguments/environment were preserved.
 
-The daily service was restarted with its original installed engine and
+The published service was restarted with its original installed engine and
 settings; its authenticated HTTP arithmetic smoke returned `17`.
 No candidate engine or new settings were installed into the live service.
 
@@ -1283,7 +1283,7 @@ A decode rate of about 70 tok/s against a bandwidth floor of roughly 10 ms per w
 bandwidth problem: it is these three waits, and the PCIe traffic behind `waitB` (about 82 MiB
 per window for the missed experts, plus about 45 MiB for the adaptive tier's swaps).
 
-The candidates measured on this rig did not move it: upstream's six- and thirteen-switch Volta
+The candidates measured on the V100 cards did not move it: upstream's six- and thirteen-switch Volta
 stacks, `--pcie-mode dma` (worse: the DMA's landing signal is a host callback, and the callback's
 latency on a six-core host is larger than the copy it waits for), `--pcie-frac 0`,
 `--pool-workers 10`, `--adapt-swaps 24`, `--adapt-every 8` and `--adapt-every 0` were all
@@ -1631,7 +1631,7 @@ lean-off control read those prompts in 5279.2 and 14363.2 ms.
 Decode at 8K was 121.7 tok/s on versus 119.7 off, but the two
 2K samples were slower with lean buffers (80.0/118.6 versus
 101.5/122.8 tok/s). One 32K control ended at EOS after 440 tokens.
-Keep this option off for the daily service until its short-prompt
+Keep this option off for the published service until its short-prompt
 decode tradeoff is acceptable for the workload. It is a measured
 long-prefill option, not a general speed default.
 
@@ -1834,14 +1834,14 @@ so a cap there would drop real experts with no draft to save.
 
 The cap only acts when the window's tail is longer than `N-K`: the keep list is token 0's K picks plus the best
 `N-K` tail entries, so a window with `N-K` tail entries or fewer loses nothing. The window's width is not fixed;
-`--spec-min-p` trims it per token. The daily service, which samples at temperature 1.0, offers `avg T` 1.82, 1.84
+`--spec-min-p` trims it per token. The published service, which samples at temperature 1.0, offers `avg T` 1.82, 1.84
 and 2.01 over three 512-token requests, so with K=10 the tail holds 8-10 entries and `N=20` is a no-op there.
 Choose `N` from the workload's measured `avg T`. At that width on the live service, `N=16` gave +11.5 % and
 +11.5 % in two drift-paired comparisons of four 32K requests each (the two control arms drifted 8 % apart, and the
 pooled medians move +2.8 %, so the error bar is wide).
 
-Measured on 2026-10-29 on the two-V100 rig below: IQ3_S, INT8 KV, 524288-token capacity, split 16,
-spec 4, pipeline windows 2, the daily service environment, one fresh server per arm, the same binary.
+Measured on 2026-10-29 on the two V100 cards below: IQ3_S, INT8 KV, 524288-token capacity, split 16,
+spec 4, pipeline windows 2, the published service environment, one fresh server per arm, the same binary.
 
 End to end, three independent 32K prompts per arm and 512 greedy tokens each
 (`bench/run_v100_prefill.py`, `temperature=0`):
@@ -1890,11 +1890,11 @@ now compares both paths against the two-phase reference at 1 and 3 workers, the 
 counts and a 97-expert batch boundary (336 bitwise comparisons, passing with the switch set and unset). The engine
 prints one line at start-up when the switch is on.
 
-Measured on the two-V100-PCIE rig above, UD-IQ3_XXS, the daily profile's environment, one engine start an arm, the
+Measured on two V100-PCIE-16GB cards, UD-IQ3_XXS, the published profile's environment, one engine start an arm, the
 arms interleaved A-B-A-B (`bench/run_v100_prefill.py --chain --chain-prefix 8192
 --chain-diffs 0,256,512,1024,2048 --chain-rounds 2 --max-new 32`). The prefix turn reads 8,192 tokens in one chunk;
 the CPU share is off at or above `STRATA_PREFILL_STREAM_MIN=6144`, so the switch cannot act there. The follow-up
-turns read 257 to 2,049 new tokens, which is the daily agentic shape.
+turns read 257 to 2,049 new tokens, which is the agentic shape.
 
 | read tokens | prompt_ms, two-phase | prompt_ms, `STRATA_POOL_DEP=1` | change |
 | ---: | ---: | ---: | ---: |
@@ -1912,9 +1912,9 @@ over two pairs, inside the run-to-run drift.
 
 Adopted in `service/strata-v100.service.d/96-prefill-performance.conf`.
 
-Limits: one rig, one quant, one workload, and a small effect. The gain is bounded by the CPU share's part of a
+Limits: one hardware configuration, one quant, one workload, and a small effect. The gain is bounded by the CPU share's part of a
 short read; a read at or above the 6,144-row stream floor cannot use it. The samples are 32-token replies, so the
-decode comparison only rules out a change larger than about 5 %. Greedy text is not an equality test on this pair:
+decode comparison only rules out a change larger than about 5 %. Greedy text is not an equality test on this hardware:
 two starts of the *same* setting matched on 2 of 7 greedy turns (7 turns, 64 tokens each), and so did two starts that
 differ in this switch, because whether a swapped-in expert runs on the GPU or the CPU (whose arithmetic rounds
 differently) follows the copy's timing (#463). The bitwise comparison inside the pool is the exactness evidence.

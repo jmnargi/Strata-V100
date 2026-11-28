@@ -731,11 +731,11 @@ See [NVIDIA_V100.md](NVIDIA_V100.md#hy4-flash-maya-s).
 | `HY4_SCRATCH_BORROW` | off | a long prompt temporarily lends its expert slots from the decode tier |
 | `HY4_SCRATCH_BORROW_CHUNK` | engine default | the borrow granularity; 4096 was the measured setting with `--chunk 1024` (one run each) |
 | `HY4_STAGE2` | on | `0` keeps the serial streamed-expert passes instead of the two-half copy/sets overlap |
-| `HY4_MTP_EAGER` | off | an eager MTP draft; neutral on the V100 pair |
+| `HY4_MTP_EAGER` | off | an eager MTP draft; neutral in the published measurements |
 | `HY4_GEMV_OLD` | off | the earlier GEMV path |
 | `MAYA_DS4_NO_TC` | off | `1` keeps the grouped expert GEMM off the tensor cores (25 % slower) |
 | `DS4_IQ_TC_RM` | engine default | `2` gives a block's rows 2 x 64 for sets whose busiest expert has more than 64 rows |
-| `MAYA_DS4_NO_LIGHT`, `MAYA_DS4_PREFILL_FUSED`, `MAYA_DS4_IQ_PERSIST`, `MAYA_DS4_EXPERT_MMQ`, `DS4_IQ_RP`, `DS4_IQ_AHEAD` | engine default | prompt-path arms; neutral on the V100 pair |
+| `MAYA_DS4_NO_LIGHT`, `MAYA_DS4_PREFILL_FUSED`, `MAYA_DS4_IQ_PERSIST`, `MAYA_DS4_EXPERT_MMQ`, `DS4_IQ_RP`, `DS4_IQ_AHEAD` | engine default | prompt-path arms; neutral in the published V100 measurements |
 
 ### Inkling 2 Mini engines
 
