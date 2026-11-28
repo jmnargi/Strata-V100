@@ -163,6 +163,199 @@ run at 110-130 GB/s because IQ2_S / IQ3_XXS bit unpacking, not bandwidth, is the
 one place a kernel rewrite has a published 1.4-1.5x to claim
 ([1Cat-vLLM's paired IQ3_XXS reader](https://github.com/1CatAI/1Cat-vLLM/pull/966)).
 
+## The decode knob sweep found nothing, and where the 8-11 ms a token goes (2026-11-24)
+
+The daily profile (UD-IQ3_XXS, layer split 16, `--spec 4 --spec-min-p 0.70`, `STRATA_VERIFY_ECAP=16`,
+`STRATA_ROUTE_RESIDENT=1`, the adaptive tier on, `STRATA_SPLIT_RING=192`) measured against one changed
+knob per arm, greedy, 3,000- and 20,000-token prompts, three fresh prompts a row, engine timings from
+`/metrics`, one engine start an arm. `STRATA_VERIFY_PROFILE=1` was on for the arms, which costs about
+10 %: the same production arm reads **79.5 / 80.0** tok/s with it off.
+
+| arm | decode 3K / 20K | prompt 3K / 20K |
+| --- | ---: | ---: |
+| production (split 16) | 71.2 / 71.3 | 1,029 / 2,028 |
+| `--layer-split 22` | **81.1 / 75.2** | 721 / 1,455 |
+| `--layer-split 24` | 64.7 / 76.2 | 628 / 1,279 |
+| `--adapt-every 100000` (static residency) | 57.9 / 57.8 | 1,025 / 2,025 |
+| `--pool-workers 11` | 63.3 / 71.3 | 988 / 2,005 |
+| `--pcie-mode dma` | 71.9 / 72.2 | 1,038 / 2,010 |
+| `--pcie-mode direct` (same prompt, paired) | +1 to +2 % | equal |
+
+Moving four layers to the x4 card buys decode and costs a third of the prompt read: on the daily
+agentic workload (30-50K-token prompts) the extra TTFT is larger than the decode gain, so 16 stays.
+The other direction is no better: splits 12 and 14 measured 73.4 / 78.1 and 72.5 / 76.2 tok/s decode
+(3K / 20K means of four, same prompts) against 74.6 / 83.1 at 16, and their prompt reads were equal. A
+smaller stage 0 is not a free lunch because the later stage's dense weights grow with its layer count:
+at split 10, stage 1 (layers 10-47) keeps only 1,693 expert slots (3.27 GiB) and the engine did not come
+up in time. 16 is the balance point on this pair, measured from both sides.
+Static residency costs 19 %: the adaptive tier is doing real work. More pool workers cost 11 % (the
+pool is not worker-limited). Neither PCIe mode moves decode outside noise. `--spec-min-p` 0.85 and 0.90
+are inside the spread at 3K and no better at 20K; 0.95 loses 22 % at 20K. The shipped profile is at
+its local optimum for this workload.
+
+Wider windows lose for the reason the cap exists: `--spec 6 --spec-min-p 0.30 --mtp-max-t 6` with
+`STRATA_VERIFY_ECAP=18` raised the window from T 2.3 to 4.8 and cut decode 14 % (28.2 -> 41.5 ms a
+window, 2.00 -> 2.56 tokens). Each draft row routes its own experts, so rows are not free at this
+hit rate; 0.70 is the right trim. `--pipeline-windows 2` is context-dependent: with
+`STRATA_PIPELINE_SWITCH` reading `pw=0` and `pw=2` on the same server, serial decode read
+80.0 against 72.4 tok/s at 3K, and the pipeline 78.6 against 70.2 at 20K - keep the pipeline for long
+conversations, which is the daily workload.
+
+The window's own budget (production, profiling on): 28-31 ms for 2.0-3.4 tokens; stage 0 9.4-10.5 ms
+and stage 1 19.0-21.9 ms, the host blocked on the GPU 12-14 ms of that, 1.2-1.8 ms of host work, 0.3-1.2 ms
+of CPU expert compute, and 10-22 adaptive swaps a window. The pipeline cancelled 56 of its 88
+speculative windows in a short-context request (32 on the path): the whole-window guess fails more
+often than it holds at T 2-3, which is why the overlap was about 15 %.
+
+Where the ceiling is: the dense projections (`native_q6_k_mmvq` 12.1 % of the window, `native_mmvq_il`
+6.5 %, `b6_mmvq_rows` 5.8 %) already read their weights at roughly 800 GB/s, at the card's DRAM peak.
+The IQ3_XXS expert dots (`native_gu_fused` 7.6 % + `native_down_lds` 5.3 %, at 110-130 GB/s) and the
+hyper-connection read (about 160 GB/s, derived from its 6.5 MB matrix a layer) run 5-7x under it, and
+with the per-layer handshakes (`wait_flag_ge` 11.2 %) they are most of the rest of the window. A
+1.4-1.5x kernel rewrite there and a per-layer split (the second card sits idle about two thirds of a
+window; sfnx measured 1.5-2x for that on this box) are the two remaining levers. Nothing in the
+configuration space moves decode further.
+
+How a per-layer split would be built here, in the order the pieces have to land (each is its own
+change, with the existing parity tests as the gate):
+
+1. **Weights: no new pack format.** GGUF and native tensors are row-major by output row, so an output
+   split (qkv, gate/up, router, the LM head) is a contiguous row range and a K split (down, the output
+   projections, the hyper-connection read) is a block range inside every row: the kernels already carry
+   the row stride (`L.gu_row`, `L.up_off`), so a half-width read is a pointer and a grid change, not a
+   repack.
+2. **Decode window:** both cards run every layer on the same rows. The output-split parts need no
+   exchange; the K-split parts need one per-row sum, about 4 MiB a window in each direction (2.3 rows x
+   4096 floats x 48 layers x 2 B), which fits the existing pinned split ring and can be issued one layer
+   ahead, in the captured graph.
+3. **State:** K/V and attention split by head (each card keeps its heads' pages, the pool layout already
+   pages by position), the GDN recurrence split by head/state, the draft layer on the card that holds
+   the head.
+4. **What has to be rebuilt:** the stage graph (`stage_of(l)` becomes two half-stages per layer), weight
+   loading into row ranges, the resident plan and the expert cache's (layer, expert) indexing into
+   (layer, expert, half), and the checkpoint/session state per card. The `gr_parity`,
+   `native_expert_parity`, `mmvq_*` and `qsa_*` tests already compare against the plain paths at every
+   width, which is how each step can be proved before the next.
+
+That is a re-architecture of the window, not a switch; the measured 1.5-2x is what it buys.
+
+How close the decode kernels are to this pair's memory ceiling (one V100-PCIE-16GB, 175 W, probes in
+`/tmp`; the dense matvecs from `mmvq_graph_bench` at 4096 x 4096, two columns):
+
+| read | GB/s |
+| --- | ---: |
+| card peak, 16-byte `float4` streaming read | **889** |
+| the same bytes as 8-byte loads, contiguous | 879 |
+| one 210-byte block a warp, 8 bytes a lane (the kernel's own layout) | 707-740 |
+| `native_mmvq_il`: Q6_K / Q5_K / Q4_K / IQ4_XS | 479 / 509 / 464 / 454 |
+
+So the dense class is byte-bound at about 480 GB/s whatever the format (values a second differ 1.46x across
+the four, GB/s do not), the 210-byte block layout costs 20 %, and the loop itself another 32 % against the
+pattern's 707-740. The arithmetic is not the limit (dp4a stays under 5 % of the card's integer rate at these
+widths), so the remaining ~1.45x is in how the loop keeps weight loads in flight beside the activation
+reads. `ncu` would name the stall, but GPU counters need admin here (`ERR_NVGPUCTRPERM`).
+
+With counters (driver 580, `RmProfilingAdminOnly: 1`, so `sudo ncu`), the picture is instruction
+throughput, not latency:
+
+| kernel | DRAM | SM | L1 | registers | occupancy (cap / achieved) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `native_mmvq_il` Q6_K 4096x4096, 2 columns | 49.2 % | **55.1 %** | 47.6 % | 64 | 50 % / 43 % |
+| `native_gu_fused<18>`, 16 groups, half width | 51.8 % | **54.2 %** | - | 79 | 37.5 % / 30.2 % |
+| `native_down_lds<20>`, 16 groups, half width | 59.8 % | 59.7 % | - | 48 | 62.5 % / 50.7 % |
+
+Occupancy is not the lever: forcing `native_gu_fused` from 3 to 4 blocks an SM (64 registers) changed it
+by 2 % (100.1-100.8 against 100.5-104.3 us at the 16-group shape) and to 5 blocks (51 registers) made it
+**17 % slower** from spills; forcing `native_mmvq_il` to 6 or 4 blocks an SM left it at 28.7 us exactly.
+The dense kernel runs at SM 55 % / DRAM 49 %, so it is near its instruction rate, not waiting on memory:
+halving the instructions a weight byte costs is what the remaining 1.45x needs, and that means 16-byte
+loads with two lanes on each 210-byte block instead of 32 lanes over a 256-byte window. That changes which
+lane owns which values, hence the warp reduction's order, so it is a rounding-level change and has to be
+opt-in with its own tolerance gate rather than the bitwise `mmvq_il_parity`.
+
+The one alignment defect found, and what it is worth: a Q6_K block is 210 bytes (`Q6KBlock`, `alignof` 2), so every
+4-byte weight word is read by `load_int_b2` as **two u16 loads**. Copying the block to 212 bytes (4 x 53) makes every
+word one u32 load with the same bytes, so the result is bitwise; padding to 256 makes the block exactly a warp's
+32 x 8-byte window, so no read spills 46 bytes into the next block. A prototype (`Q6KBlock4`/`Q6KBlock16`,
+`Q6KPaddedTraits`, `native_mmvq_il_q6k_padded`, a padded mode in `mmvq_graph_bench`) measures, on this pair:
+
+| shape | raw | 212-byte copy | 256-byte copy |
+| --- | ---: | ---: | ---: |
+| 4096 x 4096, 2 columns | 28.7 us | 29.2 us (-1 %) | 29.1 us (-1 %) |
+| 4096 x 4096, 3 columns | 36.2 us | **33.1 us (+8.6 %)** | **32.4 us (+10 %)** |
+| 4096 x 4096, 4 columns | 41.7 us | **35.2 us (+15 %)** | **34.5 us (+17 %)** |
+| 4096 x 2048, 3 columns | 19.3 us | **17.4 us (+10 %)** | **16.7 us (+14 %)** |
+| 4096 x 2048, 4 columns | 23.7 us | **18.8 us (+21 %)** | **18.1 us (+24 %)** |
+
+Bitwise equal to the raw kernel at 2, 3 and 4 columns. It is not wired into the engine: Q6_K is 12 % of a decode
+window and this workload's windows sit at T ~2.3 (mostly 2 columns, where the copy is neutral), so the whole-model
+gain would be under 1 % against a padded copy in the dense loader and a routing rule at every call site. The
+prototype sits on `perf/q6k-padded-loads-20261125`.
+
+The per-launch cost model, measured with `mmvq_graph_bench` (Q6_K, 4096-wide, two columns, one launch a point):
+
+| matrix a launch covers | GB/s |
+| ---: | ---: |
+| 0.9 MB | 121 |
+| 1.7 MB | 219 |
+| 3.4 MB | 347 |
+| 6.9 MB | 421 |
+| 13.8 MB | 479 |
+| 27.5 MB | 516 |
+
+It fits `t = 4.1 us + bytes / 560 GB/s`: every launch carries about 4 us of fixed cost, and the marginal rate is
+560 GB/s. A decode window has ~473 launches (the table above), so the fixed cost is ~1.9 ms of its 22.3 ms, and a
+kernel under ~4 MB cannot beat ~350 GB/s however it is written. That is why the kernel-level work in this document
+(occupancy, hoisting, padded loads) moves so little, and why the remaining levers are structural: fuse the per-layer
+chains into fewer launches, or halve the work a launch covers by splitting each layer across the cards.
+
+The biggest single stall is also structural. `wait_flag_ge` is 2.5 ms of the window (87.7 launches), and
+`STRATA_VERIFY_DEVICE_PLAN` cannot remove it here: with `--pipeline-windows 2` every verifier is given
+`set_always_publish(true)` (generate.cpp, `if (pipe)`), and `device_plan_` requires `!always_publish_` - the device
+residency table may lag while windows are in flight. So the device plan is a no-op in the daily profile, and dropping
+`waitA` needs either the pipeline (10 % at 20K) or the adaptive tier (19 %) - unless adaptation is paused inside a
+request so residency is static while its windows run.
+
+What that is worth, measured with the pipeline off (12 requests an arm, 3K and 20K, `ms a token`):
+
+| `--pipeline-windows` | device plan | ms/token |
+| --- | --- | ---: |
+| 0 | off | 15.31 |
+| 0 | on | **14.53 (-5.1 %)** |
+
+So the pairing costs about 5 %: the device plan is real, but it cannot run beside the pipeline without pausing the
+adaptive tier's swaps inside a request (the tier's table is what the plan reads, and it must not move while the
+window's plan is on the device). That trade was built and measured (`perf/device-plan-paused-adapt-20261125`, the
+tier's rounds moved to the request's end and the pipelined verifiers planning on the device instead of publishing):
+**14.5 against 13.3 ms a token over 12 requests an arm, i.e. 9 % slower**, and no residency mismatch was reported. The
+in-flight adaptation is worth more than the host round trip it would buy back, which is why every pipelined verifier
+publishes. Do not retry this pairing without a different way to keep the tier's table current.
+
+What a 2-way split actually costs, measured on this rig (one V100, `mmvq_graph_bench` and the grouped
+expert timing, T 2-3, the pack's own widths; `0.5x` would be a perfect halving):
+
+| kernel class | shape | a part costs |
+| --- | --- | ---: |
+| dense output split, wide | Q6_K 4096 x 4096 -> 4096 x 2048 | 0.57x (T2), 0.53x (T3) |
+| dense output split, narrow | IQ4_NL 4096 x 1280 -> 4096 x 640 | 0.72x (T2), 0.70x (T3) |
+| dense K split, wide | Q6_K 2048 x 4096 -> 1024 x 4096 | 0.60x (T2), 0.60x (T3) |
+| dense K split, narrow | IQ4_NL 1280 x 4096 -> 640 x 4096 | 0.89x (T2), 0.86x (T3) |
+| grouped experts (16 groups x 3) | gate/up columns + down K | 0.59x |
+
+So the output splits are worth 1.4-1.9x and the narrow K splits almost nothing: at half width the
+kernel is latency-bound (IQ4_NL 640-wide reads at 147-160 GB/s against 253-284 at 1280). A composite over
+this window's mix lands nearer **1.4-1.6x** than 2x. Part 1 of the kernel work (gate/up column blocks and
+the down K range) is in `src/kernels/cuda/iq_kernels.cu` with its parity in `native_expert_parity`.
+
+`STRATA_HC_V100=1` (the opt-in K-split hyper-connection read, which reads the down matrix once for a
+window) used to hang this rig: 43 tokens at 1-4 tok/s, then `verify: timed out at layer 17 ... the GPU
+did not finish within 5 s (#267)`. The hang is the *fused* variant's grid-wide spin, which needs all 160
+blocks resident and breaks when the drafter or the forked shared expert shares the card; the fused read is
+now opt-in (`STRATA_HC_V100_FUSED=1`, off by default) and the two-launch read has no barrier. Measured with
+it on (15 requests an arm, 192 greedy tokens, 3K and 20K prompts): the HC down kernels 1.61 -> 1.22 ms a
+window and the window 32.4 -> 31.5 ms (ms/token 15.9 -> 15.1), the rounding difference at relative RMS 2e-7.
+The daily service enables it in `99-hc-v100.conf` with `STRATA_HC_V100_FUSED=0`.
+
 ## Suffix lookup index reset (2026-11-18)
 
 Suffix lookup now marks each index entry with the history it belongs to instead
