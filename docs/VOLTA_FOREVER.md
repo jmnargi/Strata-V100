@@ -73,7 +73,8 @@ were compiled, no retargeting) and shows what the layer itself costs.
 | 65,536 | 24,307 ms | 31,113 ms (1.28x) | 23,840 ms (0.98x) |
 
 ² the first request in a fresh process pays the layer's compilation of the kernels that size uses first; the second
-request of the same size is the number quoted. Steady-state pairs at 8,192 tokens, six prompts, ratios 0.988-0.996.
+request of the same size is the number quoted (at 16K: 8,982-9,043 ms first, 7,477-7,495 after, against the native
+engine's 7,533-7,820). It is per size, once per process, and it does not depend on `VF_LOG_LEVEL`.
 
 Decode (an 8K prompt, 128 greedy tokens, the same six prompts per arm, paired): native 99.3 tok/s, `STRATA_VOLTA_PTX`
 100.5 tok/s, per-prompt ratios 0.87-1.12 (the draft acceptance moves more than the layer does). The naive sm_75 build
@@ -86,6 +87,21 @@ sm_75 build diverged at 32K (its first token was `16401`, the native engine's `2
 config:** a CUDA 13-style engine goes from 15-35% slower than native to native speed (0.98-1.00x prefill, decode
 within noise). It does not make the card faster than the CUDA 12 engine - the layer adds no throughput of its own; it
 removes the penalty of a build that was compiled for another card.
+
+### What was measured and found neutral or worse
+
+The same two cards, the same prompts, alternating arms in one session:
+
+| tried | result |
+| --- | --- |
+| a newer code generator: the engine built `70-virtual` and JIT-compiled by the 580 driver, against the `sm_70` SASS ptxas 12.8 makes | 7,724 / 7,742 ms at 16K against 7,734 / 7,738 - neutral |
+| CUDA 12.9's cuBLAS in front of the native engine (`libcublas.so.12` 12.9.2.10) | 7,748 / 7,746 ms at 16K, neutral; one 64K session with it degraded over repeats (24.8 -> 37.1 s), cause not established |
+| `STRATA_PREFILL_AUTO_MAX=16384` (the `--prefill auto:16384` of #282) | 32K 13,757 / 13,879 ms against 13,140 / 13,238 (4.7% slower); 64K neutral |
+| `--mtp-hnorm stream` | decode, 6 prompts x 2 rounds: 1.01x / 0.96x paired medians, inside the acceptance noise |
+
+The layer is a passthrough once the image carries the card's own instructions: it costs nothing to use and adds
+nothing. What a prompt read costs on this machine - the expert stream over PCIe and from the SSD, and the serial
+stage pipeline - is not something the layer touches.
 
 ## Limits
 
