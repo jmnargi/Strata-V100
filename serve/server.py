@@ -3832,6 +3832,8 @@ class Service:
             # The Qwen stop marker decomposes into ordinary Inkling tokens such as "_".
             special = getattr(tokenizer, "special_tokens", {})
             self.stop_ids = {special[m] for m in ("<|content_model_end_sampling|>", "<|endoftext|>") if m in special}
+        elif getattr(tokenizer, "pre", None) == "hy_v4":
+            self.stop_ids = {tokenizer.special_ids["eos"]}
         else:
             self.stop_ids = set(tokenizer.encode(IM_END, parse_special=True) +
                                 tokenizer.encode("<|endoftext|>", parse_special=True))
@@ -4945,7 +4947,10 @@ class Service:
                                 "image_counts": image_counts}
         if req is not None and req.get("strata_prefix") is not None:
             req["strata_prefix"] = self.resolve_prefix(req["strata_prefix"], messages, tools, kwargs, ids, bool(images))
-        return ids, kwargs.get("enable_thinking", True) is not False, max_new
+        thinking = kwargs.get("enable_thinking", True) is not False
+        if self.template.hy4 and kwargs.get("reasoning_effort") in ("none", "off", "no_think"):
+            thinking = False
+        return ids, thinking, max_new
 
     PREFIX_END = "\u0001strata-prefix-end\u0001"          # marks where a message's shared part ends in the rendered prompt
 
@@ -8597,8 +8602,9 @@ def main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> in
         types = json.loads((tpath / "token_type.json").read_text())
         meta_path = tpath / "tokenizer.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
-        tok = ST.Tokenizer(tokens, merges, types, pre=meta.get("pre", "qwen35"),
-                           special_ids=meta.get("special_ids"))
+        pre = meta.get("pre", "qwen35")
+        aliases = ({int(i): text for i, text in meta.get("aliases", {}).items()} if pre == "hy_v4" else None)
+        tok = ST.Tokenizer(tokens, merges, types, pre=pre, special_ids=meta.get("special_ids"), aliases=aliases)
     hub = hub_from_config(cfg, a.mcp_config)            # before the minutes of loading: a bad entry stops here
     if a.offline and (hub is not None or cfg.get("before_load") or a.before_load):
         ap.error("--offline requires MCP servers and before_load commands to be disabled in this profile")

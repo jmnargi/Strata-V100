@@ -681,6 +681,15 @@ ExpertPool::ExpertPool(int n_workers, bool pin, bool host_works, PoolAffinity af
     strata::core::diag_pool_fn().store(&diag_active_pool);
     split_.resize((size_t) kMaxSplit);
     split_multi_.resize((size_t) kMaxSplitMulti);
+    // STRATA_POOL_DEP: the per-expert dependency queue of a native layer call (see dep_requested).
+    dep_on_ = dep_requested();
+    if (dep_on_) {
+        dep_.reset(new DepExpert[(size_t) kMaxSplitMulti]);
+        static std::atomic<bool> said{false};
+        if (!said.exchange(true))
+            std::fprintf(stderr, "strata cpu pool: STRATA_POOL_DEP=1: one batch per native layer call, no phase barrier "
+                                 "(bit-exact)\n");
+    }
     threads_.reserve((size_t) n_);
     for (int i = 0; i < n_; ++i) {
         // `worker_cpu` hands out the physical cores first and only then the SMT siblings, so a pool no larger
@@ -895,6 +904,8 @@ void ExpertPool::drain(int id, ExpertScratch& scratch, uint32_t epoch) {
                 else
                     native_quant_act(*nfmt_, rows.x + t * rows.n_embd, rows.nact + t * kNativeActBytes);
             }
+        } else if (mode_ == 8) {
+            dep_task(ci);   // STRATA_POOL_DEP: one native layer call, a down task waiting on its own expert
         } else if (mode_ >= 5) {
             // plan v0.3 P6: native layers, 5 = gate/up rows, 6 = down rows (the layer's own n_ff / n_embd: Flash-Next's
             // FF / H, or another family's smaller expert)
@@ -990,6 +1001,57 @@ int ExpertPool::phase_tasks(int64_t rows) const {
     return tasks_ == 0 ? 3 * (n_ + (host_works_ ? 1 : 0)) : (int) (std::min)(rows, (int64_t) tasks_);
 }
 
+bool ExpertPool::dep_requested() {
+    // "1" (or any value but "0") turns it on; unset and "0" keep the two-phase batch, the default path.  Read per
+    // pool construction (a pool is built once or twice per engine run), so a test can compare both paths in one
+    // process.
+    const char* v = std::getenv("STRATA_POOL_DEP");
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+}
+
+// STRATA_POOL_DEP: task i of a mode-8 batch - i < nb * k_gu are gate/up row ranges, then the down row ranges.
+// The same ranges, kernels and bytes as the two-phase batch, so the outputs are its bits; what changes is that a
+// down task waits on its own expert's gate/up tasks instead of on every task of the phase.
+void ExpertPool::dep_task(int i) {
+    const NativeFmt& f = *nfmt_;
+    const int ngu = dep_nb_ * dep_k_gu_;
+    if (i < ngu) {
+        const int e = i / dep_k_gu_, p = i % dep_k_gu_;
+        const int rows = (int) f.n_ff;
+        const int r0 = (int) ((int64_t) rows * p / dep_k_gu_), r1 = (int) ((int64_t) rows * (p + 1) / dep_k_gu_);
+        SplitBufMulti& sb = split_multi_[(size_t) e];
+        const NativeFmt* const nfmt = mjobs_[e].fmt != nullptr ? mjobs_[e].fmt : nfmt_;
+        float* ff[MAXT];
+        for (int t = 0; t < mjobs_[e].nt; ++t) ff[t] = sb.ff[t];
+        native_gu_rows(*nfmt, mjobs_[e].blob, mjobs_[e].nact, mjobs_[e].nt, ff, r0, r1);
+        // release: the rows above are visible to whoever sees the count reach zero
+        dep_[(size_t) e].gu_left.fetch_sub(1, std::memory_order_release);
+        return;
+    }
+    const int j = i - ngu;
+    const int e = j / dep_k_dn_, p = j % dep_k_dn_;
+    DepExpert& d = dep_[(size_t) e];
+    // this expert's gate/up tasks were all claimed before this one (claim hands out increasing indices), so one
+    // of them is running or done; spin until the last appends its release
+    while (d.gu_left.load(std::memory_order_acquire) > 0) _mm_pause();
+    SplitBufMulti& sb = split_multi_[(size_t) e];
+    int expect = 0;
+    if (d.quant.compare_exchange_strong(expect, 1, std::memory_order_acquire)) {
+        // the first worker here quantizes this expert's intermediate once, exactly as the two-phase batch did on
+        // the submitting thread between the phases
+        for (int t = 0; t < mjobs_[e].nt; ++t) native_quant_h(f, sb.ff[t], sb.hq[t]);
+        d.quant.store(2, std::memory_order_release);
+    } else {
+        while (d.quant.load(std::memory_order_acquire) != 2) _mm_pause();
+    }
+    const int rows = (int) f.n_embd;
+    const int r0 = (int) ((int64_t) rows * p / dep_k_dn_), r1 = (int) ((int64_t) rows * (p + 1) / dep_k_dn_);
+    const NativeFmt* const nfmt = mjobs_[e].fmt != nullptr ? mjobs_[e].fmt : nfmt_;
+    const void* hq[MAXT];
+    for (int t = 0; t < mjobs_[e].nt; ++t) hq[t] = sb.hq[t];
+    native_down_rows(*nfmt, mjobs_[e].blob, hq, mjobs_[e].nt, mjobs_[e].out, r0, r1);
+}
+
 void ExpertPool::run_split_multi(ExpertJobMulti* jobs, int n) {
     if (n <= 0) return;
     if (n > kMaxSplitMulti || expert_oracle_q8_0_enabled()) {
@@ -1038,6 +1100,22 @@ void ExpertPool::run_split_multi_native(const NativeFmt& f, ExpertJobMulti* jobs
         const int nb = (std::min)(kMaxSplitMulti, n - b0);
         mjobs_ = jobs + b0;
         nfmt_ = &f;
+        if (dep_on_ && n_ > 1 && !q2_native_kernels(f.gu_type) && !q2_native_kernels(f.d_type)) {
+            // STRATA_POOL_DEP: the whole layer call as one batch, no barrier between the phases (DepExpert)
+            const int per_phase = phase_tasks((int64_t) nb * f.n_ff);
+            dep_nb_ = nb;
+            dep_k_gu_ = (std::max)(1, (std::min)((int) f.n_ff, (per_phase + nb - 1) / nb));
+            dep_k_dn_ = (std::max)(1, (std::min)((int) f.n_embd, (phase_tasks((int64_t) nb * f.n_embd) + nb - 1) / nb));
+            for (int e = 0; e < nb; ++e) {
+                dep_[(size_t) e].gu_left.store(dep_k_gu_, std::memory_order_relaxed);
+                dep_[(size_t) e].quant.store(0, std::memory_order_relaxed);
+            }
+            const auto a = std::chrono::steady_clock::now();
+            run_phase(8, nb * (dep_k_gu_ + dep_k_dn_));
+            const auto b = std::chrono::steady_clock::now();
+            ms_multi_gu += std::chrono::duration<double, std::milli>(b - a).count();
+            continue;
+        }
         mrows_ = (int64_t) nb * f.n_ff;
         mtasks_ = phase_tasks(mrows_);
         const auto a = std::chrono::steady_clock::now();

@@ -267,7 +267,7 @@ absent variable as enabled. `engine default` means a value the code computes.
 | Variable | Default | Description |
 |---|---|---|
 | `STRATA_PCIE_AUTO_CANON` | off | canonicalize the PCIe window automatically (opt-in on Windows) |
-| `STRATA_PCIE_AUTO_SPLIT` | off | refine a layer split's shares from each stage's probed link (HIP) |
+| `STRATA_PCIE_AUTO_SPLIT` | off | refine a layer split's shares from each stage's probed link and the pool's measured speed (CUDA and HIP); a later stage's share is recomputed whenever a reading lands, even when the first stage's own share does not move |
 | `STRATA_PCIE_BALANCE` | off | take the expert count from measured CPU and GPU costs |
 | `STRATA_PCIE_FRAC_DEFAULT` | engine default (share form) | default PCIe share of the expert cache; `auto` refines it |
 | `STRATA_PCIE_MIN1` | off | give 1-2 misses per layer at least one slot on the PCIe lane |
@@ -482,7 +482,7 @@ absent variable as enabled. `engine default` means a value the code computes.
 | `STRATA_QFUSE_HC` | architecture table (gfx12) | only the hyper-connection read writes its consumer's image |
 | `STRATA_QFUSE_HC_LOCAL` | on | the 32-column up kernel under `STRATA_QFUSE_HC`; `0` restores the atomic-tail kernel |
 | `STRATA_HC_V100` | off | `experimental`, sm_70 only. `1` reads the hyper-connection down matrix once per window (K-split). Rounding changes can produce different greedy answers. |
-| `STRATA_HC_V100_FUSED` | on | under `STRATA_HC_V100=1`: down and up in one launch for windows of 6 tokens or fewer if all fused variants fit at once; `0` keeps two launches |
+| `STRATA_HC_V100_FUSED` | off | under `STRATA_HC_V100=1`: `1` runs down and up in one launch for windows of 6 tokens or fewer. It ends in a grid-wide spin that needs all 160 blocks resident, so it can hang a window when another stream runs on the same card (the MTP drafter, the forked shared expert); `0` keeps the two launches, which have no such barrier |
 | `STRATA_MMVQ_IL` | on | the interleaved mmvq kernels; `0` keeps native_mmvq's multi-column kernels |
 | `STRATA_MMVQ_IL_ROWS` | engine default | row table of the interleaved mmvq |
 | `STRATA_MMVQ_IL_120` | engine default | `0` gives a 12.0 card the shared table again |
@@ -542,6 +542,7 @@ absent variable as enabled. `engine default` means a value the code computes.
 | Variable | Default | Description |
 |---|---|---|
 | `STRATA_POOL_SPIN_US` | 20000 (20 ms) | spin before a pool worker sleeps; `0` sleeps at once |
+| `STRATA_POOL_DEP` | off (`1` turns it on) | one batch per native CPU layer call: a down row range waits only for its own expert's gate/up ranges instead of the phase barrier, and the first worker there quantizes that expert's intermediate once. Bit-exact. Measured with `--max-new` A/B (see [NVIDIA_V100.md](NVIDIA_V100.md)) |
 | `STRATA_POOL_TRACE` | off | print who waits on the expert pool |
 | `STRATA_POOL_UMWAIT` | off | use `WAITPKG` waits in the pool (Intel) |
 | `STRATA_POOL_UMWAIT_C02` | 1 | C0.2 wait form; `1` takes it, any other value keeps the plain spin |

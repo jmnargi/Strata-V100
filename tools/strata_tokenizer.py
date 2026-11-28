@@ -77,14 +77,41 @@ O200K_PATTERN = (
     r"|\s+"
 )
 
+# Hy4's pre-tokenizer applies three isolated splits in order, retaining unmatched spans.
+class _Hy4Splits:
+    stages = tuple(regex.compile(p) for p in (
+        r"\p{N}{1,3}",
+        r"[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+",
+        r"[!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~][A-Za-z]+|[^\r\n\p{L}\p{P}\p{S}]?[\p{L}\p{M}]+"
+        r"| ?[\p{P}\p{S}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
+    ))
+
+    def findall(self, text: str) -> list[str]:
+        pieces = [text] if text else []
+        for pattern in self.stages:
+            parts = []
+            for piece in pieces:
+                pos = 0
+                for match in pattern.finditer(piece):
+                    if match.start() > pos:
+                        parts.append(piece[pos:match.start()])
+                    parts.append(match.group())
+                    pos = match.end()
+                if pos < len(piece):
+                    parts.append(piece[pos:])
+            pieces = parts
+        return pieces
+
 
 class Tokenizer:
     def __init__(self, tokens: list[str], merges: list[str], token_types: list[int] | None = None,
-                 pre: str = "qwen35", special_ids: dict[str, int] | None = None):
+                 pre: str = "qwen35", special_ids: dict[str, int] | None = None,
+                 aliases: dict[int, str] | None = None):
         self.tokens = tokens
         self.pre = pre
         self.token_types = token_types
         self.special_ids = special_ids or {}
+        self.aliases = aliases or {}
         self.ids = {t: i for i, t in enumerate(tokens)}
         if len(self.ids) != len(tokens):
             raise ValueError("vocabulary has duplicate tokens: %d entries, %d unique"
@@ -101,7 +128,10 @@ class Tokenizer:
                 raise ValueError("merge %d names a token outside the vocabulary: %r" % (i, m))
             self.ranks[(parts[0], parts[1])] = i
         self._ignore_merges = pre in INKLING_PRE_TYPES
-        self._re = regex.compile(O200K_PATTERN if self._ignore_merges else QWEN35_PATTERN)
+        if pre == "hy_v4":
+            self._re = _Hy4Splits()
+        else:
+            self._re = regex.compile(O200K_PATTERN if self._ignore_merges else QWEN35_PATTERN)
 
         # The literals matched directly instead of being run through BPE.  GGUF token types: 3 = CONTROL,
         # 4 = USER_DEFINED.  The two classes behave DIFFERENTLY and llama.cpp's own tokenizer settled which:
@@ -321,6 +351,10 @@ class Tokenizer:
         if b is None:
             if i < 0 or i >= len(self.tokens):
                 raise IndexError("token id %d is outside the vocabulary (%d)" % (i, len(self.tokens)))
+            alias = self.aliases.get(i)
+            if alias is not None or (self.pre == "hy_v4" and self.token_types and self.token_types[i] in (3, 4)):
+                b = cache[i] = (self.tokens[i] if alias is None else alias).encode("utf-8")
+                return b
             raw = bytearray()
             for ch in self.tokens[i]:
                 v = UNICODE_TO_BYTE.get(ch)

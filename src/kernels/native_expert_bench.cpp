@@ -165,6 +165,59 @@ int main(int argc, char** argv) {
             std::printf("          %zu of %zu outputs differ, worst rel %.2e\n", ndiff, ref.size(), worst);
             ++failures;
         }
+        {   // per-layer split: the whole expert against its two FF parts run one after the other on this card, in the
+            // window's shape (G groups x T entries).  Two cards would take one part each, so compare one part with
+            // the whole; the pair is what one card costs.
+            K::native_expert_set_mode(8, 0);
+            const K::ExpertFFPart hp0{0, 2}, hp1{1, 2};
+            auto run_whole = [&]() {
+                K::native_expert_grouped(L, dptr, dstart, dn, ddst, dtok, G, NE, dxq, dscr, dout, s);
+            };
+            auto run_parts = [&]() {
+                K::native_expert_grouped_part(L, dptr, dstart, dn, ddst, dtok, G, NE, dxq, dscr, dout, s, hp0);
+                K::native_expert_grouped_part(L, dptr, dstart, dn, ddst, dtok, G, NE, dxq, dscr, dout, s, hp1);
+            };
+            bool split_ok = true;
+            {
+                std::vector<float> sum((size_t) NE * H, 0.0f), p((size_t) NE * H);
+                cudaMemsetAsync(dout, 0, sum.size() * 4, s);
+                for (int part = 0; part < 2 && split_ok; ++part) {
+                    const K::ExpertFFPart hp{part, 2};
+                    split_ok = K::native_expert_grouped_part(L, dptr, dstart, dn, ddst, dtok, G, NE, dxq, dscr, dout, s, hp);
+                    cudaStreamSynchronize(s);
+                    cudaMemcpy(p.data(), dout, p.size() * 4, cudaMemcpyDeviceToHost);
+                    for (size_t i = 0; i < sum.size(); ++i) sum[i] += p[i];
+                    cudaMemsetAsync(dout, 0, sum.size() * 4, s);
+                }
+                if (split_ok) {
+                    double n = 0.0, d = 0.0;
+                    for (size_t i = 0; i < sum.size(); ++i) { n += std::fabs((double) sum[i] - ref[i]); d += std::fabs((double) ref[i]); }
+                    std::printf("          split parts vs whole: rel %.2e\n", n / (d + 1e-30));
+                }
+            }
+            if (split_ok) {
+                auto t = [&](auto&& f) {
+                    for (int i = 0; i < 10; ++i) f();
+                    cudaEventRecord(e0, s);
+                    for (int i = 0; i < iters; ++i) f();
+                    cudaEventRecord(e1, s);
+                    cudaEventSynchronize(e1);
+                    float ms = 0;
+                    cudaEventElapsedTime(&ms, e0, e1);
+                    return 1e3 * ms / iters;
+                };
+                double whole = 1e30, parts = 1e30;
+                for (int round = 0; round < 3; ++round) {
+                    whole = std::fmin(whole, t(run_whole));
+                    parts = std::fmin(parts, t(run_parts));
+                }
+                std::printf("          whole %7.1f us | two parts on one card %7.1f us (%.2fx) | one part on a card %7.1f us\n",
+                            whole, parts, parts / whole, parts / 2.0);
+            } else {
+                std::printf("          split parts: this layout has no block-range path (skipped)\n");
+            }
+            K::native_expert_set_mode(-1, 0);
+        }
         K::native_expert_set_mode(-1, 0);
         cudaFree(dblob); cudaFree(dx); cudaFree(dxq); cudaFree(dscr); cudaFree(dout); cudaFree(dptr);
         cudaFree(dstart); cudaFree(dn); cudaFree(ddst); cudaFree(dtok);

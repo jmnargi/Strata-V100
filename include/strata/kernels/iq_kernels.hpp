@@ -91,6 +91,18 @@ void native_expert_grouped(const NativeExpertLayout& L, const unsigned long long
                            const int32_t* n_groups, const int32_t* ent_dst, const int32_t* ent_tok, int64_t cap_groups,
                            int64_t cap_entries, const void* x_q8_1, void* scratch, float* out, void* stream,
                            int64_t grid_groups = 0);
+/// A per-layer split's slice of an expert's FF: `part` of `parts`, split evenly over gate/up's 32-column blocks and the
+/// down matrix's n_ff/qk K blocks (parts = 1 is the whole expert).  Every part's `out` is a partial sum over its K
+/// blocks, so the caller adds the parts.  Returns false when this layout has no block-range path: only the sm_70
+/// layouts that fuse gate/up into their q8_1 image (16/18/21/22/23) and take the LDS down kernel (20/42) have one.
+struct ExpertFFPart {
+    int part = 0;
+    int parts = 1;
+};
+bool native_expert_grouped_part(const NativeExpertLayout& L, const unsigned long long* grp_ptr, const int32_t* grp_start,
+                                const int32_t* n_groups, const int32_t* ent_dst, const int32_t* ent_tok,
+                                int64_t cap_groups, int64_t cap_entries, const void* x_q8_1, void* scratch, float* out,
+                                void* stream, const ExpertFFPart& part);
 /// true: `native_expert_grouped`'s launches before the group stride (STRATA_GROUPED_V1=1 at startup) - a block row
 /// per possible group, SwiGLU and the q8_1 quantization as two kernels over all cap_entries.  Bitwise the same results
 /// (native_grouped_parity checks it); kept for A/B timing.  Set before graph capture; captured graphs keep theirs.
